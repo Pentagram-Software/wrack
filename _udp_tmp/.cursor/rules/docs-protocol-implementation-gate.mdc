@@ -1,0 +1,37 @@
+---
+description: Require docs/protocol review before implementation
+alwaysApply: true
+---
+
+# Docs + Protocol Implementation Gate
+
+Before implementing any feature, bugfix, or refactor:
+
+1. Read the relevant files in `docs/` for requirements and architecture context.
+2. Read the relevant files in `protocol/` as the source of truth for H.264
+   streaming frame format and transport expectations.
+3. Align implementation decisions with those documents before coding.
+
+## Required reporting
+
+If anything in requirements, architecture, or protocol is:
+
+- likely to harm product quality,
+- missing,
+- misleading, ambiguous, or unclear,
+
+then explicitly report it to the user before or alongside implementation.
+
+## What to report
+
+- The exact gap/risk.
+- Why it affects correctness, reliability, latency, interoperability, or UX.
+- Suggested correction or clarification.
+- Any assumptions made if work must continue.
+
+## Example checklist
+
+- Read: `docs/...`
+- Read: `protocol/...`
+- Confirm implementation matches documented frame/protocol behavior
+- Report risks/gaps/ambiguities clearly

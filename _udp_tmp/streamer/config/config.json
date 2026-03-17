@@ -1,0 +1,8 @@
+{
+  "width": 1280,
+  "height": 720,
+  "fps": 30,
+  "bitrate": 2000000,
+  "gop": 30,
+  "profile": "baseline"
+}
