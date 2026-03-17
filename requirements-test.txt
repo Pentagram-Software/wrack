@@ -1,0 +1,9 @@
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-mock>=3.10.0
+pytest-xdist>=3.0.0
+
+# Wake word detection (Mycroft Precise)
+# Note: These may require additional system dependencies
+# Install precise-engine binary separately if not available via pip
+precise-runner>=0.3.0

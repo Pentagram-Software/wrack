@@ -1,0 +1,7 @@
+# Cursor/VS Code EV3 sync ignore
+examples/
+*.md
+htmlcov/
+.pytest_cache/
+__pycache__/
+.vscode/
