@@ -1,0 +1,32 @@
+---
+description: Require purpose/input/output comments for new functions
+alwaysApply: true
+---
+
+# Function Comment Contract
+
+For every newly added function, include a concise comment/docstring that states:
+
+- Purpose: what the function does.
+- Inputs: key parameters and expected types/shape.
+- Outputs: return value and meaning.
+
+## Preferred format
+
+Use a short docstring directly under the function definition.
+
+```python
+def parse_packet(data: bytes) -> dict:
+    """Parse a UDP packet.
+
+    Purpose: decode protocol fields from raw bytes.
+    Inputs: data (bytes) - raw UDP payload.
+    Outputs: dict with parsed fields; raises ValueError on invalid packet.
+    """
+```
+
+## Notes
+
+- Keep comments concise and factual.
+- Skip redundant comments for obvious one-liners only if already clear.
+- When updating function behavior, update the comment/docstring accordingly.

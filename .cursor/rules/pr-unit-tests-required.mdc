@@ -1,0 +1,30 @@
+---
+description: Require passing unit tests before opening any PR
+alwaysApply: true
+---
+
+# PR Unit Test Gate
+
+Before creating any pull request, run the project's unit test suite and
+confirm all tests pass.
+
+## Required workflow
+
+1. Run unit tests relevant to the changes (or the full suite when needed).
+2. Verify tests complete successfully with no failures.
+3. If tests fail, fix the failures or clearly report blockers.
+4. Only create the PR after tests pass.
+
+## PR requirements
+
+- Include the exact test command(s) executed.
+- Include a short summary of test results.
+- Do not open a PR when unit tests are failing.
+
+## Example
+
+```bash
+pytest
+```
+
+If the project uses another test runner, use that runner instead.

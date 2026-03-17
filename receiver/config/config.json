@@ -1,0 +1,8 @@
+{
+  "mode": "client_server",
+  "stream_format": "h264",
+  "server_ip": "192.168.1.216",
+  "server_port": 9999,
+  "client_port": 9999,
+  "listen_port": 9999
+}
