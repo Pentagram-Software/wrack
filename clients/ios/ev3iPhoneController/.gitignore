@@ -1,0 +1,87 @@
+# .gitignore for Swift/Xcode projects
+
+## Build generated
+build/
+DerivedData/
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+
+## Various settings
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata/
+
+## Obj-C/Swift specific
+*.hmap
+
+## App packaging
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+## Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+## Packages
+*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+Package.resolved
+
+## CocoaPods
+Pods/
+*.xcworkspace
+
+## Carthage
+Carthage/Build/
+
+## Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+## Code Injection
+iOSInjectionProject/
+
+## macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+## Xcode Patch
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+!*.xcworkspace/contents.xcworkspacedata
+/*.gcno
+**/xcshareddata/WorkspaceSettings.xcsettings
+
+## Sensitive configuration files
+# Config.swift should be versioned, but keep API keys in environment or keychain
+# Add Config.swift to gitignore if you want to keep credentials completely private
+# Config.swift
+
+## IDEs
+.vscode/
+.idea/
+
+## Testing
+*.cover
+*.log
+*.gcov
+*.lcov
+coverage/
+
+## Documentation
+docs/_build/
