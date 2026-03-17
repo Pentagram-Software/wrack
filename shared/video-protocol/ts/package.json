@@ -1,0 +1,19 @@
+{
+  "name": "@wrack/video-protocol",
+  "version": "1.0.0",
+  "description": "UDP video streaming protocol for the Wrack robot system (Node.js)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test dist/packets.test.js",
+    "prepublish": "npm run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "note": "Browsers cannot use raw UDP sockets. Use this package in a Node.js WebSocket bridge."
+}
