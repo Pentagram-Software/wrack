@@ -1,0 +1,1 @@
+# Test package for pixy_camera library

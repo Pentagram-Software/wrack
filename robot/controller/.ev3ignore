@@ -1,0 +1,56 @@
+# EV3 Deployment Ignore File
+# Files and directories not to sync to EV3 device
+
+# Git repository (biggest culprit - ~150 files)
+.git/
+.gitignore
+
+# Test files and directories
+tests/
+test_*.py
+*_test.py
+run_all_tests.py
+run_pytest.py
+pytest.ini
+requirements-test.txt
+
+# Example files
+example_*.py
+*_example.py
+example_*/
+
+# Documentation
+*.md
+README*
+docs/
+
+# Development tools
+.vscode/
+.cursorignore
+.pytest_cache/
+htmlcov/
+coverage.xml
+.coverage
+deploy.conf
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE files
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Project specific
+example_remote_usage.py
+example_client.py
+example_turret_control.py
+test_network_integration.py
+REMOTE_CONTROLLER_README.md
+main_NetworkClient.py
