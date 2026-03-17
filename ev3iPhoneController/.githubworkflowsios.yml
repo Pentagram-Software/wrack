@@ -1,0 +1,39 @@
+name: iOS Build and Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Select Xcode version
+      run: sudo xcode-select -switch /Applications/Xcode_15.2.app
+      
+    - name: Show Xcode version
+      run: xcodebuild -version
+      
+    - name: Show available schemes
+      run: xcodebuild -list
+      
+    - name: Build
+      run: |
+        xcodebuild clean build \
+          -scheme ev3iPhoneController \
+          -destination 'platform=iOS Simulator,name=iPhone 15 Pro,OS=17.2' \
+          CODE_SIGNING_ALLOWED=NO
+      
+    - name: Run Tests
+      run: |
+        xcodebuild test \
+          -scheme ev3iPhoneController \
+          -destination 'platform=iOS Simulator,name=iPhone 15 Pro,OS=17.2' \
+          CODE_SIGNING_ALLOWED=NO
