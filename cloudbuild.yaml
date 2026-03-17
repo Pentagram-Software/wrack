@@ -1,0 +1,36 @@
+steps:
+# Build the container image
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '-t', 'gcr.io/$PROJECT_ID/mindstorms-controller:${SHORT_SHA}', '.']
+
+# Push the container image to Container Registry
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['push', 'gcr.io/$PROJECT_ID/mindstorms-controller:${SHORT_SHA}']
+
+# Deploy to Cloud Functions
+- name: 'gcr.io/cloud-builders/gcloud'
+  args:
+  - 'functions'
+  - 'deploy'
+  - 'controlRobot'
+  - '--runtime=nodejs20'
+  - '--trigger-http'
+  - '--allow-unauthenticated'
+  - '--region=europe-central2'
+  - '--set-env-vars'
+  - 'ROBOT_HOST=${_ROBOT_HOST},ROBOT_PORT=${_ROBOT_PORT},API_KEY=${_API_KEY}'
+
+# Tag the image as latest
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['tag', 'gcr.io/$PROJECT_ID/mindstorms-controller:${SHORT_SHA}', 'gcr.io/$PROJECT_ID/mindstorms-controller:latest']
+
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['push', 'gcr.io/$PROJECT_ID/mindstorms-controller:latest']
+
+substitutions:
+  _ROBOT_HOST: '178.183.200.201'
+  _ROBOT_PORT: '27700'
+  _API_KEY: 'your-secure-api-key-here'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
