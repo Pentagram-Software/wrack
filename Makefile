@@ -1,11 +1,15 @@
-.PHONY: help setup deploy-edge deploy-cloud test
+.PHONY: help setup web deploy-edge deploy-cloud test
 
 help:
 	@echo "Available commands:"
+	@echo "  make web            - Start web dev server (http://localhost:3000)"
 	@echo "  make setup          - Install all dependencies"
 	@echo "  make deploy-edge    - Deploy to Raspberry Pi"
 	@echo "  make deploy-cloud   - Deploy GCP Cloud Functions"
 	@echo "  make test           - Run all tests"
+
+web:
+	cd clients/web && npm install && npm run dev
 
 setup:
 	cd clients/web && npm install
