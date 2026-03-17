@@ -1,7 +1,0 @@
-{
-    "python.testing.pytestArgs": [
-        "receiver"
-    ],
-    "python.testing.unittestEnabled": false,
-    "python.testing.pytestEnabled": true
-}
