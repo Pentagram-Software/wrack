@@ -1,318 +1,380 @@
 import SwiftUI
-import Network
 import AVFoundation
+import VideoToolbox
+import VideoProtocol
 
-class VideoStreamManager: ObservableObject {
+// MARK: - VideoStreamManager
+
+class VideoStreamManager: NSObject, ObservableObject {
     @Published var isConnected = false
     @Published var currentFrame: UIImage?
     @Published var frameCount: Int = 0
     @Published var connectionStatus: String = "Disconnected"
-    
-    private var udpConnection: NWConnection?
-    private var serverEndpoint: NWEndpoint
-    private let listenPort: UInt16 = 9999
-    
-    private var pendingFrames: [UInt32: NSMutableData] = [:]
-    private var expectedChunks: [UInt32: UInt32] = [:]
-    private var receivedChunks: [UInt32: Set<UInt32>] = [:]
-    private let payloadSize: UInt32 = 1200
-    
-    private var keepAliveTimer: Timer?
-    
+
+    private var client: VideoStreamClient?
+    private var decoder: H264Decoder?
+    private let host: String
+    private let port: UInt16
+
     init(host: String = "192.168.1.216", port: UInt16 = 9999) {
-        self.serverEndpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!)
+        self.host = host
+        self.port = port
+        super.init()
+        self.decoder = H264Decoder(delegate: self)
     }
-    
+
     func connect() {
-        guard udpConnection == nil else { return }
-        
-        DispatchQueue.main.async {
-            self.connectionStatus = "Connecting to server..."
-        }
-        
-        // Create UDP connection to server
-        udpConnection = NWConnection(to: serverEndpoint, using: .udp)
-        
-        udpConnection?.stateUpdateHandler = { [weak self] state in
-            DispatchQueue.main.async {
-                switch state {
-                case .ready:
-                    self?.connectionStatus = "Connected to server"
-                    self?.isConnected = true
-                    self?.registerWithServer()
-                    self?.startReceiving()
-                    self?.startKeepAlive()
-                case .failed(let error):
-                    self?.connectionStatus = "Failed: \(error.localizedDescription)"
-                    self?.isConnected = false
-                case .cancelled:
-                    self?.connectionStatus = "Disconnected"
-                    self?.isConnected = false
-                default:
-                    break
-                }
-            }
-        }
-        
-        udpConnection?.start(queue: .global(qos: .userInitiated))
+        guard client == nil else { return }
+        connectionStatus = "Connecting..."
+        let videoClient = VideoStreamClient(host: host, port: port)
+        videoClient.delegate = self
+        videoClient.connect()
+        client = videoClient
     }
-    
+
     func disconnect() {
-        keepAliveTimer?.invalidate()
-        keepAliveTimer = nil
-        
-        sendDisconnect()
-        
-        udpConnection?.cancel()
-        udpConnection = nil
-        
-        DispatchQueue.main.async {
-            self.isConnected = false
-            self.connectionStatus = "Disconnected"
-            self.currentFrame = nil
-        }
-    }
-    
-    private func registerWithServer() {
-        let registerMessage = "REGISTER_CLIENT".data(using: .utf8)!
-        udpConnection?.send(content: registerMessage, completion: .contentProcessed({ _ in }))
-    }
-    
-    private func sendDisconnect() {
-        let disconnectMessage = "DISCONNECT".data(using: .utf8)!
-        udpConnection?.send(content: disconnectMessage, completion: .contentProcessed({ _ in }))
-    }
-    
-    private func startKeepAlive() {
-        keepAliveTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
-            let keepAliveMessage = "KEEPALIVE".data(using: .utf8)!
-            self?.udpConnection?.send(content: keepAliveMessage, completion: .contentProcessed({ _ in }))
-        }
-    }
-    
-    private func startReceiving() {
-        receiveMessage()
-    }
-    
-    private func receiveMessage() {
-        udpConnection?.receiveMessage { [weak self] (data, _, isComplete, error) in
-            if let data = data, !data.isEmpty {
-                self?.processReceivedData(data)
-            }
-            
-            if error == nil {
-                self?.receiveMessage()
-            }
-        }
-    }
-    
-    private func processReceivedData(_ data: Data) {
-        if data.starts(with: "REGISTERED".data(using: .utf8)!) {
-            return
-        }
-        
-        if data.starts(with: "FRAME_START".data(using: .utf8)!) {
-            processFrameStart(data)
-        } else if data.starts(with: "CHUNK".data(using: .utf8)!) {
-            processChunk(data)
-        }
-    }
-    
-    private func processFrameStart(_ data: Data) {
-        let headerLength = "FRAME_START".count
-        
-        // Try 64-bit L format first (Pi format: 11 + 8 + 8 + 8 = 35 bytes)
-        if data.count >= headerLength + 24 {
-            let headerData = data.subdata(in: headerLength..<(headerLength + 24))
-            let frameId = headerData.withUnsafeBytes { $0.bindMemory(to: UInt64.self)[0] }
-            let frameSize = headerData.withUnsafeBytes { $0.bindMemory(to: UInt64.self)[1] }
-            let chunkCount = headerData.withUnsafeBytes { $0.bindMemory(to: UInt64.self)[2] }
-            
-            
-            if frameSize > 0 && frameSize < 10000000 { // Sanity check
-                pendingFrames[UInt32(frameId)] = NSMutableData(length: Int(frameSize))
-                expectedChunks[UInt32(frameId)] = UInt32(chunkCount)
-                receivedChunks[UInt32(frameId)] = Set<UInt32>()
-                return
-            }
-        }
-        
-        // Try 32-bit I format (fallback: 11 + 4 + 4 + 4 = 23 bytes)
-        if data.count >= headerLength + 12 {
-            let headerData = data.subdata(in: headerLength..<(headerLength + 12))
-            let frameId = headerData.withUnsafeBytes { $0.bindMemory(to: UInt32.self)[0] }
-            let frameSize = headerData.withUnsafeBytes { $0.bindMemory(to: UInt32.self)[1] }
-            let chunkCount = headerData.withUnsafeBytes { $0.bindMemory(to: UInt32.self)[2] }
-            
-            
-            if frameSize > 0 && frameSize < 10000000 { // Sanity check
-                pendingFrames[frameId] = NSMutableData(length: Int(frameSize))
-                expectedChunks[frameId] = chunkCount
-                receivedChunks[frameId] = Set<UInt32>()
-                return
-            }
-        }
-        
-    }
-    
-    private func processChunk(_ data: Data) {
-        let headerLength = "CHUNK".count
-        
-        // Try 64-bit format first (5 + 8 + 8 = 21 bytes header)
-        if data.count >= headerLength + 16 {
-            let headerData = data.subdata(in: headerLength..<(headerLength + 16))
-            let frameId = UInt32(headerData.withUnsafeBytes { $0.bindMemory(to: UInt64.self)[0] })
-            let chunkIndex = UInt32(headerData.withUnsafeBytes { $0.bindMemory(to: UInt64.self)[1] })
-            let payload = data.subdata(in: (headerLength + 16)..<data.count)
-            
-            if processChunkData(frameId: frameId, chunkIndex: chunkIndex, payload: payload) {
-                return
-            }
-        }
-        
-        // Try 32-bit format (5 + 4 + 4 = 13 bytes header)
-        if data.count >= headerLength + 8 {
-            let headerData = data.subdata(in: headerLength..<(headerLength + 8))
-            let frameId = headerData.withUnsafeBytes { $0.bindMemory(to: UInt32.self)[0] }
-            let chunkIndex = headerData.withUnsafeBytes { $0.bindMemory(to: UInt32.self)[1] }
-            let payload = data.subdata(in: (headerLength + 8)..<data.count)
-            
-            processChunkData(frameId: frameId, chunkIndex: chunkIndex, payload: payload)
-        }
-    }
-    
-    private func processChunkData(frameId: UInt32, chunkIndex: UInt32, payload: Data) -> Bool {
-        guard let frameBuffer = pendingFrames[frameId],
-              var receivedSet = receivedChunks[frameId] else { 
-            return false
-        }
-        
-        if !receivedSet.contains(chunkIndex) {
-            let offset = Int(chunkIndex * payloadSize)
-            let endOffset = min(offset + payload.count, frameBuffer.length)
-            
-            if offset < frameBuffer.length {
-                frameBuffer.replaceBytes(in: NSRange(location: offset, length: endOffset - offset), 
-                                       withBytes: payload.withUnsafeBytes { $0.bindMemory(to: UInt8.self).baseAddress }, 
-                                       length: endOffset - offset)
-                receivedSet.insert(chunkIndex)
-                receivedChunks[frameId] = receivedSet
-                
-                
-                if let expectedCount = expectedChunks[frameId], receivedSet.count >= expectedCount {
-                    let frameData = Data(bytes: frameBuffer.bytes, count: frameBuffer.length)
-                    processCompleteFrame(frameData)
-                    
-                    pendingFrames.removeValue(forKey: frameId)
-                    expectedChunks.removeValue(forKey: frameId)
-                    receivedChunks.removeValue(forKey: frameId)
-                }
-                return true
-            }
-        }
-        return false
-    }
-    
-    private func processCompleteFrame(_ frameData: Data) {
-        // Try direct JPEG decode first
-        if let image = UIImage(data: frameData) {
-            DispatchQueue.main.async {
-                self.currentFrame = image
-                self.frameCount += 1
-            }
-            return
-        }
-        
-        // Try to find JPEG markers within the data
-        if let jpegStart = findJPEGData(in: frameData) {
-            if let image = UIImage(data: jpegStart.data) {
-                DispatchQueue.main.async {
-                    self.currentFrame = image
-                    self.frameCount += 1
-                }
-            }
-        }
-    }
-    
-    private func findJPEGData(in data: Data) -> (offset: Int, data: Data)? {
-        // JPEG starts with 0xFF 0xD8 and ends with 0xFF 0xD9
-        let jpegStart: [UInt8] = [0xFF, 0xD8]
-        let jpegEnd: [UInt8] = [0xFF, 0xD9]
-        
-        guard let startIndex = data.range(of: Data(jpegStart))?.lowerBound else {
-            return nil
-        }
-        
-        guard let endRange = data.range(of: Data(jpegEnd), in: startIndex..<data.endIndex) else {
-            return nil
-        }
-        
-        let jpegData = data[startIndex..<endRange.upperBound]
-        return (offset: data.distance(from: data.startIndex, to: startIndex), data: jpegData)
+        client?.disconnect()
+        client = nil
+        decoder?.invalidate()
+        isConnected = false
+        connectionStatus = "Disconnected"
+        currentFrame = nil
     }
 }
 
+// MARK: - VideoStreamClientDelegate
+
+extension VideoStreamManager: VideoStreamClientDelegate {
+    func videoStreamClient(_ client: VideoStreamClient, didReceiveH264Frame data: Data) {
+        decoder?.decode(h264Data: data)
+    }
+
+    func videoStreamClient(_ client: VideoStreamClient, didChangeState state: VideoStreamClient.State) {
+        DispatchQueue.main.async {
+            switch state {
+            case .idle:
+                self.connectionStatus = "Idle"
+                self.isConnected = false
+            case .connecting:
+                self.connectionStatus = "Connecting..."
+                self.isConnected = false
+            case .registered:
+                self.connectionStatus = "Connected"
+                self.isConnected = true
+            case .disconnected(let error):
+                self.connectionStatus = error.map { "Failed: \($0.localizedDescription)" } ?? "Disconnected"
+                self.isConnected = false
+            }
+        }
+    }
+}
+
+// MARK: - H264DecoderDelegate
+
+extension VideoStreamManager: H264DecoderDelegate {
+    func decoder(_ decoder: H264Decoder, didDecodeFrame image: UIImage) {
+        DispatchQueue.main.async {
+            self.currentFrame = image
+            self.frameCount += 1
+        }
+    }
+
+    func decoder(_ decoder: H264Decoder, didFailWithError error: Error) {
+        print("[H264Decoder] \(error)")
+    }
+}
+
+// MARK: - H264Decoder
+
+protocol H264DecoderDelegate: AnyObject {
+    func decoder(_ decoder: H264Decoder, didDecodeFrame image: UIImage)
+    func decoder(_ decoder: H264Decoder, didFailWithError error: Error)
+}
+
+/// Decodes H.264 Annex B bitstream frames (as produced by picamera2 H264Encoder)
+/// into UIImages using VideoToolbox.
+///
+/// Flow:
+///   1. Parse Annex B NAL units from incoming Data
+///   2. Accumulate SPS (type 7) + PPS (type 8) → CMVideoFormatDescription
+///   3. Convert each frame NAL unit: Annex B → AVCC (4-byte big-endian length prefix)
+///   4. Decode via VTDecompressionSession → CVImageBuffer → UIImage
+class H264Decoder {
+    weak var delegate: H264DecoderDelegate?
+
+    private var decompressionSession: VTDecompressionSession?
+    private var formatDescription: CMVideoFormatDescription?
+
+    // Accumulate SPS and PPS — required to build CMVideoFormatDescription
+    private var spsData: Data?
+    private var ppsData: Data?
+
+    // Created once — CIContext is expensive to initialise
+    private let ciContext = CIContext()
+
+    private let queue = DispatchQueue(label: "com.wrack.h264decoder", qos: .userInitiated)
+    // Drop incoming frames when the decoder is still busy with the previous one
+    private var isDecoding = false
+
+    init(delegate: H264DecoderDelegate?) {
+        self.delegate = delegate
+    }
+
+    func decode(h264Data: Data) {
+        guard !isDecoding else { return }   // Live stream: drop stale frames
+        isDecoding = true
+        queue.async { [weak self] in
+            defer { self?.isDecoding = false }
+            do {
+                try self?.processH264Data(h264Data)
+            } catch {
+                guard let self else { return }
+                self.delegate?.decoder(self, didFailWithError: error)
+            }
+        }
+    }
+
+    // MARK: - Private
+
+    private func processH264Data(_ data: Data) throws {
+        for nalUnit in extractNALUnits(from: data) {
+            guard !nalUnit.isEmpty else { continue }
+            switch nalUnit[0] & 0x1F {
+            case 7:  // SPS — Sequence Parameter Set
+                spsData = nalUnit
+            case 8:  // PPS — Picture Parameter Set
+                ppsData = nalUnit
+                try rebuildFormatDescription()  // Rebuild whenever we get fresh PPS
+            case 5:  // IDR (keyframe)
+                try decodeFrame(nalUnit)
+            case 1:  // non-IDR
+                try decodeFrame(nalUnit)
+            default:
+                break
+            }
+        }
+    }
+
+    /// Split Annex B stream on 3-byte or 4-byte start codes into raw NAL unit buffers.
+    private func extractNALUnits(from data: Data) -> [Data] {
+        let bytes = [UInt8](data)
+        var starts: [(offset: Int, scLen: Int)] = []
+        var i = 0
+
+        while i < bytes.count - 2 {
+            if bytes[i] == 0, bytes[i + 1] == 0 {
+                if i + 3 < bytes.count, bytes[i + 2] == 0, bytes[i + 3] == 1 {
+                    starts.append((i, 4)); i += 4; continue
+                } else if bytes[i + 2] == 1 {
+                    starts.append((i, 3)); i += 3; continue
+                }
+            }
+            i += 1
+        }
+
+        var units: [Data] = []
+        for idx in starts.indices {
+            let from = starts[idx].offset + starts[idx].scLen
+            let to   = idx + 1 < starts.count ? starts[idx + 1].offset : bytes.count
+            if from < to { units.append(Data(bytes[from..<to])) }
+        }
+        return units
+    }
+
+    /// Build CMVideoFormatDescription from stored SPS + PPS NAL units.
+    private func rebuildFormatDescription() throws {
+        guard let sps = spsData, let pps = ppsData else { return }
+
+        let spsBytes = [UInt8](sps)
+        let ppsBytes = [UInt8](pps)
+
+        var desc: CMVideoFormatDescription?
+        let status = spsBytes.withUnsafeBufferPointer { spsBuf in
+            ppsBytes.withUnsafeBufferPointer { ppsBuf in
+                let ptrs: [UnsafePointer<UInt8>] = [spsBuf.baseAddress!, ppsBuf.baseAddress!]
+                let sizes: [Int] = [sps.count, pps.count]
+                return CMVideoFormatDescriptionCreateFromH264ParameterSets(
+                    allocator: nil,
+                    parameterSetCount: 2,
+                    parameterSetPointers: ptrs,
+                    parameterSetSizes: sizes,
+                    nalUnitHeaderLength: 4,
+                    formatDescriptionOut: &desc
+                )
+            }
+        }
+
+        guard status == noErr, let desc else {
+            throw NSError(domain: "H264Decoder", code: Int(status),
+                          userInfo: [NSLocalizedDescriptionKey: "CMVideoFormatDescriptionCreateFromH264ParameterSets failed"])
+        }
+
+        // Format description changed — invalidate old session so it's recreated next frame
+        if let old = decompressionSession {
+            VTDecompressionSessionInvalidate(old)
+            decompressionSession = nil
+        }
+        formatDescription = desc
+    }
+
+    /// Create VTDecompressionSession from current formatDescription.
+    private func createDecompressionSession() throws {
+        guard let formatDesc = formatDescription else {
+            throw NSError(domain: "H264Decoder", code: -1,
+                          userInfo: [NSLocalizedDescriptionKey: "No format description yet — waiting for SPS/PPS"])
+        }
+
+        let attrs = [kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA] as CFDictionary
+        var session: VTDecompressionSession?
+        let status = VTDecompressionSessionCreate(
+            allocator: kCFAllocatorDefault,
+            formatDescription: formatDesc,
+            decoderSpecification: nil,
+            imageBufferAttributes: attrs,
+            outputCallback: nil,
+            decompressionSessionOut: &session
+        )
+
+        guard status == noErr, let session else {
+            throw NSError(domain: "H264Decoder", code: Int(status),
+                          userInfo: [NSLocalizedDescriptionKey: "VTDecompressionSessionCreate failed: \(status)"])
+        }
+        decompressionSession = session
+    }
+
+    /// Convert NAL unit to AVCC format and decode via VTDecompressionSession.
+    private func decodeFrame(_ nalUnit: Data) throws {
+        guard formatDescription != nil else { return }  // Still waiting for SPS/PPS
+
+        if decompressionSession == nil {
+            try createDecompressionSession()
+        }
+        guard let session = decompressionSession else { return }
+
+        // Annex B → AVCC: replace start code with 4-byte big-endian NAL length
+        var avcc = Data(capacity: 4 + nalUnit.count)
+        var length = UInt32(nalUnit.count).bigEndian
+        avcc.append(contentsOf: withUnsafeBytes(of: &length) { Array($0) })
+        avcc.append(nalUnit)
+
+        // Copy into CMBlockBuffer
+        var blockBuffer: CMBlockBuffer?
+        var status = CMBlockBufferCreateWithMemoryBlock(
+            allocator: kCFAllocatorDefault,
+            memoryBlock: nil,
+            blockLength: avcc.count,
+            blockAllocator: nil,
+            customBlockSource: nil,
+            offsetToData: 0,
+            dataLength: avcc.count,
+            flags: 0,
+            blockBufferOut: &blockBuffer
+        )
+        guard status == kCMBlockBufferNoErr, let blockBuffer else {
+            throw NSError(domain: "H264Decoder", code: Int(status))
+        }
+        avcc.withUnsafeBytes { ptr in
+            _ = CMBlockBufferReplaceDataBytes(
+                with: ptr.baseAddress!,
+                blockBuffer: blockBuffer,
+                offsetIntoDestination: 0,
+                dataLength: avcc.count
+            )
+        }
+
+        // Wrap in CMSampleBuffer
+        var sampleBuffer: CMSampleBuffer?
+        status = CMSampleBufferCreate(
+            allocator: kCFAllocatorDefault,
+            dataBuffer: blockBuffer,
+            dataReady: true,
+            makeDataReadyCallback: nil,
+            refcon: nil,
+            formatDescription: formatDescription,
+            sampleCount: 1,
+            sampleTimingEntryCount: 0,
+            sampleTimingArray: nil,
+            sampleSizeEntryCount: 0,
+            sampleSizeArray: nil,
+            sampleBufferOut: &sampleBuffer
+        )
+        guard status == noErr, let sampleBuffer else {
+            throw NSError(domain: "H264Decoder", code: Int(status))
+        }
+
+        // Decode
+        var flags = VTDecodeInfoFlags()
+        let decodeStatus = VTDecompressionSessionDecodeFrame(
+            session,
+            sampleBuffer: sampleBuffer,
+            flags: [._EnableAsynchronousDecompression],
+            infoFlagsOut: &flags
+        ) { [weak self] status, _, imageBuffer, _, _ in
+            guard let self, status == noErr, let imageBuffer else { return }
+            self.deliverFrame(imageBuffer)
+        }
+
+        if decodeStatus != noErr {
+            throw NSError(domain: "H264Decoder", code: Int(decodeStatus),
+                          userInfo: [NSLocalizedDescriptionKey: "VTDecompressionSessionDecodeFrame failed: \(decodeStatus)"])
+        }
+    }
+
+    private func deliverFrame(_ imageBuffer: CVImageBuffer) {
+        let ciImage = CIImage(cvImageBuffer: imageBuffer)
+        guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else { return }
+        delegate?.decoder(self, didDecodeFrame: UIImage(cgImage: cgImage))
+    }
+
+    func invalidate() {
+        decompressionSession.map { VTDecompressionSessionInvalidate($0) }
+        decompressionSession = nil
+        formatDescription = nil
+        spsData = nil
+        ppsData = nil
+    }
+
+    deinit { invalidate() }
+}
+
+// MARK: - SwiftUI View
+
 struct VideoStreamView: View {
     @StateObject private var videoManager = VideoStreamManager()
-    
+
     var body: some View {
         Group {
             if let frame = videoManager.currentFrame {
                 Image(uiImage: frame)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .overlay(
-                        VStack {
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    Text("Frames: \(videoManager.frameCount)")
-                                        .font(.caption)
-                                        .foregroundColor(.green)
-                                        .padding(4)
-                                        .background(Color.black.opacity(0.7))
-                                        .cornerRadius(4)
-                                }
-                                Spacer()
-                            }
-                            Spacer()
-                        }
-                        .padding(8)
-                    )
+                    .overlay(alignment: .topLeading) {
+                        Text("Frames: \(videoManager.frameCount)")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                            .padding(4)
+                            .background(Color.black.opacity(0.7))
+                            .cornerRadius(4)
+                            .padding(8)
+                    }
             } else {
-                VStack {
-                    Circle()
-                        .fill(videoManager.isConnected ? Color.blue.opacity(0.3) : Color.gray.opacity(0.5))
-                        .frame(width: 64, height: 64)
-                        .overlay(
-                            Image(systemName: videoManager.isConnected ? "video.fill" : "plus")
-                                .foregroundColor(videoManager.isConnected ? .blue : .gray)
-                                .font(.title)
-                        )
-                    
-                    Text(videoManager.isConnected ? "Connecting to camera..." : "Camera Feed")
-                        .foregroundColor(.gray)
-                        .font(.caption)
-                    
+                VStack(spacing: 12) {
+                    Image(systemName: videoManager.isConnected ? "video.fill" : "video.slash")
+                        .font(.system(size: 48))
+                        .foregroundColor(videoManager.isConnected ? .blue : .gray)
+
                     Text(videoManager.connectionStatus)
-                        .foregroundColor(videoManager.isConnected ? .green : .gray)
-                        .font(.caption2)
-                    
-                    if !videoManager.isConnected {
-                        Button("Connect to Camera") {
-                            videoManager.connect()
-                        }
-                        .padding(.top, 8)
+                        .foregroundColor(.secondary)
                         .font(.caption)
-                        .foregroundColor(.blue)
+
+                    if !videoManager.isConnected {
+                        Button("Connect to Camera") { videoManager.connect() }
+                            .font(.caption)
                     }
                 }
             }
         }
-        .onAppear {
-            videoManager.connect()
-        }
-        .onDisappear {
-            videoManager.disconnect()
-        }
+        .onAppear  { videoManager.connect() }
+        .onDisappear { videoManager.disconnect() }
     }
 }
