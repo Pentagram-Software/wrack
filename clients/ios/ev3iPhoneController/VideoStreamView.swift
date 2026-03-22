@@ -16,7 +16,8 @@ class VideoStreamManager: NSObject, ObservableObject {
     private let host: String
     private let port: UInt16
 
-    init(host: String = "192.168.1.216", port: UInt16 = 9999) {
+//    init(host: String = "192.168.1.216", port: UInt16 = 9999) {
+    init(host: String = "178.183.200.201", port: UInt16 = 9999) {
         self.host = host
         self.port = port
         super.init()

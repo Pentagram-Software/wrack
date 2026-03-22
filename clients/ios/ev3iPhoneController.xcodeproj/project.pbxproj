@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		73411E822F69EA10000974BA /* VideoProtocol in Frameworks */ = {isa = PBXBuildFile; productRef = 73411E812F69EA10000974BA /* VideoProtocol */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		739AC9FB2E22AE5F004D460E /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				73411E822F69EA10000974BA /* VideoProtocol in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +117,7 @@
 			);
 			name = ev3iPhoneController;
 			packageProductDependencies = (
+				73411E812F69EA10000974BA /* VideoProtocol */,
 			);
 			productName = ev3iPhoneController;
 			productReference = 739AC9ED2E22AE5D004D460E /* ev3iPhoneController.app */;
@@ -171,7 +177,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1640;
-				LastUpgradeCheck = 1640;
+				LastUpgradeCheck = 2630;
 				TargetAttributes = {
 					739AC9EC2E22AE5D004D460E = {
 						CreatedOnToolsVersion = 16.4;
@@ -195,6 +201,9 @@
 			);
 			mainGroup = 739AC9E42E22AE5D004D460E;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				73411E7F2F69E7FB000974BA /* XCLocalSwiftPackageReference "../../shared/video-protocol/swift" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 739AC9EE2E22AE5D004D460E /* Products */;
 			projectDirPath = "";
@@ -328,6 +337,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -385,6 +395,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				VALIDATE_PRODUCT = YES;
 			};
@@ -558,6 +569,21 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		73411E7F2F69E7FB000974BA /* XCLocalSwiftPackageReference "../../shared/video-protocol/swift" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../../shared/video-protocol/swift";
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		73411E812F69EA10000974BA /* VideoProtocol */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 73411E7F2F69E7FB000974BA /* XCLocalSwiftPackageReference "../../shared/video-protocol/swift" */;
+			productName = VideoProtocol;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 739AC9E52E22AE5D004D460E /* Project object */;
 }
