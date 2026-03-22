@@ -1,8 +1,10 @@
-# BigQuery Data Tracking Architecture
+# Cloud Data Tracking Architecture
 
 ## Overview
 
 This document describes the architecture for collecting telemetry and events from Wrack system components and ingesting them into Google BigQuery for analytics and monitoring.
+
+> **Note:** BigQuery was selected after evaluating alternatives including InfluxDB, PostgreSQL/TimescaleDB, Firestore, and ClickHouse. See the [Technology Alternatives Analysis](requirements.md#technology-alternatives-analysis) in the requirements document for the full evaluation.
 
 ## System Context
 
