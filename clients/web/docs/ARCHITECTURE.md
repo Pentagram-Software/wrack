@@ -17,10 +17,12 @@ This document describes the proposed architecture for implementing Material Desi
 | Goal | Description | Success Criteria |
 |------|-------------|------------------|
 | **Design Consistency** | Unified visual language across all components | Zero ad-hoc color/spacing usage |
-| **Figma Integration** | Bi-directional design-to-code workflow | Design changes reflected in code within hours |
+| **Token Integration** | Design tokens from Material Theme Builder in code | Tokens successfully imported and used |
 | **Accessibility** | WCAG 2.1 AA compliance | Pass automated and manual a11y audits |
 | **Theming** | Support for light/dark/custom themes | Theme switching without code changes |
 | **Maintainability** | Easy to update and extend | Single source of truth for design decisions |
+
+> **Note on Figma Integration**: For the first iteration, we will use a simple manual workflow: export tokens as JSON from Material Theme Builder, then manually copy them into the codebase. Automated bi-directional sync (e.g., MUI Sync Plugin) can be considered in future iterations once the foundation is stable.
 
 ### 2.2 Secondary Goals
 
@@ -37,14 +39,16 @@ This document describes the proposed architecture for implementing Material Desi
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                              FIGMA DESIGN                                    │
-│  ┌─────────────────┐    ┌──────────────────┐    ┌───────────────────────┐  │
-│  │  Material Theme │───►│  Figma Variables │───►│  MUI Sync Plugin      │  │
-│  │  Builder Plugin │    │  (Design Tokens) │    │  (Code Export)        │  │
-│  └─────────────────┘    └──────────────────┘    └───────────┬───────────┘  │
-└────────────────────────────────────────────────────────────┬────────────────┘
-                                                              │ Export
-                                                              ▼
+│                        MATERIAL THEME BUILDER                                │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  1. Select source color → Generate MD3 tonal palettes               │   │
+│  │  2. Customize light/dark schemes                                     │   │
+│  │  3. Export as JSON file (tokens.json)                               │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+└────────────────────────────────────────────────────────────────────────┬────┘
+                                                                         │
+                                              Manual copy/paste of JSON  │
+                                                                         ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           CODE REPOSITORY                                    │
 │                                                                              │
@@ -53,7 +57,9 @@ This document describes the proposed architecture for implementing Material Desi
 │  │  ┌───────────────┐  ┌───────────────┐  ┌────────────────────────┐  │   │
 │  │  │ tokens/       │  │ colors.ts     │  │ typography.ts          │  │   │
 │  │  │  ├─ base.ts   │  │ spacing.ts    │  │ elevation.ts           │  │   │
-│  │  │  └─ semantic  │  │ radius.ts     │  │ motion.ts              │  │   │
+│  │  │  ├─ exported/ │  │ radius.ts     │  │ motion.ts              │  │   │
+│  │  │  │  └─ mtb.json│ │               │  │                        │  │   │
+│  │  │  └─ semantic  │  │               │  │                        │  │   │
 │  │  └───────────────┘  └───────────────┘  └────────────────────────┘  │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                    │                                         │
@@ -97,9 +103,9 @@ This document describes the proposed architecture for implementing Material Desi
 |--------|---------|----------|-----------|
 | UI Components | Custom + Heroicons | MUI v6 + Heroicons | Battle-tested, accessible, MD3-ready |
 | Styling | Tailwind utilities | Tailwind + MUI Theme | Design tokens integration |
-| Design Tokens | CSS variables (minimal) | Comprehensive token system | Figma sync, consistency |
+| Design Tokens | CSS variables (minimal) | Comprehensive token system | Consistency, maintainability |
 | Theming | Dark-only (hardcoded) | ThemeProvider | Light/dark/custom support |
-| Figma Integration | None | MUI Sync Plugin | Design-code synchronization |
+| Token Source | None | Material Theme Builder JSON export | Manual import, full control |
 
 ---
 
@@ -281,139 +287,274 @@ src/
 
 ---
 
-## 5. Figma Integration Architecture
+## 5. Design Token Export & Import Architecture
 
-### 5.1 Figma-to-Code Workflow
+> **First Iteration Approach**: This section describes a simple, manual workflow for exporting tokens from Material Theme Builder and importing them into the codebase. This approach gives full control over the token ingestion process and avoids dependencies on automated sync tools. The designer exports the JSON, and the developer manually imports it into the codebase.
+
+### 5.1 Material Theme Builder Export Workflow
+
+The Material Theme Builder (https://m3.material.io/theme-builder) generates MD3-compliant color tokens that are **exported as a JSON file**.
 
 ```
 ┌───────────────────────────────────────────────────────────────────┐
-│                        FIGMA WORKSPACE                             │
+│                   MATERIAL THEME BUILDER (Web)                     │
+│                   https://m3.material.io/theme-builder             │
 │                                                                    │
-│  1. Material Theme Builder Plugin                                  │
-│     └── Generate MD3 color schemes from source color               │
+│  Step 1: Select Source Color                                       │
+│     └── Pick a primary brand color (e.g., #006d7e for WRACK blue) │
 │                                                                    │
-│  2. Figma Variables (Local Variables)                              │
-│     ├── Color Variables (primitives + semantic)                   │
-│     ├── Spacing Variables                                          │
-│     ├── Typography Styles                                          │
-│     └── Effect Styles (elevation)                                  │
+│  Step 2: Customize Theme                                           │
+│     ├── Adjust tonal palettes if needed                           │
+│     ├── Configure light and dark schemes                          │
+│     └── Add custom/extended colors                                │
 │                                                                    │
-│  3. MUI Design Kit (Component Library)                             │
-│     └── Pre-built Material UI components using variables           │
-│                                                                    │
-│  4. MUI Sync Plugin                                                │
-│     └── Export theme code directly from Figma                      │
-│                                                                    │
-└───────────────────┬───────────────────────────────────────────────┘
-                    │
-                    │ Export/Sync
-                    ▼
-┌───────────────────────────────────────────────────────────────────┐
-│                        CODE REPOSITORY                             │
-│                                                                    │
-│  5. Generated Theme File                                           │
-│     └── src/design-system/themes/figmaTheme.ts                    │
-│                                                                    │
-│  6. Tailwind CSS Variables Integration                             │
-│     └── Map MUI theme tokens to CSS custom properties             │
-│                                                                    │
-│  7. Component Implementation                                       │
-│     └── Use theme tokens in styled components                      │
+│  Step 3: Export Tokens                                             │
+│     └── Click "Export" → Select "Material Theme (JSON)"           │
+│         Downloads: material-theme.json                             │
 │                                                                    │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
-### 5.2 Figma Variable Structure
+### 5.2 Exported JSON Structure
+
+Material Theme Builder exports a JSON file with the following structure. This is the **source of truth** for all color tokens:
+
+```json
+{
+  "description": "Material Theme exported from Material Theme Builder",
+  "seed": "#006d7e",
+  "coreColors": {
+    "primary": "#006d7e"
+  },
+  "extendedColors": [],
+  "schemes": {
+    "light": {
+      "primary": "#006d7e",
+      "onPrimary": "#ffffff",
+      "primaryContainer": "#b3ebf5",
+      "onPrimaryContainer": "#001f24",
+      "secondary": "#4a6267",
+      "onSecondary": "#ffffff",
+      "secondaryContainer": "#cde7ec",
+      "onSecondaryContainer": "#051f23",
+      "tertiary": "#525e7d",
+      "onTertiary": "#ffffff",
+      "tertiaryContainer": "#dae2ff",
+      "onTertiaryContainer": "#0e1b36",
+      "error": "#ba1a1a",
+      "onError": "#ffffff",
+      "errorContainer": "#ffdad6",
+      "onErrorContainer": "#410002",
+      "background": "#fafdfd",
+      "onBackground": "#191c1c",
+      "surface": "#fafdfd",
+      "onSurface": "#191c1c",
+      "surfaceVariant": "#dbe4e6",
+      "onSurfaceVariant": "#3f484a",
+      "outline": "#6f797a",
+      "outlineVariant": "#bfc8ca",
+      "shadow": "#000000",
+      "scrim": "#000000",
+      "inverseSurface": "#2d3131",
+      "inverseOnSurface": "#eff1f1",
+      "inversePrimary": "#5ddff7"
+    },
+    "dark": {
+      "primary": "#5ddff7",
+      "onPrimary": "#00363e",
+      "primaryContainer": "#004f5a",
+      "onPrimaryContainer": "#b3ebf5",
+      "secondary": "#b1cbd0",
+      "onSecondary": "#1c3438",
+      "secondaryContainer": "#334b4f",
+      "onSecondaryContainer": "#cde7ec",
+      "tertiary": "#bbc6ea",
+      "onTertiary": "#25304d",
+      "tertiaryContainer": "#3b4664",
+      "onTertiaryContainer": "#dae2ff",
+      "error": "#ffb4ab",
+      "onError": "#690005",
+      "errorContainer": "#93000a",
+      "onErrorContainer": "#ffdad6",
+      "background": "#191c1c",
+      "onBackground": "#e0e3e3",
+      "surface": "#191c1c",
+      "onSurface": "#e0e3e3",
+      "surfaceVariant": "#3f484a",
+      "onSurfaceVariant": "#bfc8ca",
+      "outline": "#899294",
+      "outlineVariant": "#3f484a",
+      "shadow": "#000000",
+      "scrim": "#000000",
+      "inverseSurface": "#e0e3e3",
+      "inverseOnSurface": "#191c1c",
+      "inversePrimary": "#006d7e"
+    }
+  },
+  "palettes": {
+    "primary": {
+      "0": "#000000",
+      "10": "#001f24",
+      "20": "#003640",
+      "30": "#00515e",
+      "40": "#006d7e",
+      "50": "#008a9e",
+      "60": "#00a7bf",
+      "70": "#2dc3db",
+      "80": "#5ddff7",
+      "90": "#b3ebf5",
+      "95": "#d9f5fa",
+      "99": "#f6feff",
+      "100": "#ffffff"
+    }
+  }
+}
+```
+
+### 5.3 Manual Token Import Process
+
+**Step-by-step process for importing tokens into the codebase:**
 
 ```
-📁 WRACK Design System (Figma File)
-│
-├── 📁 Variables (Local Variables)
-│   │
-│   ├── 📁 Color Primitives
-│   │   ├── blue/10, blue/20, ... blue/100
-│   │   ├── gray/10, gray/20, ... gray/100
-│   │   ├── green/10, ... green/100
-│   │   ├── red/10, ... red/100
-│   │   ├── purple/10, ... purple/100
-│   │   └── orange/10, ... orange/100
-│   │
-│   ├── 📁 Semantic Colors
-│   │   ├── primary, on-primary
-│   │   ├── primary-container, on-primary-container
-│   │   ├── secondary, on-secondary
-│   │   ├── tertiary, on-tertiary
-│   │   ├── surface, surface-container
-│   │   ├── on-surface, on-surface-variant
-│   │   ├── error, on-error
-│   │   └── outline, outline-variant
-│   │
-│   ├── 📁 Spacing
-│   │   └── space-0, space-1, space-2, ... space-24
-│   │
-│   └── 📁 Radius
-│       └── radius-none, radius-sm, radius-md, radius-lg, radius-xl
-│
-├── 📁 Typography Styles
-│   ├── Display/Large, Display/Medium, Display/Small
-│   ├── Headline/Large, Headline/Medium, Headline/Small
-│   ├── Title/Large, Title/Medium, Title/Small
-│   ├── Body/Large, Body/Medium, Body/Small
-│   └── Label/Large, Label/Medium, Label/Small
-│
-├── 📁 Effect Styles
-│   └── Elevation/1, Elevation/2, Elevation/3, Elevation/4, Elevation/5
-│
-└── 📁 Components (using variables)
-    ├── Buttons
-    ├── Cards
-    ├── Inputs
-    ├── Navigation
-    └── Custom (EV3-specific)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 1: Download JSON from Material Theme Builder                          │
+│  └── Save as: src/design-system/tokens/exported/material-theme.json        │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 2: Run Token Transformation Script (or manually update)               │
+│  └── npm run tokens:transform                                               │
+│      Reads JSON → Generates TypeScript token file                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 3: Verify Theme Changes                                               │
+│  └── Run app locally, check Storybook, verify light/dark modes              │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 4: Commit Updated Tokens                                              │
+│  └── git add . && git commit -m "chore: update design tokens from MTB"     │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 5.3 MUI Theme Integration
+### 5.4 Token Transformation Script
+
+A simple script transforms the exported JSON into TypeScript token files:
+
+```typescript
+// scripts/transform-tokens.ts
+
+import * as fs from 'fs';
+import * as path from 'path';
+
+interface MaterialTheme {
+  schemes: {
+    light: Record<string, string>;
+    dark: Record<string, string>;
+  };
+  palettes: Record<string, Record<string, string>>;
+}
+
+const inputPath = path.join(__dirname, '../src/design-system/tokens/exported/material-theme.json');
+const outputPath = path.join(__dirname, '../src/design-system/tokens/colors.generated.ts');
+
+const theme: MaterialTheme = JSON.parse(fs.readFileSync(inputPath, 'utf-8'));
+
+const output = `// AUTO-GENERATED FROM material-theme.json
+// Do not edit manually. Re-run 'npm run tokens:transform' after updating the JSON.
+// Last updated: ${new Date().toISOString()}
+
+export const lightScheme = ${JSON.stringify(theme.schemes.light, null, 2)} as const;
+
+export const darkScheme = ${JSON.stringify(theme.schemes.dark, null, 2)} as const;
+
+export const palettes = ${JSON.stringify(theme.palettes, null, 2)} as const;
+`;
+
+fs.writeFileSync(outputPath, output);
+console.log('✅ Tokens transformed successfully!');
+```
+
+**Add to package.json:**
+
+```json
+{
+  "scripts": {
+    "tokens:transform": "tsx scripts/transform-tokens.ts"
+  }
+}
+```
+
+### 5.5 Token Update Workflow Summary
+
+| Step | Action | Who | Frequency |
+|------|--------|-----|-----------|
+| 1 | Open Material Theme Builder | Designer | When design changes needed |
+| 2 | Modify source color or schemes | Designer | As needed |
+| 3 | Export JSON | Designer | After each design session |
+| 4 | Copy `material-theme.json` to repo | Developer | Manual copy/paste |
+| 5 | Run `npm run tokens:transform` | Developer | After JSON update |
+| 6 | Test in browser/Storybook | Developer | After transform |
+| 7 | Commit changes | Developer | When satisfied |
+
+> **Important**: This is an intentionally simple, manual process for the first iteration. Each token update requires downloading a new JSON file and running the transform script. This provides full visibility into what changed and when.
+
+### 5.6 Future Enhancements (Optional)
+
+In later iterations, this manual process could be automated:
+
+| Enhancement | Description | Complexity |
+|-------------|-------------|------------|
+| Figma Variables | Import MTB tokens into Figma as local variables | Low |
+| MUI Sync Plugin | Bi-directional Figma ↔ Code sync | Medium |
+| CI Token Validation | Automatically validate token changes in PRs | Low |
+| Figma API Integration | Pull tokens directly from Figma via API | High |
+
+For now, the manual JSON export/import workflow provides the right balance of simplicity and control.
+
+### 5.7 MUI Theme Integration
+
+Using the tokens generated from the Material Theme Builder JSON:
 
 ```typescript
 // src/design-system/themes/muiTheme.ts
 
 import { createTheme } from '@mui/material/styles';
-import { lightThemeColors, darkThemeColors } from '../tokens/colors';
-import { typography } from '../tokens/typography';
-import { spacing } from '../tokens/spacing';
+// Import from the auto-generated file (created by tokens:transform script)
+import { lightScheme, darkScheme } from '../tokens/colors.generated';
 
 export const createWrackTheme = (mode: 'light' | 'dark') => {
-  const colors = mode === 'light' ? lightThemeColors : darkThemeColors;
+  // Use the scheme directly from the transformed Material Theme Builder JSON
+  const scheme = mode === 'light' ? lightScheme : darkScheme;
   
   return createTheme({
     palette: {
       mode,
       primary: {
-        main: colors.primary,
-        contrastText: colors.onPrimary,
+        main: scheme.primary,
+        contrastText: scheme.onPrimary,
       },
       secondary: {
-        main: colors.secondary,
-        contrastText: colors.onSecondary,
+        main: scheme.secondary,
+        contrastText: scheme.onSecondary,
       },
       error: {
-        main: colors.error,
-        contrastText: colors.onError,
+        main: scheme.error,
+        contrastText: scheme.onError,
       },
       background: {
-        default: colors.surface,
-        paper: colors.surfaceContainer,
+        default: scheme.background,
+        paper: scheme.surface,
       },
       text: {
-        primary: colors.onSurface,
-        secondary: colors.onSurfaceVariant,
+        primary: scheme.onBackground,
+        secondary: scheme.onSurfaceVariant,
       },
     },
-    typography: {
-      fontFamily: typography.fontFamily.sans,
-      // ... typography scale
-    },
-    spacing: (factor: number) => `${spacing.base * factor}px`,
     shape: {
       borderRadius: 12, // MD3 default
     },
@@ -437,6 +578,22 @@ export const createWrackTheme = (mode: 'light' | 'dark') => {
     },
   });
 };
+```
+
+### 5.8 Token File Structure (Updated)
+
+```
+src/design-system/
+├── tokens/
+│   ├── exported/
+│   │   └── material-theme.json    # ← Manually copied from Material Theme Builder
+│   ├── colors.generated.ts        # ← Auto-generated by tokens:transform
+│   ├── colors.ts                  # Manual overrides/extensions (if needed)
+│   ├── typography.ts
+│   ├── spacing.ts
+│   └── index.ts
+└── themes/
+    └── muiTheme.ts               # Uses colors.generated.ts
 ```
 
 ---
