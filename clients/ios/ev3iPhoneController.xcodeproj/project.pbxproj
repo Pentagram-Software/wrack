@@ -202,7 +202,7 @@
 			mainGroup = 739AC9E42E22AE5D004D460E;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				73411E7F2F69E7FB000974BA /* XCLocalSwiftPackageReference "../../shared/video-protocol/swift" */,
+				73411E7F2F69E7FB000974BA /* XCLocalSwiftPackageReference "../../../shared/video-protocol/swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 739AC9EE2E22AE5D004D460E /* Products */;
@@ -571,16 +571,16 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		73411E7F2F69E7FB000974BA /* XCLocalSwiftPackageReference "../../shared/video-protocol/swift" */ = {
+		73411E7F2F69E7FB000974BA /* XCLocalSwiftPackageReference "../../../shared/video-protocol/swift" */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = "../../shared/video-protocol/swift";
+			relativePath = "../../../shared/video-protocol/swift";
 		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		73411E812F69EA10000974BA /* VideoProtocol */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 73411E7F2F69E7FB000974BA /* XCLocalSwiftPackageReference "../../shared/video-protocol/swift" */;
+			package = 73411E7F2F69E7FB000974BA /* XCLocalSwiftPackageReference "../../../shared/video-protocol/swift" */;
 			productName = VideoProtocol;
 		};
 /* End XCSwiftPackageProductDependency section */
