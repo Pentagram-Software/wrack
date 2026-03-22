@@ -1,12 +1,12 @@
 # WRACK Control Center - Design System Architecture
 
-> **Document Version**: 1.0  
+> **Document Version**: 2.0  
 > **Date**: March 2026  
 > **Status**: Proposed Architecture
 
 ## 1. Executive Summary
 
-This document describes the proposed architecture for implementing Material Design 3 (Material You) in the WRACK Control Center web application. The architecture focuses on establishing a scalable design system with Figma integration, design tokens, and a component library that ensures visual consistency and streamlines the design-to-development workflow.
+WRACK Control Center is a web-based control application for LEGO Mindstorms EV3 robots, providing real-time device control, sensor monitoring, terrain mapping, and camera integration through Google Cloud Functions. This document describes the proposed architecture for implementing Material Design 3 (Material You) in the application, establishing a scalable design system with design tokens and a component library that ensures visual consistency and streamlines the design-to-development workflow.
 
 ---
 
@@ -33,9 +33,103 @@ This document describes the proposed architecture for implementing Material Desi
 
 ---
 
-## 3. Architectural Overview
+## 3. Technology Stack
 
-### 3.1 High-Level Architecture
+### 3.1 Frontend
+
+- **Framework**: Next.js 15 (App Router) with React 19
+- **Language**: TypeScript 5
+- **Styling**: Tailwind CSS 4 + MUI Theme (design tokens integration)
+- **State**: Zustand
+- **UI Components**: MUI v6 + Heroicons
+- **Notifications**: React Hot Toast → MUI Snackbar (migration target)
+
+### 3.2 Visualization
+
+- **Charts**: Recharts (sensor data, real-time plots)
+- **Mapping**: Leaflet + React-Leaflet (terrain visualization)
+- **Video Streaming**: HLS.js (camera integration)
+
+### 3.3 Backend Integration
+
+- **Platform**: Google Cloud Functions (Gen2, Node.js 20)
+- **Region**: europe-central2 / **Project**: wrack-control
+- **Device Protocol**: TCP Socket to EV3
+- **Authentication**: API Key (`X-API-Key` header)
+- **Real-time Data**: WebSockets
+- **Cloud Storage**: Google Cloud Storage (map data, images)
+- **IoT Management**: Google Cloud IoT Core
+
+### 3.4 Stack Evolution
+
+| Aspect | Current | Proposed | Rationale |
+|--------|---------|----------|-----------|
+| UI Components | Custom + Heroicons | MUI v6 + Heroicons | Battle-tested, accessible, MD3-ready |
+| Styling | Tailwind utilities | Tailwind + MUI Theme | Design tokens integration |
+| Design Tokens | CSS variables (minimal) | Comprehensive token system | Consistency, maintainability |
+| Theming | Dark-only (hardcoded) | ThemeProvider | Light/dark/custom support |
+| Token Source | None | Material Theme Builder JSON export | Manual import, full control |
+
+---
+
+## 4. Architectural Overview
+
+### 4.1 Application Architecture
+
+```
+Web App ←→ GCP Cloud Functions ←→ EV3 Device
+        (HTTP REST)           (TCP Socket)
+```
+
+**Supported Commands**: `forward`, `backward`, `left`, `right`, `stop`, `turret_left`, `turret_right`, `stop_turret`, `get_status`
+
+### 4.2 Communication Flows
+
+#### Device Control (Immediate)
+
+```
+Web Control Panel → Cloud Function → IoT Core → WRACK Device
+                    ↓
+               Response/Status
+```
+
+**API Endpoints**:
+- `POST /controlDevice` — Movement commands (forward, backward, turn)
+- `POST /deviceAction` — Actions (start scan, stop, emergency)
+- `GET /deviceStatus` — Current device state
+
+#### Sensor Data (Real-time)
+
+```
+WRACK Device → IoT Core → Cloud Function → WebSocket/SSE → Web App
+             → Cloud Storage (historical data)
+```
+
+- Device publishes sensor readings; Cloud Function processes and stores
+- Real-time updates via WebSocket; historical data from Cloud Storage
+
+#### Terrain Mapping (Persistent)
+
+```
+WRACK Device → Scan Data → Cloud Storage ← Web App (display)
+             → GPS coords → Cloud Storage ← Web App (mapping)
+```
+
+Map data structure:
+```json
+{
+  "scanId": "unique-id",
+  "timestamp": "2024-01-01T12:00:00Z",
+  "position": {"lat": 52.520, "lng": 13.405},
+  "scanData": {
+    "points": [],
+    "obstacles": [],
+    "terrain": ""
+  }
+}
+```
+
+### 4.3 Design System Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -97,21 +191,152 @@ This document describes the proposed architecture for implementing Material Desi
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.2 Technology Stack Comparison
+---
 
-| Aspect | Current | Proposed | Rationale |
-|--------|---------|----------|-----------|
-| UI Components | Custom + Heroicons | MUI v6 + Heroicons | Battle-tested, accessible, MD3-ready |
-| Styling | Tailwind utilities | Tailwind + MUI Theme | Design tokens integration |
-| Design Tokens | CSS variables (minimal) | Comprehensive token system | Consistency, maintainability |
-| Theming | Dark-only (hardcoded) | ThemeProvider | Light/dark/custom support |
-| Token Source | None | Material Theme Builder JSON export | Manual import, full control |
+## 5. Project Structure
+
+```
+src/
+├── app/
+│   ├── page.tsx                  # Main dashboard
+│   ├── layout.tsx                # Root layout
+│   └── globals.css               # Global styles + CSS variable bridge
+├── components/
+│   ├── EV3StatusPanel.tsx        # Device monitoring
+│   ├── VehicleControls.tsx       # Movement controls
+│   ├── TurretControls.tsx        # Turret operations
+│   ├── MapVisualization.tsx      # Terrain mapping
+│   ├── CameraView.tsx            # Video streaming
+│   └── ConnectionTest.tsx        # GCP connectivity
+├── design-system/
+│   ├── tokens/
+│   │   ├── exported/
+│   │   │   └── material-theme.json   # Manually copied from Material Theme Builder
+│   │   ├── colors.generated.ts       # Auto-generated by tokens:transform
+│   │   ├── colors.ts                 # Manual overrides/extensions
+│   │   ├── typography.ts
+│   │   ├── spacing.ts
+│   │   ├── radius.ts
+│   │   ├── elevation.ts
+│   │   ├── motion.ts
+│   │   └── index.ts
+│   ├── themes/
+│   │   ├── index.ts
+│   │   ├── muiTheme.ts               # MUI theme using generated tokens
+│   │   ├── lightTheme.ts
+│   │   ├── darkTheme.ts
+│   │   └── types.ts
+│   ├── components/
+│   │   ├── index.ts
+│   │   ├── Button/
+│   │   ├── Card/
+│   │   ├── StatusIndicator/
+│   │   ├── ControlPad/
+│   │   └── ...
+│   └── providers/
+│       ├── ThemeProvider.tsx
+│       └── index.ts
+├── lib/
+│   └── robot-api.ts              # GCP API client
+├── stores/
+│   ├── device-store.ts           # Device state management
+│   ├── sensor-store.ts           # Sensor data state
+│   ├── ui-store.ts               # UI state (active tabs, modals)
+│   └── theme-store.ts            # Theme mode preference
+├── types/
+│   ├── device.ts
+│   ├── sensor.ts
+│   └── api.ts
+└── hooks/
+    ├── useDeviceControl.ts
+    ├── useSensorData.ts
+    └── useWebSocket.ts
+```
 
 ---
 
-## 4. Design Tokens Architecture
+## 6. Data Models
 
-### 4.1 Token Hierarchy
+### Device State
+
+```typescript
+interface DeviceState {
+  id: string;
+  status: 'online' | 'offline' | 'error' | 'scanning';
+  position: {
+    lat: number;
+    lng: number;
+    heading: number;
+  };
+  battery: {
+    level: number;
+    voltage: number;
+    charging: boolean;
+  };
+  sensors: {
+    temperature: number;
+    humidity: number;
+    pressure: number;
+  };
+  lastUpdate: Date;
+}
+```
+
+### Command Structure
+
+```typescript
+interface DeviceCommand {
+  type: 'movement' | 'action' | 'config';
+  command: string;
+  parameters?: Record<string, unknown>;
+  timestamp: Date;
+  sessionId: string;
+}
+```
+
+### Terrain Data
+
+```typescript
+interface TerrainScan {
+  id: string;
+  timestamp: Date;
+  position: Coordinates;
+  scanData: {
+    points: Point3D[];
+    obstacles: Obstacle[];
+    surfaceType: string;
+  };
+  processed: boolean;
+}
+```
+
+---
+
+## 7. Environment Configuration
+
+Required in `.env.local`:
+
+```bash
+# Google Cloud Project
+NEXT_PUBLIC_GCP_FUNCTION_URL=https://europe-central2-wrack-control.cloudfunctions.net/controlRobot
+NEXT_PUBLIC_API_KEY=your-api-key
+NEXT_PUBLIC_GCP_PROJECT_ID=wrack-control
+NEXT_PUBLIC_GCP_REGION=europe-central2
+
+# Real-time Communication
+NEXT_PUBLIC_WEBSOCKET_URL=wss://your-websocket-endpoint
+
+# Cloud Storage
+NEXT_PUBLIC_STORAGE_BUCKET=your-storage-bucket
+```
+
+Copy `.env.local.example` to `.env.local` to get started.
+
+---
+
+## 8. Design Tokens Architecture
+
+### 8.1 Token Hierarchy
 
 ```
 Base Tokens (Primitives)
@@ -165,7 +390,7 @@ Component Tokens (Component-specific)
     └── ... (other components)
 ```
 
-### 4.2 Material Design 3 Color System
+### 8.2 Material Design 3 Color System
 
 ```typescript
 // tokens/colors.ts
@@ -249,49 +474,13 @@ export const darkThemeColors = {
 };
 ```
 
-### 4.3 Token File Structure
-
-```
-src/
-└── design-system/
-    ├── tokens/
-    │   ├── index.ts              # Re-exports all tokens
-    │   ├── colors.ts             # Color palettes and semantic colors
-    │   ├── typography.ts         # Font families, sizes, weights
-    │   ├── spacing.ts            # Spacing scale
-    │   ├── radius.ts             # Border radius scale
-    │   ├── elevation.ts          # Shadow definitions
-    │   └── motion.ts             # Animation/transition tokens
-    │
-    ├── themes/
-    │   ├── index.ts              # Theme exports
-    │   ├── lightTheme.ts         # Light theme configuration
-    │   ├── darkTheme.ts          # Dark theme configuration
-    │   └── types.ts              # Theme type definitions
-    │
-    ├── components/
-    │   ├── index.ts              # Component exports
-    │   ├── Button/               # Each component in own folder
-    │   │   ├── Button.tsx
-    │   │   ├── Button.styles.ts
-    │   │   └── index.ts
-    │   ├── Card/
-    │   ├── StatusIndicator/
-    │   ├── ControlPad/
-    │   └── ... 
-    │
-    └── providers/
-        ├── ThemeProvider.tsx     # Theme context provider
-        └── index.ts
-```
-
 ---
 
-## 5. Design Token Export & Import Architecture
+## 9. Design Token Export & Import Architecture
 
 > **First Iteration Approach**: This section describes a simple, manual workflow for exporting tokens from Material Theme Builder and importing them into the codebase. This approach gives full control over the token ingestion process and avoids dependencies on automated sync tools. The designer exports the JSON, and the developer manually imports it into the codebase.
 
-### 5.1 Material Theme Builder Export Workflow
+### 9.1 Material Theme Builder Export Workflow
 
 The Material Theme Builder (https://m3.material.io/theme-builder) generates MD3-compliant color tokens that are **exported as a JSON file**.
 
@@ -315,7 +504,7 @@ The Material Theme Builder (https://m3.material.io/theme-builder) generates MD3-
 └───────────────────────────────────────────────────────────────────┘
 ```
 
-### 5.2 Exported JSON Structure
+### 9.2 Exported JSON Structure
 
 Material Theme Builder exports a JSON file with the following structure. This is the **source of truth** for all color tokens:
 
@@ -411,7 +600,7 @@ Material Theme Builder exports a JSON file with the following structure. This is
 }
 ```
 
-### 5.3 Manual Token Import Process
+### 9.3 Manual Token Import Process
 
 **Step-by-step process for importing tokens into the codebase:**
 
@@ -441,7 +630,7 @@ Material Theme Builder exports a JSON file with the following structure. This is
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 5.4 Token Transformation Script
+### 9.4 Token Transformation Script
 
 A simple script transforms the exported JSON into TypeScript token files:
 
@@ -489,7 +678,7 @@ console.log('✅ Tokens transformed successfully!');
 }
 ```
 
-### 5.5 Token Update Workflow Summary
+### 9.5 Token Update Workflow Summary
 
 | Step | Action | Who | Frequency |
 |------|--------|-----|-----------|
@@ -503,7 +692,7 @@ console.log('✅ Tokens transformed successfully!');
 
 > **Important**: This is an intentionally simple, manual process for the first iteration. Each token update requires downloading a new JSON file and running the transform script. This provides full visibility into what changed and when.
 
-### 5.6 Future Enhancements (Optional)
+### 9.6 Future Enhancements (Optional)
 
 In later iterations, this manual process could be automated:
 
@@ -516,7 +705,7 @@ In later iterations, this manual process could be automated:
 
 For now, the manual JSON export/import workflow provides the right balance of simplicity and control.
 
-### 5.7 MUI Theme Integration
+### 9.7 MUI Theme Integration
 
 Using the tokens generated from the Material Theme Builder JSON:
 
@@ -580,27 +769,11 @@ export const createWrackTheme = (mode: 'light' | 'dark') => {
 };
 ```
 
-### 5.8 Token File Structure (Updated)
-
-```
-src/design-system/
-├── tokens/
-│   ├── exported/
-│   │   └── material-theme.json    # ← Manually copied from Material Theme Builder
-│   ├── colors.generated.ts        # ← Auto-generated by tokens:transform
-│   ├── colors.ts                  # Manual overrides/extensions (if needed)
-│   ├── typography.ts
-│   ├── spacing.ts
-│   └── index.ts
-└── themes/
-    └── muiTheme.ts               # Uses colors.generated.ts
-```
-
 ---
 
-## 6. Component Architecture
+## 10. Component Architecture
 
-### 6.1 Component Hierarchy
+### 10.1 Component Hierarchy
 
 ```
 Design System Components (Generic, Reusable)
@@ -661,13 +834,12 @@ Domain Components (EV3-specific)
     └── ControlPanel        # Standardized panel container
 ```
 
-### 6.2 Component Structure Example
+### 10.2 Component Structure Example
 
 ```typescript
 // src/design-system/components/StatusIndicator/StatusIndicator.tsx
 
 import { Box } from '@mui/material';
-import { useTheme } from '@mui/material/styles';
 import { SxProps, Theme } from '@mui/system';
 
 export type StatusType = 'online' | 'offline' | 'warning' | 'error' | 'inactive';
@@ -701,7 +873,6 @@ export const StatusIndicator = ({
   label,
   sx,
 }: StatusIndicatorProps) => {
-  const theme = useTheme();
   const dimension = sizeMap[size];
 
   return (
@@ -742,9 +913,9 @@ export const StatusIndicator = ({
 
 ---
 
-## 7. Tailwind + MUI Integration Strategy
+## 11. Tailwind + MUI Integration Strategy
 
-### 7.1 CSS Variables Bridge
+### 11.1 CSS Variables Bridge
 
 ```css
 /* src/app/globals.css */
@@ -777,7 +948,7 @@ export const StatusIndicator = ({
 }
 ```
 
-### 7.2 Usage Guidelines
+### 11.2 Usage Guidelines
 
 | Use Case | Recommended Approach |
 |----------|---------------------|
@@ -790,9 +961,9 @@ export const StatusIndicator = ({
 
 ---
 
-## 8. State Management Integration
+## 12. State Management Integration
 
-### 8.1 Theme State with Zustand
+### 12.1 Theme State with Zustand
 
 ```typescript
 // src/stores/themeStore.ts
@@ -810,7 +981,7 @@ interface ThemeState {
 
 export const useThemeStore = create<ThemeState>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       mode: 'system',
       resolvedMode: 'dark', // Default
       setMode: (mode) => {
@@ -827,11 +998,17 @@ export const useThemeStore = create<ThemeState>()(
 );
 ```
 
+### 12.2 Other Stores
+
+- **`device-store.ts`** — Device connection state, status, position, battery
+- **`sensor-store.ts`** — Real-time sensor readings, history, alerts
+- **`ui-store.ts`** — Active tabs, modal state, panel expand/collapse
+
 ---
 
-## 9. Accessibility Architecture
+## 13. Accessibility Architecture
 
-### 9.1 A11y Requirements
+### 13.1 A11y Requirements
 
 | Requirement | Implementation |
 |-------------|----------------|
@@ -842,7 +1019,7 @@ export const useThemeStore = create<ThemeState>()(
 | Reduced motion | Respect `prefers-reduced-motion` |
 | Touch targets | Minimum 44x44px interactive areas |
 
-### 9.2 Focus Management Example
+### 13.2 Focus Management Example
 
 ```typescript
 // Focus ring styling in theme
@@ -862,9 +1039,48 @@ components: {
 
 ---
 
-## 10. Migration Path from Current Architecture
+## 14. Implementation Roadmap
 
-### 10.1 Coexistence Strategy
+### Phase 1: Foundation & Basic Control Interface
+
+- [ ] Install MUI dependencies and set up ThemeProvider
+- [ ] Create design tokens from Material Theme Builder export
+- [ ] Device connection status display
+- [ ] Basic movement controls (forward, backward, turn)
+- [ ] Emergency stop functionality
+- [ ] Real-time device status display
+
+### Phase 2: Design System + Sensor Dashboard
+
+- [ ] Create shared design system components (StatusIndicator, ControlPad, etc.)
+- [ ] Migrate existing components to design system primitives
+- [ ] Real-time sensor data visualization
+- [ ] Battery and system status
+- [ ] Data logging and history
+- [ ] Alert system for critical values
+
+### Phase 3: Terrain Mapping + Full Migration
+
+- [ ] Map visualization with Leaflet
+- [ ] Display scan data overlays
+- [ ] Path tracking and history
+- [ ] Obstacle detection visualization
+- [ ] Migrate all components to design system
+- [ ] Complete a11y audit
+
+### Phase 4: Advanced Features
+
+- [ ] Camera stream integration (HLS)
+- [ ] Advanced mapping tools
+- [ ] Data export capabilities
+- [ ] Multi-device support
+- [ ] Light/dark theme toggle in UI
+
+---
+
+## 15. Migration Path from Current Architecture
+
+### 15.1 Coexistence Strategy
 
 During migration, the existing Tailwind-based components will coexist with new MUI components:
 
@@ -888,7 +1104,7 @@ Phase 3: Full Migration
 └── Complete a11y audit
 ```
 
-### 10.2 Component Migration Example
+### 15.2 Component Migration Example
 
 ```typescript
 // BEFORE (current)
@@ -900,9 +1116,9 @@ Phase 3: Full Migration
 
 ---
 
-## 11. Build and Performance Considerations
+## 16. Build and Performance Considerations
 
-### 11.1 Bundle Optimization
+### 16.1 Bundle Optimization
 
 | Strategy | Implementation |
 |----------|----------------|
@@ -911,7 +1127,7 @@ Phase 3: Full Migration
 | CSS optimization | Use Tailwind's purge for utilities |
 | Font optimization | Continue using Next.js font optimization |
 
-### 11.2 Import Pattern
+### 16.2 Import Pattern
 
 ```typescript
 // Preferred: Named imports for tree shaking
@@ -922,11 +1138,61 @@ import Card from '@mui/material/Card';
 // import { Button, Card } from '@mui/material';
 ```
 
+### 16.3 Performance Targets
+
+- **Load Time**: ~2 seconds
+- **Command Latency**: ~200–500ms
+- **Update Interval**: 2–5 seconds
+- **Memory**: ~50MB browser
+
 ---
 
-## 12. Testing Strategy
+## 17. Development Commands
 
-### 12.1 Design System Testing
+```bash
+# Development
+npm run dev              # Start development server (localhost:3000)
+npm run build            # Build for production
+npm run start            # Start production server
+npm run lint             # Run ESLint
+npm run type-check       # TypeScript checking
+
+# Design Tokens
+npm run tokens:transform # Transform Material Theme Builder JSON to TypeScript
+```
+
+### GCP Deployment
+
+```bash
+gcloud functions deploy controlRobot \
+  --gen2 \
+  --runtime nodejs20 \
+  --trigger-http \
+  --allow-unauthenticated \
+  --source=. \
+  --entry-point=controlRobot \
+  --region=europe-central2 \
+  --set-env-vars API_KEY=your-key,ROBOT_HOST=ip,ROBOT_PORT=27700
+```
+
+---
+
+## 18. Security Considerations
+
+- **API Authentication**: API Key via `X-API-Key` header; use service account keys for GCP
+- **Environment Variables**: Never commit secrets to repository; use `.env.local`
+- **CORS Configuration**: Restrict origins for production (currently localhost-only)
+- **Rate Limiting**: Implement for device control endpoints
+- **Input Validation**: Validate all commands before sending to device
+- **Secure WebSocket**: Use WSS in production
+- **HTTPS Enforcement**: Required for production deployments
+- **Future**: JWT tokens, user authentication, audit logging
+
+---
+
+## 19. Testing Strategy
+
+### 19.1 Design System Testing
 
 | Test Type | Tools | Coverage |
 |-----------|-------|----------|
@@ -935,7 +1201,7 @@ import Card from '@mui/material/Card';
 | A11y testing | jest-axe, Lighthouse | WCAG compliance |
 | Theme testing | Custom theme tests | Light/dark modes |
 
-### 12.2 Storybook Integration
+### 19.2 Storybook Integration
 
 ```typescript
 // Component stories for documentation and testing
@@ -975,24 +1241,74 @@ export const Offline: Story = {
 
 ---
 
-## 13. Appendix
+## 20. Future Enhancements
 
-### A. Dependency Additions
+### Camera Integration
+- HLS video streaming with multiple camera angles
+- Recording capabilities
+- Real-time image analysis
+
+### Advanced Analytics
+- Machine learning for terrain analysis
+- Predictive maintenance
+- Historical data analysis and export
+
+### Multi-Device Support
+- Device fleet management
+- Coordinated scanning missions
+- Centralized monitoring
+
+### GPS & Mapping
+- GPS integration and data persistence
+- Advanced mapping overlays
+
+---
+
+## Appendix
+
+### A. Full Dependency List
+
+**Production Dependencies**
 
 ```json
 {
-  "dependencies": {
-    "@mui/material": "^6.0.0",
-    "@mui/system": "^6.0.0",
-    "@emotion/react": "^11.11.0",
-    "@emotion/styled": "^11.11.0",
-    "@mui/icons-material": "^6.0.0"
-  },
-  "devDependencies": {
-    "@storybook/react": "^8.0.0",
-    "@storybook/addon-a11y": "^8.0.0",
-    "jest-axe": "^8.0.0"
-  }
+  "next": "15.5.0",
+  "react": "19.1.0",
+  "react-dom": "19.1.0",
+  "typescript": "^5",
+  "tailwindcss": "^4",
+  "@mui/material": "^6.0.0",
+  "@mui/system": "^6.0.0",
+  "@mui/icons-material": "^6.0.0",
+  "@emotion/react": "^11.11.0",
+  "@emotion/styled": "^11.11.0",
+  "zustand": "^5.0.8",
+  "socket.io-client": "^4.8.1",
+  "react-leaflet": "^5.0.0",
+  "leaflet": "^1.9.4",
+  "@types/leaflet": "^1.9.20",
+  "recharts": "^3.1.2",
+  "@google-cloud/storage": "^7.17.0",
+  "@google-cloud/iot": "^5.2.0",
+  "@heroicons/react": "^2.2.0",
+  "react-hot-toast": "^2.6.0",
+  "date-fns": "^4.1.0",
+  "hls.js": "^1.6.10"
+}
+```
+
+**Development Dependencies**
+
+```json
+{
+  "@types/node": "^20",
+  "@types/react": "^19",
+  "@types/react-dom": "^19",
+  "eslint": "^9",
+  "eslint-config-next": "15.5.0",
+  "@storybook/react": "^8.0.0",
+  "@storybook/addon-a11y": "^8.0.0",
+  "jest-axe": "^8.0.0"
 }
 ```
 
@@ -1005,14 +1321,15 @@ export const Offline: Story = {
 | `src/design-system/providers/ThemeProvider.tsx` | Theme context |
 | `.storybook/main.ts` | Storybook configuration |
 | `tailwind.config.ts` | Tailwind token integration |
+| `scripts/transform-tokens.ts` | Token transformation script |
 
 ### C. References
 
 - [Material Design 3 Guidelines](https://m3.material.io/)
 - [MUI Documentation](https://mui.com/)
 - [MUI Sync Plugin](https://mui.com/blog/introducing-sync-plugin/)
-- [Figma Variables](https://help.figma.com/hc/en-us/articles/15339657135383-Guide-to-variables-in-Figma)
 - [Tailwind CSS](https://tailwindcss.com/docs)
+- [Next.js App Router](https://nextjs.org/docs/app)
 
 ---
 
