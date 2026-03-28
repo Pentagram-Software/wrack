@@ -23,6 +23,11 @@ export function ThemeProvider({ children }: ThemeProviderProps) {
     return () => mq.removeEventListener('change', handler);
   }, [_resolveMode]);
 
+  // Sync data-theme on <html> so the CSS variable bridge follows the MUI theme
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', resolvedMode);
+  }, [resolvedMode]);
+
   const theme = useMemo(() => createWrackTheme(resolvedMode), [resolvedMode]);
 
   return (
