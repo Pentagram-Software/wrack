@@ -1,0 +1,5 @@
+---
+alwaysApply: true
+---
+
+Each automatic code development for specific ticket shall end up with a PR not a direct commit to master.
