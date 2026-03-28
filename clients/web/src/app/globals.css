@@ -1,26 +1,179 @@
 @import "tailwindcss";
 
+/* ============================================================
+   MD3 Color Bridge — Light scheme (default)
+   Values derived from material-theme.json (seed: #11003C)
+   Re-generate with: npm run tokens:transform
+   ============================================================ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --md-primary:                   #63568F;
+  --md-on-primary:                #FFFFFF;
+  --md-primary-container:         #E7DEFF;
+  --md-on-primary-container:      #4B3E76;
+  --md-secondary:                 #8C4A60;
+  --md-on-secondary:              #FFFFFF;
+  --md-secondary-container:       #FFD9E2;
+  --md-on-secondary-container:    #703348;
+  --md-tertiary:                  #6F5D0E;
+  --md-on-tertiary:               #FFFFFF;
+  --md-tertiary-container:        #FBE187;
+  --md-on-tertiary-container:     #554600;
+  --md-error:                     #904A43;
+  --md-on-error:                  #FFFFFF;
+  --md-error-container:           #FFDAD6;
+  --md-on-error-container:        #73332D;
+  --md-background:                #FDF7FF;
+  --md-on-background:             #1C1B20;
+  --md-surface:                   #FDF7FF;
+  --md-on-surface:                #1C1B20;
+  --md-surface-variant:           #E6E0EC;
+  --md-on-surface-variant:        #48454E;
+  --md-outline:                   #79757F;
+  --md-outline-variant:           #CAC4CF;
+  --md-inverse-surface:           #312F35;
+  --md-inverse-on-surface:        #F4EFF7;
+  --md-inverse-primary:           #CDBDFF;
+  --md-surface-dim:               #DDD8E0;
+  --md-surface-bright:            #FDF7FF;
+  --md-surface-container-lowest:  #FFFFFF;
+  --md-surface-container-low:     #F7F2FA;
+  --md-surface-container:         #F2ECF4;
+  --md-surface-container-high:    #ECE6EE;
+  --md-surface-container-highest: #E6E1E9;
+  --md-scrim:                     #000000;
+  --md-shadow:                    #000000;
 }
 
+/* Dark scheme — set by ThemeProvider via data-theme="dark" on <html> */
+[data-theme="dark"] {
+  --md-primary:                   #CDBDFF;
+  --md-on-primary:                #34275E;
+  --md-primary-container:         #4B3E76;
+  --md-on-primary-container:      #E7DEFF;
+  --md-secondary:                 #FFB1C8;
+  --md-on-secondary:              #541D32;
+  --md-secondary-container:       #703348;
+  --md-on-secondary-container:    #FFD9E2;
+  --md-tertiary:                  #DEC56E;
+  --md-on-tertiary:               #3B2F00;
+  --md-tertiary-container:        #554600;
+  --md-on-tertiary-container:     #FBE187;
+  --md-error:                     #FFB4AB;
+  --md-on-error:                  #561E19;
+  --md-error-container:           #73332D;
+  --md-on-error-container:        #FFDAD6;
+  --md-background:                #141318;
+  --md-on-background:             #E6E1E9;
+  --md-surface:                   #141318;
+  --md-on-surface:                #E6E1E9;
+  --md-surface-variant:           #48454E;
+  --md-on-surface-variant:        #CAC4CF;
+  --md-outline:                   #938F99;
+  --md-outline-variant:           #48454E;
+  --md-inverse-surface:           #E6E1E9;
+  --md-inverse-on-surface:        #312F35;
+  --md-inverse-primary:           #63568F;
+  --md-surface-dim:               #141318;
+  --md-surface-bright:            #3A383E;
+  --md-surface-container-lowest:  #0F0D13;
+  --md-surface-container-low:     #1C1B20;
+  --md-surface-container:         #201F24;
+  --md-surface-container-high:    #2B292F;
+  --md-surface-container-highest: #36343A;
+  --md-scrim:                     #000000;
+  --md-shadow:                    #000000;
+}
+
+/* OS dark-mode fallback before Zustand hydrates (no data-theme set yet) */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --md-primary:                   #CDBDFF;
+    --md-on-primary:                #34275E;
+    --md-primary-container:         #4B3E76;
+    --md-on-primary-container:      #E7DEFF;
+    --md-secondary:                 #FFB1C8;
+    --md-on-secondary:              #541D32;
+    --md-secondary-container:       #703348;
+    --md-on-secondary-container:    #FFD9E2;
+    --md-tertiary:                  #DEC56E;
+    --md-on-tertiary:               #3B2F00;
+    --md-tertiary-container:        #554600;
+    --md-on-tertiary-container:     #FBE187;
+    --md-error:                     #FFB4AB;
+    --md-on-error:                  #561E19;
+    --md-error-container:           #73332D;
+    --md-on-error-container:        #FFDAD6;
+    --md-background:                #141318;
+    --md-on-background:             #E6E1E9;
+    --md-surface:                   #141318;
+    --md-on-surface:                #E6E1E9;
+    --md-surface-variant:           #48454E;
+    --md-on-surface-variant:        #CAC4CF;
+    --md-outline:                   #938F99;
+    --md-outline-variant:           #48454E;
+    --md-inverse-surface:           #E6E1E9;
+    --md-inverse-on-surface:        #312F35;
+    --md-inverse-primary:           #63568F;
+    --md-surface-dim:               #141318;
+    --md-surface-bright:            #3A383E;
+    --md-surface-container-lowest:  #0F0D13;
+    --md-surface-container-low:     #1C1B20;
+    --md-surface-container:         #201F24;
+    --md-surface-container-high:    #2B292F;
+    --md-surface-container-highest: #36343A;
+    --md-scrim:                     #000000;
+    --md-shadow:                    #000000;
+  }
+}
+
+/* ============================================================
+   Tailwind v4 @theme — MD3 roles as Tailwind color tokens
+   Usage: bg-primary, text-on-surface, border-outline, etc.
+   ============================================================ */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-primary:                  var(--md-primary);
+  --color-on-primary:               var(--md-on-primary);
+  --color-primary-container:        var(--md-primary-container);
+  --color-on-primary-container:     var(--md-on-primary-container);
+  --color-secondary:                var(--md-secondary);
+  --color-on-secondary:             var(--md-on-secondary);
+  --color-secondary-container:      var(--md-secondary-container);
+  --color-on-secondary-container:   var(--md-on-secondary-container);
+  --color-tertiary:                 var(--md-tertiary);
+  --color-on-tertiary:              var(--md-on-tertiary);
+  --color-tertiary-container:       var(--md-tertiary-container);
+  --color-on-tertiary-container:    var(--md-on-tertiary-container);
+  --color-error:                    var(--md-error);
+  --color-on-error:                 var(--md-on-error);
+  --color-error-container:          var(--md-error-container);
+  --color-on-error-container:       var(--md-on-error-container);
+  --color-background:               var(--md-background);
+  --color-on-background:            var(--md-on-background);
+  --color-surface:                  var(--md-surface);
+  --color-on-surface:               var(--md-on-surface);
+  --color-surface-variant:          var(--md-surface-variant);
+  --color-on-surface-variant:       var(--md-on-surface-variant);
+  --color-outline:                  var(--md-outline);
+  --color-outline-variant:          var(--md-outline-variant);
+  --color-inverse-surface:          var(--md-inverse-surface);
+  --color-inverse-on-surface:       var(--md-inverse-on-surface);
+  --color-inverse-primary:          var(--md-inverse-primary);
+  --color-surface-dim:              var(--md-surface-dim);
+  --color-surface-bright:           var(--md-surface-bright);
+  --color-surface-container-lowest: var(--md-surface-container-lowest);
+  --color-surface-container-low:    var(--md-surface-container-low);
+  --color-surface-container:        var(--md-surface-container);
+  --color-surface-container-high:   var(--md-surface-container-high);
+  --color-surface-container-highest:var(--md-surface-container-highest);
+  --color-scrim:                    var(--md-scrim);
+
+  /* Fonts */
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--md-background);
+  color: var(--md-on-background);
+  font-family: var(--font-geist-sans, Arial, Helvetica, sans-serif);
 }
