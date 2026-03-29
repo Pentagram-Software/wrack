@@ -8,6 +8,7 @@ import VehicleControls from '@/components/VehicleControls';
 import TurretControls from '@/components/TurretControls';
 import SpeechControls from '@/components/SpeechControls';
 import ConnectionTest from '@/components/ConnectionTest';
+import { ThemeToggle } from '@/components/ThemeToggle';
 
 export default function Home() {
   const [isCameraExpanded, setIsCameraExpanded] = useState(false);
@@ -15,9 +16,12 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-gray-900 text-white">
       <header className="bg-gray-800 border-b border-gray-700 p-4">
-        <div className="max-w-full mx-auto">
-          <h1 className="text-2xl font-bold text-blue-400">WRACK Control Center</h1>
-          <p className="text-gray-400 text-sm mt-1">EV3 Mindstorms Device Management</p>
+        <div className="max-w-full mx-auto flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-blue-400">WRACK Control Center</h1>
+            <p className="text-gray-400 text-sm mt-1">EV3 Mindstorms Device Management</p>
+          </div>
+          <ThemeToggle />
         </div>
       </header>
 

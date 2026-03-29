@@ -1,0 +1,5 @@
+---
+alwaysApply: true
+---
+
+For new created functionality, before commiting or creating a PR, run all unit tests for potential regression
