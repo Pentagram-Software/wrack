@@ -1,0 +1,5 @@
+---
+alwaysApply: true
+---
+
+Always split the large, complex problems into small pieces and handle them separately providing seperate commits.
