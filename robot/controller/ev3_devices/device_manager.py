@@ -1,6 +1,8 @@
 from error_reporting import report_device_error, report_exception
 import os  # type: ignore
 import time
+import threading
+
 
 class DeviceManager:
     """
@@ -14,7 +16,15 @@ class DeviceManager:
         self.available_devices = []
         self.missing_devices = []
         self.device_ports = {}  # Store port information for each device
+        self.device_types = {}  # Store device type classes for reconnection
         self.ev3_brick = ev3_brick  # Store reference to EV3Brick for battery monitoring
+        
+        # Port monitoring for disconnect/reconnect handling
+        self._port_monitor = None
+        self._device_lock = threading.Lock()  # Thread-safe device access
+        
+        # Track disconnected devices that should ignore commands
+        self._disconnected_devices = set()
         
     def try_init_device(self, device_type, port, device_name):
         """
@@ -23,16 +33,28 @@ class DeviceManager:
         """
         try:
             device = device_type(port)
-            self.devices[device_name] = device
-            self.available_devices.append(device_name)
-            self.device_ports[device_name] = str(port)  # Store port info
+            with self._device_lock:
+                self.devices[device_name] = device
+                self.available_devices.append(device_name)
+                self.device_ports[device_name] = str(port)  # Store port info
+                self.device_types[device_name] = device_type  # Store type for reconnection
+                
+                # Remove from disconnected set if it was there
+                self._disconnected_devices.discard(device_name)
+            
+            # Register with port monitor if available
+            if self._port_monitor:
+                self._port_monitor.register_device(device_name, device_type, port)
+            
             if __debug__:
                 print("✓ {} initialized on {}".format(device_name, port))
             return device
         except Exception as e:
-            self.devices[device_name] = None
-            self.missing_devices.append(device_name)
-            self.device_ports[device_name] = str(port)  # Store port even if failed
+            with self._device_lock:
+                self.devices[device_name] = None
+                self.missing_devices.append(device_name)
+                self.device_ports[device_name] = str(port)  # Store port even if failed
+                self.device_types[device_name] = device_type  # Store type for reconnection
             if __debug__:
                 report_device_error(device_name, "initialization", e, port)
                 print("✗ {} not found on {}: {}".format(device_name, port, e))
@@ -74,13 +96,45 @@ class DeviceManager:
     def safe_device_call(self, device_name, method_name, *args, **kwargs):
         """
         Safely call a method on a device if it exists.
+        Handles device disconnection gracefully by catching exceptions.
         """
+        # Check if device is marked as disconnected
+        with self._device_lock:
+            if device_name in self._disconnected_devices:
+                if __debug__:
+                    print("Device {} is disconnected, ignoring {}".format(device_name, method_name))
+                return None
+        
         device = self.get_device(device_name)
         if device is not None:
             method = getattr(device, method_name, None)
             if method:
-                return method(*args, **kwargs)
+                try:
+                    return method(*args, **kwargs)
+                except Exception as e:
+                    # Device may have disconnected - mark it and ignore the command
+                    self._handle_device_error(device_name, method_name, e)
+                    return None
         return None
+    
+    def _handle_device_error(self, device_name, operation, exception):
+        """
+        Handle a device error, potentially marking the device as disconnected.
+        
+        Args:
+            device_name: Name of the device that errored
+            operation: Name of the operation that failed
+            exception: The exception that was raised
+        """
+        if __debug__:
+            report_device_error(device_name, operation, exception, "Device may be disconnected")
+        
+        # Mark device as disconnected to prevent further command attempts
+        with self._device_lock:
+            self._disconnected_devices.add(device_name)
+        
+        if __debug__:
+            print("Device {} marked as disconnected after error in {}".format(device_name, operation))
     
     def safe_device_operation(self, device_name, operation_name, operation_func, *args, **kwargs):
         """
@@ -474,3 +528,136 @@ class DeviceManager:
                 system_info['hostname'] = "Unknown"
         
         return system_info
+    
+    def enable_port_monitoring(self, check_interval=1.0):
+        """
+        Enable port monitoring for device disconnect/reconnect detection.
+        
+        Args:
+            check_interval: Time in seconds between connectivity checks (default: 1.0)
+        """
+        # Import here to avoid circular imports
+        from .port_monitor import PortMonitor
+        
+        if self._port_monitor is not None:
+            if __debug__:
+                print("Port monitoring already enabled")
+            return
+        
+        self._port_monitor = PortMonitor(self, check_interval)
+        
+        # Register existing devices with the port monitor
+        with self._device_lock:
+            for device_name in self.available_devices:
+                if device_name in self.device_types and device_name in self.device_ports:
+                    device_type = self.device_types[device_name]
+                    port_str = self.device_ports[device_name]
+                    # We need the actual port object, not the string
+                    # For now, store the string - the port monitor will handle it
+                    self._port_monitor.register_device(device_name, device_type, port_str)
+        
+        # Set up callbacks for disconnect/reconnect events
+        self._port_monitor.on_disconnect(self._on_device_disconnect)
+        self._port_monitor.on_reconnect(self._on_device_reconnect)
+        
+        # Start the monitoring thread
+        self._port_monitor.start()
+        
+        if __debug__:
+            print("Port monitoring enabled with {}s check interval".format(check_interval))
+    
+    def disable_port_monitoring(self):
+        """Disable port monitoring and stop the background thread."""
+        if self._port_monitor is not None:
+            self._port_monitor.stop()
+            self._port_monitor = None
+            
+            if __debug__:
+                print("Port monitoring disabled")
+    
+    def _on_device_disconnect(self, device_name, status):
+        """
+        Callback when a device disconnects.
+        
+        Args:
+            device_name: Name of the disconnected device
+            status: Status dictionary with device info
+        """
+        with self._device_lock:
+            self._disconnected_devices.add(device_name)
+            
+            # Move from available to missing
+            if device_name in self.available_devices:
+                self.available_devices.remove(device_name)
+            if device_name not in self.missing_devices:
+                self.missing_devices.append(device_name)
+        
+        if __debug__:
+            print("DeviceManager: {} disconnected from {}".format(
+                device_name, status.get('port', 'unknown')))
+    
+    def _on_device_reconnect(self, device_name, status):
+        """
+        Callback when a device reconnects.
+        
+        Args:
+            device_name: Name of the reconnected device
+            status: Status dictionary with device info
+        """
+        with self._device_lock:
+            self._disconnected_devices.discard(device_name)
+            
+            # Move from missing to available
+            if device_name in self.missing_devices:
+                self.missing_devices.remove(device_name)
+            if device_name not in self.available_devices:
+                self.available_devices.append(device_name)
+        
+        if __debug__:
+            print("DeviceManager: {} reconnected on {}".format(
+                device_name, status.get('port', 'unknown')))
+    
+    def is_device_disconnected(self, device_name):
+        """
+        Check if a device is currently marked as disconnected.
+        
+        Args:
+            device_name: Name of the device to check
+            
+        Returns:
+            bool: True if device is disconnected, False otherwise
+        """
+        with self._device_lock:
+            return device_name in self._disconnected_devices
+    
+    def get_port_monitor_status(self):
+        """
+        Get the status of all monitored devices from the port monitor.
+        
+        Returns:
+            dict: Dictionary of device statuses, or None if monitoring is disabled
+        """
+        if self._port_monitor is None:
+            return None
+        return self._port_monitor.get_all_device_statuses()
+    
+    def cleanup(self):
+        """
+        Clean up resources, including stopping port monitoring.
+        Should be called when shutting down the robot.
+        """
+        # Stop port monitoring
+        self.disable_port_monitoring()
+        
+        # Stop all motors safely
+        for device_name in list(self.available_devices):
+            device = self.get_device(device_name)
+            if device is not None and hasattr(device, 'stop'):
+                try:
+                    device.stop()
+                except Exception as e:
+                    if __debug__:
+                        report_device_error(device_name, "cleanup_stop", e, "")
+        
+        if __debug__:
+            print("DeviceManager cleanup complete")
