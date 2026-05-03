@@ -1,0 +1,41 @@
+# Limit EV3 sync to robot controller code only
+clients/
+cloud/
+docs/
+edge/
+samples/
+shared/
+
+# Ignore VCS and editor files at repo root
+.git/
+.gitignore
+.cursor/
+.vscode/
+.idea/
+.DS_Store
+
+# Ignore non-runtime files under robot/controller
+robot/controller/tests/
+robot/controller/**/tests/
+robot/controller/test_*.py
+robot/controller/*_test.py
+robot/controller/pytest.ini
+robot/controller/requirements-test.txt
+robot/controller/run_all_tests.py
+robot/controller/run_pytest.py
+robot/controller/*.md
+robot/controller/README*
+robot/controller/docs/
+robot/controller/.vscode/
+robot/controller/.pytest_cache/
+robot/controller/htmlcov/
+robot/controller/coverage.xml
+robot/controller/.coverage
+robot/controller/deploy.conf
+robot/controller/__pycache__/
+robot/controller/**/*.pyc
+robot/controller/**/*.pyo
+robot/controller/.idea/
+robot/controller/*.swp
+robot/controller/*.swo
+robot/controller/Thumbs.db
