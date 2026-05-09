@@ -164,6 +164,9 @@ class PortMonitor:
         """
         Perform a health check on a device to determine if it's still connected.
         
+        If the device is None (e.g., after disconnect), this method will attempt
+        to reinitialize it using the stored device_type and port from the registry.
+        
         Args:
             device_name: Name of the device to check
             
@@ -173,7 +176,8 @@ class PortMonitor:
         device = self.device_manager.get_device(device_name)
         
         if device is None:
-            return False
+            # Device is None - try to reinitialize it using stored registry info
+            return self._try_reinitialize_device(device_name)
         
         try:
             # Try to read a property from the device
@@ -205,6 +209,46 @@ class PortMonitor:
         except Exception as e:
             if __debug__:
                 print("PortMonitor: Health check failed for {}: {}".format(device_name, e))
+            return False
+    
+    def _try_reinitialize_device(self, device_name):
+        """
+        Attempt to reinitialize a device that is currently None.
+        
+        This is used to detect reconnection of a device that was previously
+        disconnected (and had its reference set to None).
+        
+        Args:
+            device_name: Name of the device to reinitialize
+            
+        Returns:
+            bool: True if device was successfully reinitialized, False otherwise
+        """
+        with self._lock:
+            if device_name not in self._device_registry:
+                return False
+            
+            registry_info = self._device_registry[device_name]
+            device_type = registry_info['device_type']
+            port = registry_info['port']
+        
+        try:
+            # Try to create a new device instance
+            new_device = device_type(port)
+            
+            # If successful, update the device manager
+            self.device_manager.devices[device_name] = new_device
+            
+            if __debug__:
+                print("PortMonitor: Successfully reinitialized {} on {}".format(
+                    device_name, port))
+            
+            return True
+            
+        except Exception as e:
+            if __debug__:
+                # Only log occasionally to avoid spam during reconnect attempts
+                pass
             return False
     
     def _handle_disconnect(self, device_name):

@@ -549,9 +549,13 @@ class DeviceManager:
         
         self._port_monitor = PortMonitor(self, check_interval)
         
-        # Register existing devices with the port monitor
+        # Register ALL known devices with the port monitor (both available and missing)
+        # This allows detection of devices that were not connected at boot
         with self._device_lock:
-            for device_name in self.available_devices:
+            # Combine available and missing devices
+            all_known_devices = set(self.available_devices) | set(self.missing_devices)
+            
+            for device_name in all_known_devices:
                 if device_name in self.device_types and device_name in self._raw_ports:
                     device_type = self.device_types[device_name]
                     port = self._raw_ports[device_name]  # Use actual port object
