@@ -1,4 +1,4 @@
-.PHONY: help setup web deploy-edge deploy-cloud test
+.PHONY: help setup web deploy-edge deploy-cloud deploy-bigquery test
 
 help:
 	@echo "Available commands:"
@@ -6,6 +6,7 @@ help:
 	@echo "  make setup          - Install all dependencies"
 	@echo "  make deploy-edge    - Deploy to Raspberry Pi"
 	@echo "  make deploy-cloud   - Deploy GCP Cloud Functions"
+	@echo "  make deploy-bigquery - Deploy BigQuery telemetry infrastructure"
 	@echo "  make test           - Run all tests"
 
 web:
@@ -19,6 +20,9 @@ setup:
 
 deploy-cloud:
 	cd cloud/functions && gcloud functions deploy
+
+deploy-bigquery:
+	cd cloud/bigquery && ./deploy.sh
 
 deploy-edge:
 	rsync -av --exclude='__pycache__' --exclude='*.pyc' \
