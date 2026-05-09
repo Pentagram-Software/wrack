@@ -22,6 +22,7 @@ from deploy_ev3 import (
     get_files_to_deploy,
     prepare_deployment_package,
     create_launcher_script,
+    verify_deployment,
     EXCLUDE_PATTERNS,
 )
 
@@ -284,6 +285,187 @@ class TestExcludePatterns(unittest.TestCase):
         self.assertIn("tests/", patterns_str)
         self.assertIn("__pycache__", patterns_str)
         self.assertIn(".venv", patterns_str)
+
+
+class TestVerifyDeployment(unittest.TestCase):
+    """Tests for the verify_deployment function."""
+    
+    @patch('deploy_ev3.subprocess.run')
+    def test_verify_success_when_files_exist(self, mock_run):
+        """Test that verification succeeds when required files are found."""
+        mock_result = MagicMock()
+        mock_result.stdout = "-rw-r--r-- 1 robot robot 1234 main.py\n-rwxr-xr-x 1 robot robot 567 run.sh\nVERIFY_OK"
+        mock_run.return_value = mock_result
+        
+        result = verify_deployment("192.168.1.100")
+        
+        self.assertTrue(result)
+        mock_run.assert_called_once()
+    
+    @patch('deploy_ev3.subprocess.run')
+    def test_verify_fails_when_files_missing(self, mock_run):
+        """Test that verification fails when required files are not found."""
+        mock_result = MagicMock()
+        mock_result.stdout = ""
+        mock_run.return_value = mock_result
+        
+        result = verify_deployment("192.168.1.100")
+        
+        self.assertFalse(result)
+    
+    @patch('deploy_ev3.subprocess.run')
+    def test_verify_fails_on_timeout(self, mock_run):
+        """Test that verification fails on SSH timeout."""
+        import subprocess
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="ssh", timeout=30)
+        
+        result = verify_deployment("192.168.1.100")
+        
+        self.assertFalse(result)
+    
+    @patch('deploy_ev3.subprocess.run')
+    def test_verify_fails_on_ssh_error(self, mock_run):
+        """Test that verification fails on SSH connection error."""
+        mock_run.side_effect = Exception("Connection refused")
+        
+        result = verify_deployment("192.168.1.100")
+        
+        self.assertFalse(result)
+    
+    @patch('deploy_ev3.subprocess.run')
+    def test_verify_uses_custom_parameters(self, mock_run):
+        """Test that verification uses custom SSH parameters."""
+        mock_result = MagicMock()
+        mock_result.stdout = "VERIFY_OK"
+        mock_run.return_value = mock_result
+        
+        verify_deployment(
+            "192.168.1.100",
+            user="custom_user",
+            remote_path="/custom/path",
+            port=2222
+        )
+        
+        call_args = mock_run.call_args[0][0]
+        self.assertIn("-p", call_args)
+        self.assertIn("2222", call_args)
+        self.assertIn("custom_user@192.168.1.100", call_args)
+        # The ls command with remote path is in the last element (shell command string)
+        self.assertIn("/custom/path/main.py", call_args[-1])
+
+
+class TestMainFunction(unittest.TestCase):
+    """Tests for the main() function exit behavior."""
+    
+    def setUp(self):
+        """Create a temporary source directory for testing."""
+        self.source_dir = tempfile.mkdtemp()
+        
+        os.makedirs(os.path.join(self.source_dir, "ev3_devices"), exist_ok=True)
+        
+        files = [
+            "main.py",
+            "ev3_devices/__init__.py",
+        ]
+        for f in files:
+            filepath = os.path.join(self.source_dir, f)
+            with open(filepath, "w") as fp:
+                fp.write("# test file")
+    
+    def tearDown(self):
+        """Clean up temporary directories."""
+        shutil.rmtree(self.source_dir)
+    
+    @patch('deploy_ev3.verify_deployment')
+    @patch('deploy_ev3.deploy_to_ev3')
+    def test_exits_with_error_when_verification_fails(self, mock_deploy, mock_verify):
+        """Test that main() exits with code 1 when verification fails."""
+        mock_deploy.return_value = True
+        mock_verify.return_value = False
+        
+        import deploy_ev3
+        
+        test_args = [
+            'deploy_ev3.py',
+            '--host', '192.168.1.100',
+            '--mode', 'release',
+            '--source-dir', self.source_dir,
+        ]
+        
+        with patch.object(sys, 'argv', test_args):
+            with self.assertRaises(SystemExit) as context:
+                deploy_ev3.main()
+            
+            self.assertEqual(context.exception.code, 1)
+    
+    @patch('deploy_ev3.verify_deployment')
+    @patch('deploy_ev3.deploy_to_ev3')
+    def test_succeeds_when_verification_passes(self, mock_deploy, mock_verify):
+        """Test that main() completes without error when verification passes."""
+        mock_deploy.return_value = True
+        mock_verify.return_value = True
+        
+        import deploy_ev3
+        
+        test_args = [
+            'deploy_ev3.py',
+            '--host', '192.168.1.100',
+            '--mode', 'release',
+            '--source-dir', self.source_dir,
+        ]
+        
+        with patch.object(sys, 'argv', test_args):
+            # Should not raise SystemExit with error code
+            try:
+                deploy_ev3.main()
+            except SystemExit as e:
+                self.fail(f"main() raised SystemExit with code {e.code}, expected successful completion")
+    
+    @patch('deploy_ev3.deploy_to_ev3')
+    def test_no_verification_with_dry_run(self, mock_deploy):
+        """Test that verification is skipped in dry-run mode."""
+        mock_deploy.return_value = True
+        
+        import deploy_ev3
+        
+        test_args = [
+            'deploy_ev3.py',
+            '--host', '192.168.1.100',
+            '--mode', 'release',
+            '--source-dir', self.source_dir,
+            '--dry-run',
+        ]
+        
+        with patch.object(sys, 'argv', test_args):
+            with patch('deploy_ev3.verify_deployment') as mock_verify:
+                try:
+                    deploy_ev3.main()
+                except SystemExit:
+                    pass
+                mock_verify.assert_not_called()
+    
+    @patch('deploy_ev3.deploy_to_ev3')
+    def test_no_verification_with_no_verify_flag(self, mock_deploy):
+        """Test that verification is skipped with --no-verify flag."""
+        mock_deploy.return_value = True
+        
+        import deploy_ev3
+        
+        test_args = [
+            'deploy_ev3.py',
+            '--host', '192.168.1.100',
+            '--mode', 'release',
+            '--source-dir', self.source_dir,
+            '--no-verify',
+        ]
+        
+        with patch.object(sys, 'argv', test_args):
+            with patch('deploy_ev3.verify_deployment') as mock_verify:
+                try:
+                    deploy_ev3.main()
+                except SystemExit:
+                    pass
+                mock_verify.assert_not_called()
 
 
 if __name__ == "__main__":

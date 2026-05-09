@@ -536,7 +536,8 @@ Examples:
                 port=args.port,
                 verbose=args.verbose
             ):
-                print("Warning: Deployment verification failed", file=sys.stderr)
+                print("Error: Deployment verification failed", file=sys.stderr)
+                sys.exit(1)
         
         if args.dry_run:
             print("\nDry run complete. No files were actually deployed.")
