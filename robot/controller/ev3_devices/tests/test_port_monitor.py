@@ -343,6 +343,7 @@ class TestDeviceManagerDisconnectHandling:
         device_manager.devices["test_motor"] = motor
         device_manager.available_devices.append("test_motor")
         device_manager.device_ports["test_motor"] = str(MockPort.A)
+        device_manager._raw_ports["test_motor"] = MockPort.A
         device_manager.device_types["test_motor"] = MockMotor
         
         device_manager.enable_port_monitoring(check_interval=0.1)
@@ -375,6 +376,25 @@ class TestDeviceManagerDisconnectHandling:
         assert "test_motor" in device_manager._disconnected_devices
         assert "test_motor" not in device_manager.available_devices
         assert "test_motor" in device_manager.missing_devices
+    
+    def test_device_disconnect_clears_device_reference(self, device_manager):
+        """Test that disconnect callback sets devices[name] = None so is_device_available returns False"""
+        motor = MockMotor(MockPort.A)
+        device_manager.devices["test_motor"] = motor
+        device_manager.available_devices.append("test_motor")
+        device_manager.device_ports["test_motor"] = str(MockPort.A)
+        device_manager.device_types["test_motor"] = MockMotor
+        
+        # Initially the device should be available
+        assert device_manager.is_device_available("test_motor") == True
+        
+        # Simulate disconnect callback
+        status = {'port': str(MockPort.A)}
+        device_manager._on_device_disconnect("test_motor", status)
+        
+        # After disconnect, is_device_available should return False
+        assert device_manager.is_device_available("test_motor") == False
+        assert device_manager.devices["test_motor"] is None
     
     def test_device_reconnect_callback(self, device_manager):
         """Test that reconnect callback updates device manager state"""
@@ -410,6 +430,7 @@ class TestDeviceManagerDisconnectHandling:
         device_manager.devices["test_motor"] = motor
         device_manager.available_devices.append("test_motor")
         device_manager.device_ports["test_motor"] = str(MockPort.A)
+        device_manager._raw_ports["test_motor"] = MockPort.A
         device_manager.device_types["test_motor"] = MockMotor
         
         device_manager.enable_port_monitoring(check_interval=0.1)
@@ -417,6 +438,35 @@ class TestDeviceManagerDisconnectHandling:
         status = device_manager.get_port_monitor_status()
         assert status is not None
         assert "test_motor" in status
+        
+        device_manager.cleanup()
+    
+    def test_try_init_device_stores_raw_port(self, device_manager):
+        """Test that try_init_device stores the actual port object in _raw_ports"""
+        # try_init_device should store both the string representation and raw port
+        device_manager.try_init_device(MockMotor, MockPort.B, "test_motor")
+        
+        # Verify both are stored
+        assert "test_motor" in device_manager.device_ports
+        assert "test_motor" in device_manager._raw_ports
+        
+        # device_ports should have string, _raw_ports should have actual port object
+        assert device_manager.device_ports["test_motor"] == str(MockPort.B)
+        assert device_manager._raw_ports["test_motor"] == MockPort.B
+    
+    def test_enable_port_monitoring_uses_raw_ports(self, device_manager):
+        """Test that enable_port_monitoring uses actual port objects from _raw_ports"""
+        from ev3_devices.port_monitor import PortMonitor
+        
+        # Use try_init_device which populates _raw_ports correctly
+        device_manager.try_init_device(MockMotor, MockPort.A, "test_motor")
+        
+        device_manager.enable_port_monitoring(check_interval=0.1)
+        
+        # Verify the port monitor received the actual port object
+        status = device_manager._port_monitor.get_device_status("test_motor")
+        assert status is not None
+        assert status['port'] == MockPort.A  # Should be actual port, not string
         
         device_manager.cleanup()
 
@@ -457,6 +507,7 @@ class TestIntegration:
         device_manager.devices["sim_motor"] = motor
         device_manager.available_devices.append("sim_motor")
         device_manager.device_ports["sim_motor"] = str(MockPort.A)
+        device_manager._raw_ports["sim_motor"] = MockPort.A
         device_manager.device_types["sim_motor"] = SimulatedMotor
         
         # Enable port monitoring with fast check interval

@@ -15,8 +15,9 @@ class DeviceManager:
         self.devices = {}
         self.available_devices = []
         self.missing_devices = []
-        self.device_ports = {}  # Store port information for each device
+        self.device_ports = {}  # Store port information (string) for each device
         self.device_types = {}  # Store device type classes for reconnection
+        self._raw_ports = {}  # Store actual port objects for reconnection
         self.ev3_brick = ev3_brick  # Store reference to EV3Brick for battery monitoring
         
         # Port monitoring for disconnect/reconnect handling
@@ -36,7 +37,8 @@ class DeviceManager:
             with self._device_lock:
                 self.devices[device_name] = device
                 self.available_devices.append(device_name)
-                self.device_ports[device_name] = str(port)  # Store port info
+                self.device_ports[device_name] = str(port)  # Store port info (string)
+                self._raw_ports[device_name] = port  # Store actual port object for reconnection
                 self.device_types[device_name] = device_type  # Store type for reconnection
                 
                 # Remove from disconnected set if it was there
@@ -54,6 +56,7 @@ class DeviceManager:
                 self.devices[device_name] = None
                 self.missing_devices.append(device_name)
                 self.device_ports[device_name] = str(port)  # Store port even if failed
+                self._raw_ports[device_name] = port  # Store actual port object for reconnection
                 self.device_types[device_name] = device_type  # Store type for reconnection
             if __debug__:
                 report_device_error(device_name, "initialization", e, port)
@@ -549,12 +552,10 @@ class DeviceManager:
         # Register existing devices with the port monitor
         with self._device_lock:
             for device_name in self.available_devices:
-                if device_name in self.device_types and device_name in self.device_ports:
+                if device_name in self.device_types and device_name in self._raw_ports:
                     device_type = self.device_types[device_name]
-                    port_str = self.device_ports[device_name]
-                    # We need the actual port object, not the string
-                    # For now, store the string - the port monitor will handle it
-                    self._port_monitor.register_device(device_name, device_type, port_str)
+                    port = self._raw_ports[device_name]  # Use actual port object
+                    self._port_monitor.register_device(device_name, device_type, port)
         
         # Set up callbacks for disconnect/reconnect events
         self._port_monitor.on_disconnect(self._on_device_disconnect)
@@ -585,6 +586,10 @@ class DeviceManager:
         """
         with self._device_lock:
             self._disconnected_devices.add(device_name)
+            
+            # Mark device as unavailable in the devices map
+            # This ensures is_device_available() returns False
+            self.devices[device_name] = None
             
             # Move from available to missing
             if device_name in self.available_devices:
