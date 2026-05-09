@@ -1,0 +1,38 @@
+name: Deploy Cloud Functions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cloud/functions/**'
+      - '.github/workflows/deploy-cloud-functions.yml'
+
+jobs:
+  deploy:
+    name: Deploy to GCP
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Deploy controlRobot Cloud Function
+        run: |
+          gcloud functions deploy controlRobot \
+            --runtime nodejs20 \
+            --trigger-http \
+            --allow-unauthenticated \
+            --region europe-central2 \
+            --source ./cloud/functions \
+            --entry-point controlRobot \
+            --project ${{ secrets.GCP_PROJECT_ID }} \
+            --set-env-vars ROBOT_HOST=${{ secrets.ROBOT_HOST }},ROBOT_PORT=${{ secrets.ROBOT_PORT }},API_KEY=${{ secrets.GCP_API_KEY }}
