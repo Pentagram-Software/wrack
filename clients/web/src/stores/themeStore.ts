@@ -14,6 +14,14 @@ function resolveFromSystem(systemPrefersDark: boolean): 'light' | 'dark' {
   return systemPrefersDark ? 'dark' : 'light';
 }
 
+function computeResolved(mode: ThemeMode): 'light' | 'dark' {
+  if (mode === 'light' || mode === 'dark') return mode;
+  if (typeof window !== 'undefined') {
+    return resolveFromSystem(window.matchMedia('(prefers-color-scheme: dark)').matches);
+  }
+  return 'dark';
+}
+
 export const useThemeStore = create<ThemeState>()(
   persist<ThemeState>(
     (set) => ({
@@ -21,15 +29,7 @@ export const useThemeStore = create<ThemeState>()(
       resolvedMode: 'dark' as 'light' | 'dark',
 
       setMode: (mode: ThemeMode) =>
-        set(() => {
-          const systemPrefersDark =
-            typeof window !== 'undefined'
-              ? window.matchMedia('(prefers-color-scheme: dark)').matches
-              : true;
-          const resolvedMode =
-            mode === 'system' ? resolveFromSystem(systemPrefersDark) : mode;
-          return { mode, resolvedMode };
-        }),
+        set(() => ({ mode, resolvedMode: computeResolved(mode) })),
 
       _resolveMode: (systemPrefersDark: boolean) =>
         set((state: ThemeState) => {
@@ -40,6 +40,11 @@ export const useThemeStore = create<ThemeState>()(
     {
       name: 'wrack-theme',
       partialize: (state: ThemeState) => ({ mode: state.mode }) as ThemeState,
+      // After rehydrating mode from localStorage, recompute resolvedMode correctly
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        state.resolvedMode = computeResolved(state.mode);
+      },
     },
   ),
 );

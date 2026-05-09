@@ -1,7 +1,7 @@
 export const typography = {
   fontFamily: {
-    base: '"Roboto", "Helvetica", "Arial", sans-serif',
-    mono: '"Roboto Mono", "Courier New", monospace',
+    base: 'var(--font-bruno-ace), "Helvetica", "Arial", sans-serif',
+    mono: 'var(--font-geist-mono), "Courier New", monospace',
   },
 
   // MD3 type scale — maps to MUI variant names
