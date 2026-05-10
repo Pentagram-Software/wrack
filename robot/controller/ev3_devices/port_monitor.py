@@ -126,6 +126,9 @@ class PortMonitor:
         
         Args:
             device_name: Name of the device to check
+            
+        Note: Callbacks are called outside of _lock to prevent lock-order
+        inversion with DeviceManager._device_lock.
         """
         with self._lock:
             if device_name not in self._device_registry:
@@ -138,6 +141,10 @@ class PortMonitor:
         # Perform health check outside the lock to avoid blocking
         is_healthy = self._perform_health_check(device_name)
         
+        # Track what action to take (to call callbacks outside lock)
+        action = None  # None, 'reconnect', or 'disconnect'
+        callback_status = None
+        
         with self._lock:
             current_status = self._device_status.get(device_name, {})
             was_connected = current_status.get('connected', False)
@@ -147,8 +154,10 @@ class PortMonitor:
                 self._device_status[device_name]['consecutive_failures'] = 0
                 
                 if not was_connected:
-                    # Device reconnected
-                    self._handle_reconnect(device_name, registry_info)
+                    # Device reconnected - handle inside lock, callbacks outside
+                    action = 'reconnect'
+                    self._device_status[device_name]['connected'] = True
+                    callback_status = self._device_status[device_name].copy()
             else:
                 # Device not responding
                 failures = self._device_status[device_name].get('consecutive_failures', 0) + 1
@@ -156,15 +165,25 @@ class PortMonitor:
                 
                 # Only mark as disconnected after 2 consecutive failures to avoid false positives
                 if was_connected and failures >= 2:
-                    self._handle_disconnect(device_name)
+                    action = 'disconnect'
+                    self._device_status[device_name]['connected'] = False
+                    callback_status = self._device_status[device_name].copy()
             
             self._device_status[device_name]['last_check'] = time.time()
+        
+        # Call callbacks OUTSIDE of _lock to prevent lock-order inversion
+        # with DeviceManager._device_lock
+        if action == 'reconnect':
+            self._handle_reconnect_unlocked(device_name, registry_info, callback_status)
+        elif action == 'disconnect':
+            self._handle_disconnect_unlocked(device_name, callback_status)
     
     def _perform_health_check(self, device_name):
         """
         Perform a health check on a device to determine if it's still connected.
         
-        If the device is None (e.g., after disconnect), this method will attempt
+        If the device is None (e.g., failed init at boot), OR if the device was
+        already marked as disconnected (stale reference), this method will attempt
         to reinitialize it using the stored device_type and port from the registry.
         
         Args:
@@ -178,6 +197,12 @@ class PortMonitor:
         if device is None:
             # Device is None - try to reinitialize it using stored registry info
             return self._try_reinitialize_device(device_name)
+        
+        # Check if device was already marked as disconnected
+        # (stale reference that won't work but we need to try reinit)
+        with self._lock:
+            current_status = self._device_status.get(device_name, {})
+            was_disconnected = not current_status.get('connected', True)
         
         try:
             # Try to read a property from the device
@@ -209,6 +234,13 @@ class PortMonitor:
         except Exception as e:
             if __debug__:
                 print("PortMonitor: Health check failed for {}: {}".format(device_name, e))
+            
+            # Only try to reinitialize if the device was already disconnected
+            # This allows proper disconnect detection (need consecutive failures first)
+            # while still enabling reconnection for stale references
+            if was_disconnected:
+                return self._try_reinitialize_device(device_name)
+            
             return False
     
     def _try_reinitialize_device(self, device_name):
@@ -253,7 +285,10 @@ class PortMonitor:
     
     def _handle_disconnect(self, device_name):
         """
-        Handle a device disconnection event.
+        Handle a device disconnection event (legacy method, state update only).
+        
+        Note: This method is called with _lock held. Use _handle_disconnect_unlocked
+        for the new code path that calls callbacks outside the lock.
         
         Args:
             device_name: Name of the disconnected device
@@ -264,7 +299,7 @@ class PortMonitor:
             port = self._device_status[device_name].get('port', 'unknown')
             print("PortMonitor: Device {} disconnected from port {}".format(device_name, port))
         
-        # Notify callbacks
+        # Notify callbacks (WARNING: called with lock held - may cause deadlock)
         for callback in self._on_disconnect_callbacks:
             try:
                 callback(device_name, self._device_status[device_name])
@@ -272,9 +307,35 @@ class PortMonitor:
                 if __debug__:
                     report_exception("disconnect_callback", e)
     
+    def _handle_disconnect_unlocked(self, device_name, status_copy):
+        """
+        Handle a device disconnection event with callbacks called outside of _lock.
+        
+        This is the preferred method to avoid lock-order inversion with
+        DeviceManager._device_lock.
+        
+        Args:
+            device_name: Name of the disconnected device
+            status_copy: Copy of the device status (captured while holding _lock)
+        """
+        if __debug__:
+            port = status_copy.get('port', 'unknown')
+            print("PortMonitor: Device {} disconnected from port {}".format(device_name, port))
+        
+        # Notify callbacks OUTSIDE of _lock
+        for callback in self._on_disconnect_callbacks:
+            try:
+                callback(device_name, status_copy)
+            except Exception as e:
+                if __debug__:
+                    report_exception("disconnect_callback", e)
+    
     def _handle_reconnect(self, device_name, registry_info):
         """
-        Handle a device reconnection event.
+        Handle a device reconnection event (legacy method).
+        
+        Note: This method is called with _lock held. Use _handle_reconnect_unlocked
+        for the new code path that calls callbacks outside the lock.
         
         Args:
             device_name: Name of the reconnected device
@@ -325,10 +386,77 @@ class PortMonitor:
         if __debug__:
             print("PortMonitor: Device {} reconnected on port {}".format(device_name, port))
         
-        # Notify callbacks
+        # Notify callbacks (WARNING: called with lock held - may cause deadlock)
         for callback in self._on_reconnect_callbacks:
             try:
                 callback(device_name, self._device_status[device_name])
+            except Exception as e:
+                if __debug__:
+                    report_exception("reconnect_callback", e)
+    
+    def _handle_reconnect_unlocked(self, device_name, registry_info, status_copy):
+        """
+        Handle a device reconnection event with callbacks called outside of _lock.
+        
+        This is the preferred method to avoid lock-order inversion with
+        DeviceManager._device_lock.
+        
+        Args:
+            device_name: Name of the reconnected device
+            registry_info: Registration info containing device_type and port
+            status_copy: Copy of the device status (captured while holding _lock)
+        """
+        device_type = registry_info['device_type']
+        port = registry_info['port']
+        
+        # Check if the current device in device_manager is already healthy
+        # (it may have been replaced externally, e.g., by hot-plug detection)
+        current_device = self.device_manager.get_device(device_name)
+        device_is_healthy = False
+        
+        if current_device is not None:
+            try:
+                # Quick health check on current device
+                if hasattr(current_device, 'angle'):
+                    current_device.angle()
+                    device_is_healthy = True
+                elif hasattr(current_device, 'distance'):
+                    current_device.distance()
+                    device_is_healthy = True
+                elif hasattr(current_device, 'speed'):
+                    current_device.speed()
+                    device_is_healthy = True
+            except Exception:
+                device_is_healthy = False
+        
+        if not device_is_healthy:
+            # Try to reinitialize the device
+            try:
+                new_device = device_type(port)
+                self.device_manager.devices[device_name] = new_device
+            except Exception as e:
+                if __debug__:
+                    print("PortMonitor: Failed to reinitialize {} on {}: {}".format(
+                        device_name, port, e))
+                # Revert the connected status since reinit failed
+                with self._lock:
+                    self._device_status[device_name]['connected'] = False
+                return
+        
+        # Update available/missing device lists (safe to do outside lock since
+        # DeviceManager manages these lists)
+        if device_name in self.device_manager.missing_devices:
+            self.device_manager.missing_devices.remove(device_name)
+        if device_name not in self.device_manager.available_devices:
+            self.device_manager.available_devices.append(device_name)
+        
+        if __debug__:
+            print("PortMonitor: Device {} reconnected on port {}".format(device_name, port))
+        
+        # Notify callbacks OUTSIDE of _lock
+        for callback in self._on_reconnect_callbacks:
+            try:
+                callback(device_name, status_copy)
             except Exception as e:
                 if __debug__:
                     report_exception("reconnect_callback", e)

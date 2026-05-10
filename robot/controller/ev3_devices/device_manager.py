@@ -4,6 +4,54 @@ import time
 import threading
 
 
+# Exceptions that indicate a device has disconnected
+# These are typically I/O-related errors that occur when the device is physically
+# unplugged or communication with the device fails
+CONNECTIVITY_EXCEPTIONS = (
+    OSError,
+    IOError,
+    ConnectionError,
+    TimeoutError,
+)
+
+
+def _is_connectivity_error(exception):
+    """
+    Determine if an exception is a connectivity-related error.
+    
+    Args:
+        exception: The exception to check
+        
+    Returns:
+        bool: True if the exception indicates a device connectivity problem,
+              False if it's likely a programming error or other non-connectivity issue
+    """
+    # Direct match against known connectivity exception types
+    if isinstance(exception, CONNECTIVITY_EXCEPTIONS):
+        return True
+    
+    # Check for EV3-specific connection errors (may have custom exception types)
+    # These are identified by common substrings in the exception message
+    exception_msg = str(exception).lower()
+    connectivity_keywords = [
+        'disconnected',
+        'connection',
+        'no response',
+        'timed out',
+        'device not found',
+        'port not available',
+        'communication',
+        'i/o error',
+        'errno',
+    ]
+    
+    for keyword in connectivity_keywords:
+        if keyword in exception_msg:
+            return True
+    
+    return False
+
+
 class DeviceManager:
     """
     Manages device initialization and provides safe access to devices.
@@ -31,9 +79,14 @@ class DeviceManager:
         """
         Try to initialize a device on a specific port.
         Returns the device if successful, None if failed.
+        
+        Note: The port monitor registration is done outside of _device_lock
+        to prevent lock-order inversion with PortMonitor._lock.
         """
         try:
             device = device_type(port)
+            
+            # Update device manager state under lock
             with self._device_lock:
                 self.devices[device_name] = device
                 self.available_devices.append(device_name)
@@ -43,10 +96,14 @@ class DeviceManager:
                 
                 # Remove from disconnected set if it was there
                 self._disconnected_devices.discard(device_name)
+                
+                # Capture port_monitor reference while holding the lock
+                port_monitor = self._port_monitor
             
-            # Register with port monitor if available
-            if self._port_monitor:
-                self._port_monitor.register_device(device_name, device_type, port)
+            # Register with port monitor OUTSIDE of _device_lock to avoid lock-order inversion
+            # (PortMonitor callbacks acquire _device_lock while holding _lock)
+            if port_monitor:
+                port_monitor.register_device(device_name, device_type, port)
             
             if __debug__:
                 print("✓ {} initialized on {}".format(device_name, port))
@@ -85,8 +142,19 @@ class DeviceManager:
     
     def is_device_available(self, device_name):
         """
-        Check if a device is available.
+        Check if a device is available and not disconnected.
+        
+        A device is considered unavailable if:
+        - It doesn't exist in the devices dictionary
+        - It exists but is None (failed to initialize)
+        - It's in the _disconnected_devices set (detected disconnect)
         """
+        with self._device_lock:
+            # Device is unavailable if it's in the disconnected set
+            if device_name in self._disconnected_devices:
+                return False
+        
+        # Also check if device exists and is not None
         return self.devices.get(device_name) is not None
     
     def are_devices_available(self, device_names):
@@ -99,7 +167,10 @@ class DeviceManager:
     def safe_device_call(self, device_name, method_name, *args, **kwargs):
         """
         Safely call a method on a device if it exists.
-        Handles device disconnection gracefully by catching exceptions.
+        Handles device disconnection gracefully by catching connectivity exceptions.
+        
+        Non-connectivity exceptions (TypeError, ValueError, etc.) are re-raised
+        to allow debugging of programming errors.
         """
         # Check if device is marked as disconnected
         with self._device_lock:
@@ -115,29 +186,48 @@ class DeviceManager:
                 try:
                     return method(*args, **kwargs)
                 except Exception as e:
-                    # Device may have disconnected - mark it and ignore the command
-                    self._handle_device_error(device_name, method_name, e)
-                    return None
+                    # Only mark as disconnected for connectivity-related exceptions
+                    if _is_connectivity_error(e):
+                        self._handle_device_error(device_name, method_name, e)
+                        return None
+                    else:
+                        # Re-raise non-connectivity exceptions (programming errors, etc.)
+                        # so they can be debugged properly
+                        if __debug__:
+                            report_device_error(device_name, method_name, e, "Non-connectivity error")
+                        raise
         return None
     
     def _handle_device_error(self, device_name, operation, exception):
         """
-        Handle a device error, potentially marking the device as disconnected.
+        Handle a connectivity-related device error by marking the device as disconnected.
+        
+        This method should only be called for connectivity-related exceptions
+        (OSError, IOError, etc.). Non-connectivity exceptions should be handled
+        differently to avoid permanently disabling devices due to programming errors.
         
         Args:
             device_name: Name of the device that errored
             operation: Name of the operation that failed
-            exception: The exception that was raised
+            exception: The exception that was raised (should be a connectivity error)
         """
+        # Double-check this is actually a connectivity error
+        # This serves as a safety net in case this method is called incorrectly
+        if not _is_connectivity_error(exception):
+            if __debug__:
+                report_device_error(device_name, operation, exception, 
+                    "Non-connectivity error - not marking as disconnected")
+            return
+        
         if __debug__:
-            report_device_error(device_name, operation, exception, "Device may be disconnected")
+            report_device_error(device_name, operation, exception, "Device disconnected")
         
         # Mark device as disconnected to prevent further command attempts
         with self._device_lock:
             self._disconnected_devices.add(device_name)
         
         if __debug__:
-            print("Device {} marked as disconnected after error in {}".format(device_name, operation))
+            print("Device {} marked as disconnected after connectivity error in {}".format(device_name, operation))
     
     def safe_device_operation(self, device_name, operation_name, operation_func, *args, **kwargs):
         """
@@ -538,6 +628,9 @@ class DeviceManager:
         
         Args:
             check_interval: Time in seconds between connectivity checks (default: 1.0)
+            
+        Note: Device registration is done outside of _device_lock to prevent
+        lock-order inversion with PortMonitor._lock.
         """
         # Import here to avoid circular imports
         from .port_monitor import PortMonitor
@@ -549,8 +642,9 @@ class DeviceManager:
         
         self._port_monitor = PortMonitor(self, check_interval)
         
-        # Register ALL known devices with the port monitor (both available and missing)
-        # This allows detection of devices that were not connected at boot
+        # Collect device info under lock, but register outside of lock
+        # to prevent lock-order inversion (PortMonitor callbacks acquire _device_lock)
+        devices_to_register = []
         with self._device_lock:
             # Combine available and missing devices
             all_known_devices = set(self.available_devices) | set(self.missing_devices)
@@ -559,7 +653,11 @@ class DeviceManager:
                 if device_name in self.device_types and device_name in self._raw_ports:
                     device_type = self.device_types[device_name]
                     port = self._raw_ports[device_name]  # Use actual port object
-                    self._port_monitor.register_device(device_name, device_type, port)
+                    devices_to_register.append((device_name, device_type, port))
+        
+        # Register devices OUTSIDE of _device_lock
+        for device_name, device_type, port in devices_to_register:
+            self._port_monitor.register_device(device_name, device_type, port)
         
         # Set up callbacks for disconnect/reconnect events
         self._port_monitor.on_disconnect(self._on_device_disconnect)
@@ -584,6 +682,14 @@ class DeviceManager:
         """
         Callback when a device disconnects.
         
+        Note: We intentionally do NOT set devices[device_name] = None here.
+        Keeping the stale device reference allows the PortMonitor to:
+        1. Use the reference for health checks (which will fail and detect disconnection)
+        2. Attempt automatic reconnection by creating a new device instance
+        
+        The is_device_available() method checks _disconnected_devices to properly
+        report unavailability, decoupling availability from the devices map value.
+        
         Args:
             device_name: Name of the disconnected device
             status: Status dictionary with device info
@@ -591,9 +697,9 @@ class DeviceManager:
         with self._device_lock:
             self._disconnected_devices.add(device_name)
             
-            # Mark device as unavailable in the devices map
-            # This ensures is_device_available() returns False
-            self.devices[device_name] = None
+            # Note: We do NOT set devices[device_name] = None here.
+            # The stale reference is kept for reconnection detection.
+            # is_device_available() checks _disconnected_devices for availability.
             
             # Move from available to missing
             if device_name in self.available_devices:

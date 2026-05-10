@@ -305,23 +305,41 @@ class TestDeviceManagerDisconnectHandling:
         from ev3_devices import DeviceManager
         return DeviceManager()
     
-    def test_safe_device_call_handles_exceptions(self, device_manager):
-        """Test that safe_device_call catches exceptions from disconnected devices"""
-        # Create a motor that raises exceptions
+    def test_safe_device_call_handles_connectivity_exceptions(self, device_manager):
+        """Test that safe_device_call catches connectivity exceptions from disconnected devices"""
+        # Create a motor that raises a connectivity exception (OSError)
         class FailingMotor:
             def run(self, speed):
-                raise Exception("Device disconnected")
+                raise OSError("Device disconnected - I/O error")
         
         failing_motor = FailingMotor()
         device_manager.devices["failing_motor"] = failing_motor
         device_manager.available_devices.append("failing_motor")
         
-        # Should not raise, should return None
+        # Should not raise for connectivity errors, should return None
         result = device_manager.safe_device_call("failing_motor", "run", 500)
         assert result is None
         
         # Device should be marked as disconnected
         assert device_manager.is_device_disconnected("failing_motor") == True
+    
+    def test_safe_device_call_reraises_non_connectivity_exceptions(self, device_manager):
+        """Test that safe_device_call re-raises non-connectivity exceptions (e.g., TypeError, ValueError)"""
+        # Create a motor that raises a programming error
+        class BuggyMotor:
+            def run(self, speed):
+                raise TypeError("Invalid argument type")
+        
+        buggy_motor = BuggyMotor()
+        device_manager.devices["buggy_motor"] = buggy_motor
+        device_manager.available_devices.append("buggy_motor")
+        
+        # Should re-raise non-connectivity exceptions
+        with pytest.raises(TypeError):
+            device_manager.safe_device_call("buggy_motor", "run", "not_a_number")
+        
+        # Device should NOT be marked as disconnected
+        assert device_manager.is_device_disconnected("buggy_motor") == False
     
     def test_safe_device_call_ignores_disconnected_devices(self, device_manager):
         """Test that safe_device_call ignores calls to disconnected devices"""
@@ -377,8 +395,12 @@ class TestDeviceManagerDisconnectHandling:
         assert "test_motor" not in device_manager.available_devices
         assert "test_motor" in device_manager.missing_devices
     
-    def test_device_disconnect_clears_device_reference(self, device_manager):
-        """Test that disconnect callback sets devices[name] = None so is_device_available returns False"""
+    def test_device_disconnect_preserves_device_reference(self, device_manager):
+        """Test that disconnect callback does NOT clear the device reference, but marks it as disconnected
+        
+        The device reference is preserved to allow automatic reconnection detection.
+        is_device_available() checks _disconnected_devices instead of devices[name] being None.
+        """
         motor = MockMotor(MockPort.A)
         device_manager.devices["test_motor"] = motor
         device_manager.available_devices.append("test_motor")
@@ -392,9 +414,15 @@ class TestDeviceManagerDisconnectHandling:
         status = {'port': str(MockPort.A)}
         device_manager._on_device_disconnect("test_motor", status)
         
-        # After disconnect, is_device_available should return False
+        # After disconnect, is_device_available should return False (via _disconnected_devices)
         assert device_manager.is_device_available("test_motor") == False
-        assert device_manager.devices["test_motor"] is None
+        
+        # But the device reference should be PRESERVED (not None) for auto-reconnect
+        assert device_manager.devices["test_motor"] is not None
+        assert device_manager.devices["test_motor"] == motor
+        
+        # Device should be in _disconnected_devices
+        assert "test_motor" in device_manager._disconnected_devices
     
     def test_device_reconnect_callback(self, device_manager):
         """Test that reconnect callback updates device manager state"""
@@ -487,12 +515,17 @@ class TestPortMonitorReinitialization:
         return PortMonitor(device_manager, check_interval=0.1)
     
     def test_health_check_tries_reinitialize_none_device(self, port_monitor, device_manager):
-        """Test that _perform_health_check attempts to reinitialize when device is None"""
+        """Test that _perform_health_check attempts to reinitialize when device is None
+        
+        This tests the case where a device was None from the start (failed to init at boot),
+        not from disconnect (since disconnect no longer sets devices to None).
+        """
         # Register a device with the port monitor
         port_monitor.register_device("test_motor", MockMotor, MockPort.A)
         
-        # Set device to None (simulating disconnect callback setting it to None)
+        # Device is None because it failed to initialize at boot (not from disconnect)
         device_manager.devices["test_motor"] = None
+        device_manager.missing_devices.append("test_motor")
         
         # Health check should try to reinitialize and succeed (MockMotor doesn't fail)
         is_healthy = port_monitor._perform_health_check("test_motor")
@@ -645,6 +678,249 @@ class TestDeviceManagerMissingDeviceRegistration:
         device_manager.cleanup()
 
 
+class TestLockOrderInversion:
+    """Tests to verify no deadlock between DeviceManager._device_lock and PortMonitor._lock"""
+    
+    @pytest.fixture
+    def device_manager(self):
+        """Create a fresh DeviceManager"""
+        from ev3_devices import DeviceManager
+        return DeviceManager()
+    
+    def test_try_init_device_does_not_hold_lock_during_register(self, device_manager):
+        """Test that try_init_device doesn't hold _device_lock while calling register_device
+        
+        This prevents lock-order inversion: if callbacks try to acquire _device_lock
+        while PortMonitor holds its _lock, and try_init_device holds _device_lock
+        while calling register_device (which acquires _lock), we get a deadlock.
+        """
+        # Enable port monitoring first
+        device_manager.enable_port_monitoring(check_interval=1.0)
+        
+        # This should not deadlock
+        device_manager.try_init_device(MockMotor, MockPort.B, "new_motor")
+        
+        # Verify the device was registered
+        assert device_manager.devices.get("new_motor") is not None
+        assert device_manager._port_monitor.get_device_status("new_motor") is not None
+        
+        device_manager.cleanup()
+    
+    def test_concurrent_device_init_and_monitoring(self, device_manager):
+        """Test that concurrent device initialization and monitoring doesn't deadlock"""
+        import threading
+        
+        # Set up some initial devices
+        motor = MockMotor(MockPort.A)
+        device_manager.devices["motor_a"] = motor
+        device_manager.available_devices.append("motor_a")
+        device_manager.device_types["motor_a"] = MockMotor
+        device_manager._raw_ports["motor_a"] = MockPort.A
+        device_manager.device_ports["motor_a"] = str(MockPort.A)
+        
+        # Enable monitoring with fast checks
+        device_manager.enable_port_monitoring(check_interval=0.05)
+        
+        errors = []
+        
+        def init_devices():
+            """Thread that initializes devices"""
+            try:
+                for i in range(10):
+                    # Create a simple mock class that can be instantiated
+                    class TestMotor:
+                        def __init__(self, port):
+                            self.port = port
+                            self._angle = 0
+                        def angle(self):
+                            return self._angle
+                        def stop(self):
+                            pass
+                    
+                    device_manager.try_init_device(TestMotor, MockPort.B, f"test_motor_{i}")
+                    time.sleep(0.01)
+            except Exception as e:
+                errors.append(e)
+        
+        # Start device initialization in a separate thread
+        init_thread = threading.Thread(target=init_devices)
+        init_thread.start()
+        
+        # Let it run concurrently with monitoring
+        time.sleep(0.3)
+        
+        # Wait for completion
+        init_thread.join(timeout=2.0)
+        
+        # Should complete without deadlock or errors
+        assert not init_thread.is_alive(), "Thread should have completed (no deadlock)"
+        assert len(errors) == 0, f"No errors expected, got: {errors}"
+        
+        device_manager.cleanup()
+
+
+class TestIsDeviceAvailableWithDisconnectedSet:
+    """Tests for is_device_available() checking _disconnected_devices"""
+    
+    @pytest.fixture
+    def device_manager(self):
+        """Create a fresh DeviceManager"""
+        from ev3_devices import DeviceManager
+        return DeviceManager()
+    
+    def test_is_device_available_returns_false_when_in_disconnected_set(self, device_manager):
+        """Test that is_device_available returns False when device is in _disconnected_devices"""
+        motor = MockMotor(MockPort.A)
+        device_manager.devices["test_motor"] = motor
+        device_manager.available_devices.append("test_motor")
+        
+        # Initially available
+        assert device_manager.is_device_available("test_motor") == True
+        
+        # Add to disconnected set
+        device_manager._disconnected_devices.add("test_motor")
+        
+        # Should be unavailable even though device reference is not None
+        assert device_manager.is_device_available("test_motor") == False
+        assert device_manager.devices["test_motor"] is not None  # Reference preserved
+    
+    def test_is_device_available_after_reconnect(self, device_manager):
+        """Test that is_device_available returns True after reconnect callback"""
+        motor = MockMotor(MockPort.A)
+        device_manager.devices["test_motor"] = motor
+        device_manager.available_devices.append("test_motor")
+        device_manager.device_types["test_motor"] = MockMotor
+        device_manager._raw_ports["test_motor"] = MockPort.A
+        device_manager.device_ports["test_motor"] = str(MockPort.A)
+        
+        # Simulate disconnect
+        device_manager._on_device_disconnect("test_motor", {'port': str(MockPort.A)})
+        assert device_manager.is_device_available("test_motor") == False
+        
+        # Simulate reconnect
+        device_manager._on_device_reconnect("test_motor", {'port': str(MockPort.A)})
+        assert device_manager.is_device_available("test_motor") == True
+
+
+class TestAutoReconnectWithPreservedReference:
+    """Tests for automatic reconnect detection with preserved device reference"""
+    
+    @pytest.fixture
+    def device_manager(self):
+        """Create a fresh DeviceManager"""
+        from ev3_devices import DeviceManager
+        return DeviceManager()
+    
+    @pytest.fixture
+    def port_monitor(self, device_manager):
+        """Create a PortMonitor instance"""
+        from ev3_devices.port_monitor import PortMonitor
+        return PortMonitor(device_manager, check_interval=0.1)
+    
+    def test_health_check_uses_preserved_reference(self, port_monitor, device_manager):
+        """Test that health check works with preserved device reference after disconnect"""
+        # Create a controllable motor
+        class ControllableMotor:
+            should_fail_health_check = False
+            
+            def __init__(self, port):
+                self.port = port
+            
+            def angle(self):
+                if ControllableMotor.should_fail_health_check:
+                    raise OSError("Device disconnected")
+                return 0
+            
+            def stop(self):
+                pass
+        
+        motor = ControllableMotor(MockPort.A)
+        device_manager.devices["ctrl_motor"] = motor
+        device_manager.available_devices.append("ctrl_motor")
+        device_manager.device_types["ctrl_motor"] = ControllableMotor
+        device_manager._raw_ports["ctrl_motor"] = MockPort.A
+        device_manager.device_ports["ctrl_motor"] = str(MockPort.A)
+        
+        port_monitor.register_device("ctrl_motor", ControllableMotor, MockPort.A)
+        
+        # Initially healthy
+        assert port_monitor._perform_health_check("ctrl_motor") == True
+        
+        # Simulate disconnect scenario - device still has reference but health check fails
+        ControllableMotor.should_fail_health_check = True
+        assert port_monitor._perform_health_check("ctrl_motor") == False
+        
+        # Simulate reconnect - health check passes again
+        ControllableMotor.should_fail_health_check = False
+        assert port_monitor._perform_health_check("ctrl_motor") == True
+    
+    def test_reconnect_detected_with_stale_reference(self, device_manager):
+        """Test that reconnect is detected even when using the stale device reference
+        
+        This tests the scenario where:
+        1. Device disconnects (reference preserved, added to _disconnected_devices)
+        2. Device health check fails
+        3. Device reconnects (health check passes)
+        4. Reconnect callback removes from _disconnected_devices
+        """
+        reconnect_callback = Mock()
+        
+        # Create a controllable motor
+        class ControllableMotor:
+            health_check_fails = False
+            
+            def __init__(self, port):
+                self.port = port
+            
+            def angle(self):
+                if ControllableMotor.health_check_fails:
+                    raise OSError("Device disconnected")
+                return 0
+            
+            def stop(self):
+                pass
+        
+        motor = ControllableMotor(MockPort.A)
+        device_manager.devices["ctrl_motor"] = motor
+        device_manager.available_devices.append("ctrl_motor")
+        device_manager.device_types["ctrl_motor"] = ControllableMotor
+        device_manager._raw_ports["ctrl_motor"] = MockPort.A
+        device_manager.device_ports["ctrl_motor"] = str(MockPort.A)
+        
+        # Enable monitoring
+        device_manager.enable_port_monitoring(check_interval=0.05)
+        device_manager._port_monitor.on_reconnect(reconnect_callback)
+        
+        # Initially connected
+        assert device_manager.is_device_available("ctrl_motor") == True
+        
+        # Simulate disconnect via callback (reference preserved)
+        device_manager._on_device_disconnect("ctrl_motor", {'port': str(MockPort.A)})
+        device_manager._port_monitor._device_status["ctrl_motor"]['connected'] = False
+        
+        # Verify device reference is preserved
+        assert device_manager.devices["ctrl_motor"] is motor
+        assert device_manager.is_device_available("ctrl_motor") == False
+        
+        # Health check should fail (simulating disconnected device)
+        ControllableMotor.health_check_fails = True
+        
+        # Wait for a health check
+        time.sleep(0.1)
+        
+        # Simulate reconnect (health check passes)
+        ControllableMotor.health_check_fails = False
+        
+        # Wait for reconnect detection
+        time.sleep(0.15)
+        
+        # Reconnect should have been detected
+        assert reconnect_callback.called
+        assert device_manager._port_monitor.is_device_connected("ctrl_motor") == True
+        
+        device_manager.cleanup()
+
+
 class TestIntegration:
     """Integration tests for the complete disconnect/reconnect flow"""
     
@@ -733,11 +1009,12 @@ class TestIntegration:
         # Cleanup
         device_manager.cleanup()
     
-    def test_full_disconnect_reconnect_with_none_device(self, device_manager):
-        """Test complete disconnect/reconnect cycle where device is set to None on disconnect
+    def test_full_disconnect_reconnect_with_preserved_reference(self, device_manager):
+        """Test complete disconnect/reconnect cycle where device reference is preserved on disconnect
         
-        This tests the fix for P1: the port monitor should successfully reinitialize
-        a device that was set to None during disconnect, enabling automatic reconnection.
+        This tests the fix for P1: the port monitor should successfully detect reconnection
+        even when the device reference is preserved (not set to None) during disconnect.
+        The is_device_available() method checks _disconnected_devices for availability.
         """
         # Track callbacks
         disconnect_callback = Mock()
@@ -745,11 +1022,9 @@ class TestIntegration:
         
         # Create a device type that can be controlled to fail/succeed
         class ControllableMotor:
-            should_fail = False  # Class-level flag to control behavior
+            health_check_fails = False  # Class-level flag to control health check behavior
             
             def __init__(self, port):
-                if ControllableMotor.should_fail:
-                    raise Exception("Device not connected")
                 self.port = port
                 self._speed = 0
                 self._angle = 0
@@ -758,13 +1033,15 @@ class TestIntegration:
                 self._speed = speed
             
             def angle(self):
+                if ControllableMotor.health_check_fails:
+                    raise OSError("Device disconnected")
                 return self._angle
             
             def stop(self):
                 self._speed = 0
         
         # Initially device is connected
-        ControllableMotor.should_fail = False
+        ControllableMotor.health_check_fails = False
         motor = ControllableMotor(MockPort.A)
         device_manager.devices["ctrl_motor"] = motor
         device_manager.available_devices.append("ctrl_motor")
@@ -785,18 +1062,18 @@ class TestIntegration:
         device_manager._on_device_disconnect("ctrl_motor", {'port': str(MockPort.A)})
         device_manager._port_monitor._device_status["ctrl_motor"]['connected'] = False
         
-        # Device should now be None and unavailable
-        assert device_manager.devices["ctrl_motor"] is None
-        assert device_manager.is_device_available("ctrl_motor") == False
+        # Device reference should be PRESERVED but marked as unavailable
+        assert device_manager.devices["ctrl_motor"] is motor  # Reference preserved
+        assert device_manager.is_device_available("ctrl_motor") == False  # But unavailable
+        assert "ctrl_motor" in device_manager._disconnected_devices
         
-        # Simulate device being plugged back in (reinitialization will succeed)
-        ControllableMotor.should_fail = False
+        # Simulate device being plugged back in (health check will pass)
+        ControllableMotor.health_check_fails = False
         
         # Wait for port monitor to detect reconnection
         time.sleep(0.15)
         
-        # Device should have been reinitialized
-        assert device_manager.devices["ctrl_motor"] is not None
+        # Device should still be connected and available
         assert device_manager._port_monitor.is_device_connected("ctrl_motor") == True
         assert reconnect_callback.called
         
