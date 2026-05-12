@@ -1,0 +1,5 @@
+---
+alwaysApply: true
+---
+
+Once changes are done - always update approproate README files and markdown files to reflect the architecture and to correctls describe all the processes of running and deploying code

@@ -14,6 +14,7 @@ class MockMotor:
         self._running = False
         self._target_angle = None
         self._target_speed = None
+        self._stalled = False
         
     def run(self, speed):
         """Mock run method"""
@@ -43,6 +44,10 @@ class MockMotor:
     def speed(self):
         """Mock speed method"""
         return self._speed
+    
+    def stalled(self):
+        """Mock stalled method"""
+        return self._stalled
 
 class MockSensor:
     """Mock EV3 Sensor for testing"""
