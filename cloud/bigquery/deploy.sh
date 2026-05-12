@@ -8,7 +8,9 @@ set -e
 PROJECT_ID="${GCP_PROJECT_ID:-wrack-control}"
 DATASET="wrack_telemetry"
 LOCATION="europe-west3"  # EU region for data residency
-PARTITION_EXPIRATION_MS=7776000000  # 90 days in milliseconds
+# bq mk --dataset --default_table_expiration expects SECONDS (not ms); see
+# https://cloud.google.com/bigquery/docs/reference/bq-cli-reference#bq_mk
+DEFAULT_TABLE_EXPIRATION_SEC=$((90 * 24 * 60 * 60)) # 90 days
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -44,7 +46,7 @@ bq mk \
   --dataset \
   --location="${LOCATION}" \
   --description="Telemetry data warehouse for Wrack robot system" \
-  --default_table_expiration="${PARTITION_EXPIRATION_MS}" \
+  --default_table_expiration="${DEFAULT_TABLE_EXPIRATION_SEC}" \
   "${PROJECT_ID}:${DATASET}" 2>/dev/null || echo "Dataset already exists, continuing..."
 
 # Create events table
