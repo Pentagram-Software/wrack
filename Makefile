@@ -28,6 +28,9 @@ setup:
 deploy-cloud:
 	cd cloud/functions && gcloud functions deploy
 
+deploy-bigquery:
+	cd cloud/bigquery && ./deploy.sh
+
 deploy-edge:
 	rsync -av --exclude='__pycache__' --exclude='*.pyc' \
 		edge/ pi@raspberrypi.local:/home/pi/robot/edge/
