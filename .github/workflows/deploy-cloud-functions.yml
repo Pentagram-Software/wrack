@@ -28,6 +28,7 @@ jobs:
       - name: Deploy controlRobot Cloud Function
         run: |
           gcloud functions deploy controlRobot \
+            --gen2 \
             --runtime nodejs20 \
             --trigger-http \
             --allow-unauthenticated \
