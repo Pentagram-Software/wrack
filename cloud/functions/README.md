@@ -415,8 +415,18 @@ node test-client.js
 ### Running Tests
 
 ```bash
+# Run unit tests (Jest)
 npm test
 ```
+
+Unit tests cover:
+- **Valid command dispatching** — forward, stop, battery, speak commands
+- **Authentication errors (401)** — missing or invalid API key
+- **Command validation (400)** — unknown commands, invalid parameters
+- **Robot connection failures (502)** — timeout, connection refused
+- **HTTP method validation (405)** — non-POST requests
+
+Tests use Jest mocks to simulate TCP socket connections, authentication, and CORS handling without requiring a live robot connection.
 
 ### Linting
 
