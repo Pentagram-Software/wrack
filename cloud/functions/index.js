@@ -105,17 +105,31 @@ function sendCommandToRobot(action, direction = null, speed = null, duration = n
 
     client.on('timeout', () => {
       client.destroy();
-      reject(new Error('Connection timeout'));
+      reject(new RobotConnectionError('Connection timeout'));
     });
 
     client.on('error', (error) => {
-      reject(new Error(`Connection error: ${error.message}`));
+      reject(new RobotConnectionError(`Connection error: ${error.message}`));
     });
 
     client.on('close', () => {
       console.log('Connection to robot closed');
     });
   });
+}
+
+class ValidationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ValidationError';
+  }
+}
+
+class RobotConnectionError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'RobotConnectionError';
+  }
 }
 
 function validateCommand(command, params) {
@@ -137,23 +151,23 @@ function validateCommand(command, params) {
   ];
 
   if (!validCommands.includes(command)) {
-    throw new Error(`Invalid command: ${command}`);
+    throw new ValidationError(`Invalid command: ${command}`);
   }
 
   if (params.speed && (params.speed < 0 || params.speed > 2000)) {
-    throw new Error('Speed must be between 0 and 2000');
+    throw new ValidationError('Speed must be between 0 and 2000');
   }
 
   if (params.duration && params.duration > 10) {
-    throw new Error('Duration cannot exceed 10 seconds for safety');
+    throw new ValidationError('Duration cannot exceed 10 seconds for safety');
   }
 
   if (command === 'speak') {
     if (!params.text || typeof params.text !== 'string') {
-      throw new Error('Text parameter is required for speak command');
+      throw new ValidationError('Text parameter is required for speak command');
     }
     if (params.text.length > 500) {
-      throw new Error('Text length cannot exceed 500 characters');
+      throw new ValidationError('Text length cannot exceed 500 characters');
     }
   }
 }
@@ -290,7 +304,14 @@ functions.http('controlRobot', (req, res) => {
     } catch (error) {
       console.error('Error:', error.message);
       
-      res.status(500).json({
+      let statusCode = 500;
+      if (error.name === 'ValidationError') {
+        statusCode = 400;
+      } else if (error.name === 'RobotConnectionError') {
+        statusCode = 502;
+      }
+      
+      res.status(statusCode).json({
         success: false,
         error: error.message,
         timestamp: new Date().toISOString()
@@ -298,3 +319,10 @@ functions.http('controlRobot', (req, res) => {
     }
   });
 });
+
+module.exports = {
+  ValidationError,
+  RobotConnectionError,
+  validateCommand,
+  sendCommandToRobot
+};
