@@ -192,7 +192,11 @@ functions.http('controlRobot', (req, res) => {
         return res.status(400).json({ error: 'Command is required' });
       }
 
-      validateCommand(command, params);
+      try {
+        validateCommand(command, params);
+      } catch (validationError) {
+        return res.status(400).json({ error: validationError.message });
+      }
 
       console.log(`Executing command: ${command}`, params);
       
@@ -278,7 +282,17 @@ functions.http('controlRobot', (req, res) => {
           return res.status(400).json({ error: `Unsupported command: ${command}` });
       }
       
-      const result = await sendCommandToRobot(action, direction, speed, duration, extraParams);
+      let result;
+      try {
+        result = await sendCommandToRobot(action, direction, speed, duration, extraParams);
+      } catch (robotError) {
+        console.error('Robot connection error:', robotError.message);
+        return res.status(502).json({
+          success: false,
+          error: robotError.message,
+          timestamp: new Date().toISOString()
+        });
+      }
       
       res.status(200).json({
         success: true,

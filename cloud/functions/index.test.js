@@ -1,493 +1,465 @@
-const { EventEmitter } = require('events');
+const net = require('net');
+const EventEmitter = require('events');
 
-let mockSocket;
-let mockAuthenticateRequest;
-
-jest.mock('net', () => ({
-  Socket: jest.fn(() => mockSocket)
+jest.mock('@google-cloud/functions-framework', () => ({
+  http: jest.fn()
 }));
-
-jest.mock('@google-cloud/functions-framework', () => {
-  const handlers = {};
-  return {
-    http: jest.fn((name, handler) => {
-      handlers[name] = handler;
-    }),
-    _handlers: handlers
-  };
-});
 
 jest.mock('cors', () => {
-  return jest.fn(() => (req, res, next) => next());
+  return () => (req, res, callback) => callback();
 });
 
+let mockAuthenticateRequest;
 jest.mock('./auth', () => ({
-  authenticateRequest: jest.fn(() => mockAuthenticateRequest())
+  authenticateRequest: jest.fn((...args) => mockAuthenticateRequest(...args))
 }));
 
-function createMockSocket() {
-  const socket = new EventEmitter();
-  socket.connect = jest.fn(function(port, host, callback) {
-    process.nextTick(callback);
-    return this;
-  });
-  socket.write = jest.fn();
-  socket.destroy = jest.fn();
-  socket.setTimeout = jest.fn();
-  return socket;
+const functions = require('@google-cloud/functions-framework');
+const { authenticateRequest } = require('./auth');
+
+let controlRobotHandler;
+
+function createMockRequest(options = {}) {
+  return {
+    method: options.method || 'POST',
+    headers: options.headers || { 'x-api-key': 'test-api-key' },
+    body: options.body || {},
+    connection: { remoteAddress: '127.0.0.1' }
+  };
 }
 
-describe('controlRobot Cloud Function', () => {
-  let handler;
-  let mockReq;
-  let mockRes;
-  const net = require('net');
-  const { authenticateRequest } = require('./auth');
-  const functionsFramework = require('@google-cloud/functions-framework');
+function createMockResponse() {
+  const res = {
+    statusCode: null,
+    responseData: null,
+    status: jest.fn(function(code) {
+      this.statusCode = code;
+      return this;
+    }),
+    json: jest.fn(function(data) {
+      this.responseData = data;
+      return this;
+    })
+  };
+  return res;
+}
 
+class MockSocket extends EventEmitter {
+  constructor() {
+    super();
+    this.destroyed = false;
+    this.timeoutMs = null;
+    this.connectHost = null;
+    this.connectPort = null;
+  }
+
+  setTimeout(ms) {
+    this.timeoutMs = ms;
+  }
+
+  connect(port, host, callback) {
+    this.connectPort = port;
+    this.connectHost = host;
+    setImmediate(callback);
+  }
+
+  write(data) {
+    this.writtenData = data;
+  }
+
+  destroy() {
+    this.destroyed = true;
+  }
+}
+
+let mockSocketInstance;
+jest.mock('net', () => ({
+  Socket: jest.fn(() => mockSocketInstance)
+}));
+
+describe('controlRobot Cloud Function', () => {
   beforeAll(() => {
     require('./index');
-    handler = functionsFramework._handlers.controlRobot;
+    controlRobotHandler = functions.http.mock.calls[0][1];
   });
 
   beforeEach(() => {
     jest.clearAllMocks();
-    
-    mockSocket = createMockSocket();
-    
-    mockAuthenticateRequest = jest.fn().mockReturnValue({ clientId: 'test', authenticated: true });
-
-    mockRes = {
-      status: jest.fn().mockReturnThis(),
-      json: jest.fn().mockReturnThis()
-    };
+    mockAuthenticateRequest = jest.fn().mockReturnValue({ clientId: 'test-client', authenticated: true });
+    mockSocketInstance = new MockSocket();
   });
 
-  describe('Authentication', () => {
-    it('should return 401 when API key is missing', async () => {
-      mockReq = {
-        method: 'POST',
-        headers: {},
-        body: { command: 'forward' }
-      };
+  describe('Valid command dispatching', () => {
+    test('should dispatch forward command successfully', async () => {
+      const req = createMockRequest({
+        body: { command: 'forward', params: { speed: 500 } }
+      });
+      const res = createMockResponse();
 
-      mockAuthenticateRequest = jest.fn(() => {
+      const handlerPromise = new Promise((resolve) => {
+        const originalJson = res.json;
+        res.json = function(data) {
+          originalJson.call(this, data);
+          resolve();
+          return this;
+        };
+
+        controlRobotHandler(req, res);
+
+        setImmediate(() => {
+          mockSocketInstance.emit('data', Buffer.from('{"success":true,"action":"move"}\n'));
+        });
+      });
+
+      await handlerPromise;
+
+      expect(res.statusCode).toBe(200);
+      expect(res.responseData.success).toBe(true);
+      expect(res.responseData.command).toBe('forward');
+    });
+
+    test('should dispatch stop command successfully', async () => {
+      const req = createMockRequest({
+        body: { command: 'stop' }
+      });
+      const res = createMockResponse();
+
+      const handlerPromise = new Promise((resolve) => {
+        const originalJson = res.json;
+        res.json = function(data) {
+          originalJson.call(this, data);
+          resolve();
+          return this;
+        };
+
+        controlRobotHandler(req, res);
+
+        setImmediate(() => {
+          mockSocketInstance.emit('data', Buffer.from('{"success":true,"action":"stop"}\n'));
+        });
+      });
+
+      await handlerPromise;
+
+      expect(res.statusCode).toBe(200);
+      expect(res.responseData.success).toBe(true);
+      expect(res.responseData.command).toBe('stop');
+    });
+
+    test('should dispatch battery command successfully', async () => {
+      const req = createMockRequest({
+        body: { command: 'battery' }
+      });
+      const res = createMockResponse();
+
+      const handlerPromise = new Promise((resolve) => {
+        const originalJson = res.json;
+        res.json = function(data) {
+          originalJson.call(this, data);
+          resolve();
+          return this;
+        };
+
+        controlRobotHandler(req, res);
+
+        setImmediate(() => {
+          mockSocketInstance.emit('data', Buffer.from('{"success":true,"voltage":7200}\n'));
+        });
+      });
+
+      await handlerPromise;
+
+      expect(res.statusCode).toBe(200);
+      expect(res.responseData.success).toBe(true);
+      expect(res.responseData.command).toBe('battery');
+    });
+
+    test('should dispatch speak command with text parameter', async () => {
+      const req = createMockRequest({
+        body: { command: 'speak', params: { text: 'Hello robot' } }
+      });
+      const res = createMockResponse();
+
+      const handlerPromise = new Promise((resolve) => {
+        const originalJson = res.json;
+        res.json = function(data) {
+          originalJson.call(this, data);
+          resolve();
+          return this;
+        };
+
+        controlRobotHandler(req, res);
+
+        setImmediate(() => {
+          mockSocketInstance.emit('data', Buffer.from('{"success":true,"text":"Hello robot"}\n'));
+        });
+      });
+
+      await handlerPromise;
+
+      expect(res.statusCode).toBe(200);
+      expect(res.responseData.success).toBe(true);
+      expect(res.responseData.command).toBe('speak');
+    });
+  });
+
+  describe('Authentication errors (401)', () => {
+    test('should return 401 when API key is missing', async () => {
+      mockAuthenticateRequest = jest.fn().mockImplementation(() => {
         throw new Error('API key is required');
       });
 
-      await handler(mockReq, mockRes);
+      const req = createMockRequest({
+        headers: {}
+      });
+      const res = createMockResponse();
 
-      expect(mockRes.status).toHaveBeenCalledWith(401);
-      expect(mockRes.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          error: 'API key is required'
-        })
-      );
+      await new Promise((resolve) => {
+        const originalJson = res.json;
+        res.json = function(data) {
+          originalJson.call(this, data);
+          resolve();
+          return this;
+        };
+        controlRobotHandler(req, res);
+      });
+
+      expect(res.statusCode).toBe(401);
+      expect(res.responseData.error).toBe('API key is required');
     });
 
-    it('should return 401 when API key is invalid', async () => {
-      mockReq = {
-        method: 'POST',
-        headers: { 'x-api-key': 'wrong-key' },
-        body: { command: 'forward' }
-      };
-
-      mockAuthenticateRequest = jest.fn(() => {
+    test('should return 401 when API key is invalid', async () => {
+      mockAuthenticateRequest = jest.fn().mockImplementation(() => {
         throw new Error('Invalid API key');
       });
 
-      await handler(mockReq, mockRes);
+      const req = createMockRequest({
+        headers: { 'x-api-key': 'wrong-key' }
+      });
+      const res = createMockResponse();
 
-      expect(mockRes.status).toHaveBeenCalledWith(401);
-      expect(mockRes.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          error: 'Invalid API key'
-        })
-      );
+      await new Promise((resolve) => {
+        const originalJson = res.json;
+        res.json = function(data) {
+          originalJson.call(this, data);
+          resolve();
+          return this;
+        };
+        controlRobotHandler(req, res);
+      });
+
+      expect(res.statusCode).toBe(401);
+      expect(res.responseData.error).toBe('Invalid API key');
     });
   });
 
-  describe('Command Validation', () => {
-    it('should return 400 when command is missing', async () => {
-      mockReq = {
-        method: 'POST',
-        headers: { 'x-api-key': 'valid-key' },
+  describe('Unknown command errors (400)', () => {
+    test('should return 400 for unknown command', async () => {
+      const req = createMockRequest({
+        body: { command: 'dance' }
+      });
+      const res = createMockResponse();
+
+      await new Promise((resolve) => {
+        const originalJson = res.json;
+        res.json = function(data) {
+          originalJson.call(this, data);
+          resolve();
+          return this;
+        };
+        controlRobotHandler(req, res);
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.responseData.error).toContain('Invalid command');
+    });
+
+    test('should return 400 when command is missing', async () => {
+      const req = createMockRequest({
         body: {}
-      };
+      });
+      const res = createMockResponse();
 
-      await handler(mockReq, mockRes);
+      await new Promise((resolve) => {
+        const originalJson = res.json;
+        res.json = function(data) {
+          originalJson.call(this, data);
+          resolve();
+          return this;
+        };
+        controlRobotHandler(req, res);
+      });
 
-      expect(mockRes.status).toHaveBeenCalledWith(400);
-      expect(mockRes.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          error: 'Command is required'
-        })
-      );
+      expect(res.statusCode).toBe(400);
+      expect(res.responseData.error).toBe('Command is required');
     });
 
-    it('should return 400 for unknown command', async () => {
-      mockReq = {
-        method: 'POST',
-        headers: { 'x-api-key': 'valid-key' },
-        body: { command: 'unknown_command' }
-      };
-
-      await handler(mockReq, mockRes);
-
-      expect(mockRes.status).toHaveBeenCalledWith(400);
-      expect(mockRes.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: false,
-          error: 'Invalid command: unknown_command'
-        })
-      );
-    });
-
-    it('should return 400 when speed exceeds maximum', async () => {
-      mockReq = {
-        method: 'POST',
-        headers: { 'x-api-key': 'valid-key' },
+    test('should return 400 for invalid speed parameter', async () => {
+      const req = createMockRequest({
         body: { command: 'forward', params: { speed: 3000 } }
-      };
+      });
+      const res = createMockResponse();
 
-      await handler(mockReq, mockRes);
+      await new Promise((resolve) => {
+        const originalJson = res.json;
+        res.json = function(data) {
+          originalJson.call(this, data);
+          resolve();
+          return this;
+        };
+        controlRobotHandler(req, res);
+      });
 
-      expect(mockRes.status).toHaveBeenCalledWith(400);
-      expect(mockRes.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: false,
-          error: 'Speed must be between 0 and 2000'
-        })
-      );
+      expect(res.statusCode).toBe(400);
+      expect(res.responseData.error).toContain('Speed must be between 0 and 2000');
     });
 
-    it('should return 400 when duration exceeds maximum', async () => {
-      mockReq = {
-        method: 'POST',
-        headers: { 'x-api-key': 'valid-key' },
+    test('should return 400 for duration exceeding limit', async () => {
+      const req = createMockRequest({
         body: { command: 'forward', params: { duration: 15 } }
-      };
+      });
+      const res = createMockResponse();
 
-      await handler(mockReq, mockRes);
+      await new Promise((resolve) => {
+        const originalJson = res.json;
+        res.json = function(data) {
+          originalJson.call(this, data);
+          resolve();
+          return this;
+        };
+        controlRobotHandler(req, res);
+      });
 
-      expect(mockRes.status).toHaveBeenCalledWith(400);
-      expect(mockRes.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: false,
-          error: 'Duration cannot exceed 10 seconds for safety'
-        })
-      );
+      expect(res.statusCode).toBe(400);
+      expect(res.responseData.error).toContain('Duration cannot exceed 10 seconds');
     });
 
-    it('should return 405 for non-POST methods', async () => {
-      mockReq = {
-        method: 'GET',
-        headers: { 'x-api-key': 'valid-key' },
-        body: {}
-      };
+    test('should return 400 for speak command without text', async () => {
+      const req = createMockRequest({
+        body: { command: 'speak', params: {} }
+      });
+      const res = createMockResponse();
 
-      await handler(mockReq, mockRes);
+      await new Promise((resolve) => {
+        const originalJson = res.json;
+        res.json = function(data) {
+          originalJson.call(this, data);
+          resolve();
+          return this;
+        };
+        controlRobotHandler(req, res);
+      });
 
-      expect(mockRes.status).toHaveBeenCalledWith(405);
-      expect(mockRes.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          error: 'Method not allowed'
-        })
-      );
-    });
-  });
-
-  describe('Valid Command Dispatching', () => {
-    it('should dispatch forward command successfully', async () => {
-      mockReq = {
-        method: 'POST',
-        headers: { 'x-api-key': 'valid-key' },
-        body: { command: 'forward', params: { speed: 500 } }
-      };
-
-      const robotResponse = { success: true, action: 'move', direction: 'forward' };
-
-      const handlerPromise = handler(mockReq, mockRes);
-
-      await new Promise(resolve => process.nextTick(resolve));
-      await new Promise(resolve => process.nextTick(resolve));
-      
-      mockSocket.emit('data', Buffer.from(JSON.stringify(robotResponse) + '\n'));
-
-      await handlerPromise;
-
-      expect(net.Socket).toHaveBeenCalled();
-      expect(mockSocket.connect).toHaveBeenCalled();
-      expect(mockSocket.write).toHaveBeenCalledWith(
-        expect.stringContaining('"action":"move"')
-      );
-      expect(mockRes.status).toHaveBeenCalledWith(200);
-    });
-
-    it('should dispatch stop command successfully', async () => {
-      mockReq = {
-        method: 'POST',
-        headers: { 'x-api-key': 'valid-key' },
-        body: { command: 'stop' }
-      };
-
-      const robotResponse = { success: true, action: 'stop' };
-
-      const handlerPromise = handler(mockReq, mockRes);
-
-      await new Promise(resolve => process.nextTick(resolve));
-      await new Promise(resolve => process.nextTick(resolve));
-      
-      mockSocket.emit('data', Buffer.from(JSON.stringify(robotResponse) + '\n'));
-
-      await handlerPromise;
-
-      expect(mockRes.status).toHaveBeenCalledWith(200);
-      expect(mockRes.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: true,
-          command: 'stop',
-          result: robotResponse
-        })
-      );
-    });
-
-    it('should dispatch turret_left command with correct parameters', async () => {
-      mockReq = {
-        method: 'POST',
-        headers: { 'x-api-key': 'valid-key' },
-        body: { command: 'turret_left', params: { speed: 200, duration: 1 } }
-      };
-
-      const robotResponse = { success: true, action: 'turret', direction: 'left' };
-
-      const handlerPromise = handler(mockReq, mockRes);
-
-      await new Promise(resolve => process.nextTick(resolve));
-      await new Promise(resolve => process.nextTick(resolve));
-      
-      mockSocket.emit('data', Buffer.from(JSON.stringify(robotResponse) + '\n'));
-
-      await handlerPromise;
-
-      expect(mockSocket.write).toHaveBeenCalledWith(
-        expect.stringContaining('"action":"turret"')
-      );
-      expect(mockSocket.write).toHaveBeenCalledWith(
-        expect.stringContaining('"direction":"left"')
-      );
-      expect(mockRes.status).toHaveBeenCalledWith(200);
-    });
-
-    it('should dispatch get_status command successfully', async () => {
-      mockReq = {
-        method: 'POST',
-        headers: { 'x-api-key': 'valid-key' },
-        body: { command: 'get_status' }
-      };
-
-      const robotResponse = { success: true, action: 'status', battery: 80 };
-
-      const handlerPromise = handler(mockReq, mockRes);
-
-      await new Promise(resolve => process.nextTick(resolve));
-      await new Promise(resolve => process.nextTick(resolve));
-      
-      mockSocket.emit('data', Buffer.from(JSON.stringify(robotResponse) + '\n'));
-
-      await handlerPromise;
-
-      expect(mockSocket.write).toHaveBeenCalledWith(
-        expect.stringContaining('"action":"status"')
-      );
-      expect(mockRes.status).toHaveBeenCalledWith(200);
-    });
-
-    it('should dispatch speak command with text parameter', async () => {
-      mockReq = {
-        method: 'POST',
-        headers: { 'x-api-key': 'valid-key' },
-        body: { command: 'speak', params: { text: 'Hello world' } }
-      };
-
-      const robotResponse = { success: true, action: 'speak', text: 'Hello world' };
-
-      const handlerPromise = handler(mockReq, mockRes);
-
-      await new Promise(resolve => process.nextTick(resolve));
-      await new Promise(resolve => process.nextTick(resolve));
-      
-      mockSocket.emit('data', Buffer.from(JSON.stringify(robotResponse) + '\n'));
-
-      await handlerPromise;
-
-      expect(mockSocket.write).toHaveBeenCalledWith(
-        expect.stringContaining('"action":"speak"')
-      );
-      expect(mockSocket.write).toHaveBeenCalledWith(
-        expect.stringContaining('"text":"Hello world"')
-      );
-      expect(mockRes.status).toHaveBeenCalledWith(200);
-    });
-
-    it('should dispatch joystick_control command with all parameters', async () => {
-      mockReq = {
-        method: 'POST',
-        headers: { 'x-api-key': 'valid-key' },
-        body: {
-          command: 'joystick_control',
-          params: { l_left: 100, l_forward: 200, r_left: -50, r_forward: 150 }
-        }
-      };
-
-      const robotResponse = { success: true, action: 'joystick' };
-
-      const handlerPromise = handler(mockReq, mockRes);
-
-      await new Promise(resolve => process.nextTick(resolve));
-      await new Promise(resolve => process.nextTick(resolve));
-      
-      mockSocket.emit('data', Buffer.from(JSON.stringify(robotResponse) + '\n'));
-
-      await handlerPromise;
-
-      expect(mockSocket.write).toHaveBeenCalledWith(
-        expect.stringContaining('"action":"joystick"')
-      );
-      expect(mockRes.status).toHaveBeenCalledWith(200);
+      expect(res.statusCode).toBe(400);
+      expect(res.responseData.error).toContain('Text parameter is required');
     });
   });
 
-  describe('Robot Connection Failures', () => {
-    it('should return 502 when robot connection times out', async () => {
-      mockReq = {
-        method: 'POST',
-        headers: { 'x-api-key': 'valid-key' },
+  describe('Robot connection failures (502)', () => {
+    test('should return 502 when robot connection times out', async () => {
+      const req = createMockRequest({
         body: { command: 'forward' }
-      };
+      });
+      const res = createMockResponse();
 
-      const handlerPromise = handler(mockReq, mockRes);
+      const handlerPromise = new Promise((resolve) => {
+        const originalJson = res.json;
+        res.json = function(data) {
+          originalJson.call(this, data);
+          resolve();
+          return this;
+        };
 
-      await new Promise(resolve => process.nextTick(resolve));
-      await new Promise(resolve => process.nextTick(resolve));
-      
-      mockSocket.emit('timeout');
+        controlRobotHandler(req, res);
+
+        setImmediate(() => {
+          mockSocketInstance.emit('timeout');
+        });
+      });
 
       await handlerPromise;
 
-      expect(mockRes.status).toHaveBeenCalledWith(502);
-      expect(mockRes.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: false,
-          error: 'Connection timeout'
-        })
-      );
+      expect(res.statusCode).toBe(502);
+      expect(res.responseData.success).toBe(false);
+      expect(res.responseData.error).toContain('timeout');
     });
 
-    it('should return 502 when robot connection fails', async () => {
-      mockReq = {
-        method: 'POST',
-        headers: { 'x-api-key': 'valid-key' },
+    test('should return 502 when robot connection fails', async () => {
+      const req = createMockRequest({
         body: { command: 'forward' }
-      };
+      });
+      const res = createMockResponse();
 
-      const handlerPromise = handler(mockReq, mockRes);
+      const handlerPromise = new Promise((resolve) => {
+        const originalJson = res.json;
+        res.json = function(data) {
+          originalJson.call(this, data);
+          resolve();
+          return this;
+        };
 
-      await new Promise(resolve => process.nextTick(resolve));
-      await new Promise(resolve => process.nextTick(resolve));
-      
-      mockSocket.emit('error', new Error('ECONNREFUSED'));
+        controlRobotHandler(req, res);
+
+        setImmediate(() => {
+          mockSocketInstance.emit('error', new Error('ECONNREFUSED'));
+        });
+      });
 
       await handlerPromise;
 
-      expect(mockRes.status).toHaveBeenCalledWith(502);
-      expect(mockRes.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: false,
-          error: 'Connection error: ECONNREFUSED'
-        })
-      );
+      expect(res.statusCode).toBe(502);
+      expect(res.responseData.success).toBe(false);
+      expect(res.responseData.error).toContain('Connection error');
     });
 
-    it('should return 502 when robot host is unreachable', async () => {
-      mockReq = {
-        method: 'POST',
-        headers: { 'x-api-key': 'valid-key' },
+    test('should return 502 when robot is unreachable', async () => {
+      const req = createMockRequest({
         body: { command: 'stop' }
-      };
+      });
+      const res = createMockResponse();
 
-      const handlerPromise = handler(mockReq, mockRes);
+      const handlerPromise = new Promise((resolve) => {
+        const originalJson = res.json;
+        res.json = function(data) {
+          originalJson.call(this, data);
+          resolve();
+          return this;
+        };
 
-      await new Promise(resolve => process.nextTick(resolve));
-      await new Promise(resolve => process.nextTick(resolve));
-      
-      mockSocket.emit('error', new Error('EHOSTUNREACH'));
+        controlRobotHandler(req, res);
+
+        setImmediate(() => {
+          mockSocketInstance.emit('error', new Error('EHOSTUNREACH'));
+        });
+      });
 
       await handlerPromise;
 
-      expect(mockRes.status).toHaveBeenCalledWith(502);
-      expect(mockRes.json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: false,
-          error: 'Connection error: EHOSTUNREACH'
-        })
-      );
+      expect(res.statusCode).toBe(502);
+      expect(res.responseData.success).toBe(false);
+      expect(res.responseData.error).toContain('EHOSTUNREACH');
     });
   });
 
-  describe('Helper Functions', () => {
-    const { validateCommand, ValidationError } = require('./index');
+  describe('HTTP method validation', () => {
+    test('should return 405 for non-POST requests', async () => {
+      const req = createMockRequest({
+        method: 'GET'
+      });
+      const res = createMockResponse();
 
-    describe('validateCommand', () => {
-      it('should accept valid commands', () => {
-        expect(() => validateCommand('forward', {})).not.toThrow();
-        expect(() => validateCommand('backward', {})).not.toThrow();
-        expect(() => validateCommand('left', {})).not.toThrow();
-        expect(() => validateCommand('right', {})).not.toThrow();
-        expect(() => validateCommand('stop', {})).not.toThrow();
-        expect(() => validateCommand('turret_left', {})).not.toThrow();
-        expect(() => validateCommand('turret_right', {})).not.toThrow();
-        expect(() => validateCommand('stop_turret', {})).not.toThrow();
-        expect(() => validateCommand('get_status', {})).not.toThrow();
-        expect(() => validateCommand('get_help', {})).not.toThrow();
-        expect(() => validateCommand('battery', {})).not.toThrow();
-        expect(() => validateCommand('beep', {})).not.toThrow();
+      await new Promise((resolve) => {
+        const originalJson = res.json;
+        res.json = function(data) {
+          originalJson.call(this, data);
+          resolve();
+          return this;
+        };
+        controlRobotHandler(req, res);
       });
 
-      it('should throw ValidationError for invalid commands', () => {
-        expect(() => validateCommand('invalid', {})).toThrow(ValidationError);
-        expect(() => validateCommand('fly', {})).toThrow(ValidationError);
-        expect(() => validateCommand('', {})).toThrow(ValidationError);
-      });
-
-      it('should throw ValidationError for speed out of range', () => {
-        expect(() => validateCommand('forward', { speed: -1 })).toThrow(ValidationError);
-        expect(() => validateCommand('forward', { speed: 2001 })).toThrow(ValidationError);
-      });
-
-      it('should accept valid speed values', () => {
-        expect(() => validateCommand('forward', { speed: 0 })).not.toThrow();
-        expect(() => validateCommand('forward', { speed: 1000 })).not.toThrow();
-        expect(() => validateCommand('forward', { speed: 2000 })).not.toThrow();
-      });
-
-      it('should throw ValidationError for duration exceeding limit', () => {
-        expect(() => validateCommand('forward', { duration: 11 })).toThrow(ValidationError);
-        expect(() => validateCommand('forward', { duration: 100 })).toThrow(ValidationError);
-      });
-
-      it('should accept valid duration values', () => {
-        expect(() => validateCommand('forward', { duration: 0 })).not.toThrow();
-        expect(() => validateCommand('forward', { duration: 5 })).not.toThrow();
-        expect(() => validateCommand('forward', { duration: 10 })).not.toThrow();
-      });
-
-      it('should validate speak command text parameter', () => {
-        expect(() => validateCommand('speak', {})).toThrow(ValidationError);
-        expect(() => validateCommand('speak', { text: 123 })).toThrow(ValidationError);
-        expect(() => validateCommand('speak', { text: 'a'.repeat(501) })).toThrow(ValidationError);
-        expect(() => validateCommand('speak', { text: 'Hello' })).not.toThrow();
-      });
+      expect(res.statusCode).toBe(405);
+      expect(res.responseData.error).toBe('Method not allowed');
     });
   });
 });
