@@ -72,8 +72,15 @@ jobs:
           git tag "deploy/cloud-functions/$(date -u +%Y%m%d-%H%M%S)-${GITHUB_SHA::8}"
           git push origin --tags
 
+  notify:
+    name: Notify deployment status
+    runs-on: ubuntu-latest
+    needs: [test, deploy]
+    if: always()
+
+    steps:
       - name: Notify on success
-        if: success()
+        if: needs.deploy.result == 'success'
         uses: slackapi/slack-github-action@v1.27.0
         with:
           payload: |
@@ -94,7 +101,7 @@ jobs:
           SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
 
       - name: Notify on failure
-        if: failure()
+        if: needs.test.result == 'failure' || needs.deploy.result == 'failure'
         uses: slackapi/slack-github-action@v1.27.0
         with:
           payload: |
@@ -105,7 +112,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "❌ *Cloud Functions deployment FAILED*\n*Commit:* `${{ github.sha }}` by ${{ github.actor }}\n*Branch:* `${{ github.ref_name }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run — check logs for details>"
+                    "text": "❌ *Cloud Functions deployment FAILED*\n*Commit:* `${{ github.sha }}` by ${{ github.actor }}\n*Branch:* `${{ github.ref_name }}`\n*Test:* ${{ needs.test.result }} • *Deploy:* ${{ needs.deploy.result }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run — check logs for details>"
                   }
                 }
               ]

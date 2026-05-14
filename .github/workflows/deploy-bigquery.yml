@@ -76,8 +76,15 @@ jobs:
           git tag "deploy/bigquery/$(date -u +%Y%m%d-%H%M%S)-${GITHUB_SHA::8}"
           git push origin --tags
 
+  notify:
+    name: Notify deployment status
+    runs-on: ubuntu-latest
+    needs: [validate, deploy]
+    if: always()
+
+    steps:
       - name: Notify on success
-        if: success()
+        if: needs.deploy.result == 'success'
         uses: slackapi/slack-github-action@v1.27.0
         with:
           payload: |
@@ -98,7 +105,7 @@ jobs:
           SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
 
       - name: Notify on failure
-        if: failure()
+        if: needs.validate.result == 'failure' || needs.deploy.result == 'failure'
         uses: slackapi/slack-github-action@v1.27.0
         with:
           payload: |
@@ -109,7 +116,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "❌ *BigQuery deployment FAILED*\n*Commit:* `${{ github.sha }}` by ${{ github.actor }}\n*Branch:* `${{ github.ref_name }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run — check logs for details>"
+                    "text": "❌ *BigQuery deployment FAILED*\n*Commit:* `${{ github.sha }}` by ${{ github.actor }}\n*Branch:* `${{ github.ref_name }}`\n*Validate:* ${{ needs.validate.result }} • *Deploy:* ${{ needs.deploy.result }}\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run — check logs for details>"
                   }
                 }
               ]
