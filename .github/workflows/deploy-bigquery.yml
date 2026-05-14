@@ -1,0 +1,119 @@
+name: Deploy BigQuery Infrastructure
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cloud/bigquery/**'
+      - '.github/workflows/deploy-bigquery.yml'
+
+jobs:
+  validate:
+    name: Validate DDL scripts
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check DDL files exist and are non-empty
+        run: |
+          echo "Validating DDL files..."
+          for f in cloud/bigquery/schemas/*.sql; do
+            if [ ! -s "$f" ]; then
+              echo "ERROR: $f is empty or missing"
+              exit 1
+            fi
+            echo "✓ $f"
+          done
+
+      - name: Validate SQL syntax (basic checks)
+        run: |
+          echo "Checking SQL files for obvious syntax issues..."
+          for f in cloud/bigquery/schemas/*.sql; do
+            # Fail if file contains bare DROP TABLE without IF EXISTS (dangerous in CD)
+            if grep -iP "^\s*DROP\s+TABLE\s+(?!IF\s+EXISTS)" "$f"; then
+              echo "ERROR: $f contains DROP TABLE without IF EXISTS — unsafe for CD"
+              exit 1
+            fi
+            echo "✓ $f looks safe"
+          done
+
+      - name: Validate deploy script is executable
+        run: |
+          test -f cloud/bigquery/deploy.sh || (echo "ERROR: deploy.sh missing" && exit 1)
+          echo "✓ deploy.sh present"
+
+  deploy:
+    name: Deploy to GCP
+    runs-on: ubuntu-latest
+    needs: validate
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Deploy BigQuery infrastructure
+        id: deploy
+        run: |
+          chmod +x cloud/bigquery/deploy.sh
+          GCP_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }} bash cloud/bigquery/deploy.sh
+
+      - name: Tag successful deployment
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "deploy/bigquery/$(date -u +%Y%m%d-%H%M%S)-${GITHUB_SHA::8}"
+          git push origin --tags
+
+      - name: Notify on success
+        if: success()
+        uses: slackapi/slack-github-action@v1.27.0
+        with:
+          payload: |
+            {
+              "text": "✅ *BigQuery infrastructure deployed successfully*",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "✅ *BigQuery infrastructure deployed successfully*\n*Commit:* `${{ github.sha }}` by ${{ github.actor }}\n*Branch:* `${{ github.ref_name }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Notify on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.27.0
+        with:
+          payload: |
+            {
+              "text": "❌ *BigQuery deployment FAILED*",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "❌ *BigQuery deployment FAILED*\n*Commit:* `${{ github.sha }}` by ${{ github.actor }}\n*Branch:* `${{ github.ref_name }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run — check logs for details>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

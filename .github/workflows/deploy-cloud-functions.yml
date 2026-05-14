@@ -8,9 +8,34 @@ on:
       - '.github/workflows/deploy-cloud-functions.yml'
 
 jobs:
+  test:
+    name: Test before deploy
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloud/functions
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: cloud/functions/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test -- --passWithNoTests
+
   deploy:
     name: Deploy to GCP
     runs-on: ubuntu-latest
+    needs: test
+    environment: production
 
     steps:
       - uses: actions/checkout@v4
@@ -26,6 +51,7 @@ jobs:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
       - name: Deploy controlRobot Cloud Function
+        id: deploy
         run: |
           gcloud functions deploy controlRobot \
             --gen2 \
@@ -37,3 +63,53 @@ jobs:
             --entry-point controlRobot \
             --project ${{ secrets.GCP_PROJECT_ID }} \
             --set-env-vars ROBOT_HOST=${{ secrets.ROBOT_HOST }},ROBOT_PORT=${{ secrets.ROBOT_PORT }},API_KEY=${{ secrets.GCP_API_KEY }}
+
+      - name: Tag successful deployment
+        if: success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "deploy/cloud-functions/$(date -u +%Y%m%d-%H%M%S)-${GITHUB_SHA::8}"
+          git push origin --tags
+
+      - name: Notify on success
+        if: success()
+        uses: slackapi/slack-github-action@v1.27.0
+        with:
+          payload: |
+            {
+              "text": "✅ *Cloud Functions deployed successfully*",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "✅ *Cloud Functions deployed successfully*\n*Commit:* `${{ github.sha }}` by ${{ github.actor }}\n*Branch:* `${{ github.ref_name }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+      - name: Notify on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.27.0
+        with:
+          payload: |
+            {
+              "text": "❌ *Cloud Functions deployment FAILED*",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "❌ *Cloud Functions deployment FAILED*\n*Commit:* `${{ github.sha }}` by ${{ github.actor }}\n*Branch:* `${{ github.ref_name }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run — check logs for details>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
