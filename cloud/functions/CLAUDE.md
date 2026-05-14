@@ -18,6 +18,7 @@ The Cloud Function receives HTTP POST requests with commands, validates authenti
 
 ### Key Components
 - **index.js**: Main Cloud Function handler - processes HTTP requests, validates commands, manages TCP connection to robot
+- **index.test.js**: Jest unit tests for the Cloud Function (covers authentication, command validation, dispatching, and error handling)
 - **auth.js**: API authentication logic using X-API-Key header
 - **robot-server.py**: Python server running on EV3 robot (separate device) - receives TCP commands and controls motors
 - **test-client.js**: Test utilities and client examples for development
