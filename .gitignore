@@ -34,6 +34,9 @@ DerivedData/
 .env.local
 *.pem
 service-account-key.json
+# GCP service-account key files — never commit these
+*-key.json
+telemetry-writer-key.json
 
 # Claude Code
 .claude/settings.json
