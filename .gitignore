@@ -34,6 +34,7 @@ DerivedData/
 .env.local
 *.pem
 service-account-key.json
+*-key.json
 
 # Claude Code
 .claude/settings.json

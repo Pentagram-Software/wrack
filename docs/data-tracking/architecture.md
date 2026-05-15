@@ -326,22 +326,42 @@ TELEMETRY_FLUSH_INTERVAL=30
 
 ### Service Account Setup
 
+The service account is created by `cloud/bigquery/setup-iam.sh` (PEN-155). Run it once after `deploy.sh`:
+
 ```bash
-# Create service account
-gcloud iam service-accounts create telemetry-writer \
-  --display-name="Telemetry Writer"
+# Default project (wrack-control), key written to ./telemetry-writer-key.json
+bash cloud/bigquery/setup-iam.sh
 
-# Grant BigQuery permissions
-gcloud projects add-iam-policy-binding wrack-control \
-  --member="serviceAccount:telemetry-writer@wrack-control.iam.gserviceaccount.com" \
-  --role="roles/bigquery.dataEditor"
-
-# Grant specific table access (principle of least privilege)
-bq add-iam-policy-binding \
-  --table=wrack-control:wrack_telemetry.events \
-  --member="serviceAccount:telemetry-writer@wrack-control.iam.gserviceaccount.com" \
-  --role="roles/bigquery.dataEditor"
+# Dry run — print commands without executing
+bash cloud/bigquery/setup-iam.sh --dry-run
 ```
+
+The script performs these steps:
+
+```bash
+# 1. Create the service account
+gcloud iam service-accounts create telemetry-writer \
+  --project=wrack-control \
+  --display-name="Wrack Telemetry Writer" \
+  --description="Writes telemetry events to BigQuery wrack_telemetry dataset."
+
+# 2. Grant BigQuery Data Editor at DATASET level only (not project-level)
+#    This is the least-privilege approach: the SA can only read/write data
+#    inside wrack_telemetry and cannot touch any other dataset or resource.
+bq add-iam-policy-binding \
+  --member="serviceAccount:telemetry-writer@wrack-control.iam.gserviceaccount.com" \
+  --role="roles/bigquery.dataEditor" \
+  wrack-control:wrack_telemetry
+
+# 3. Generate JSON key and store as GitHub Actions secret TELEMETRY_SA_KEY
+gcloud iam service-accounts keys create telemetry-writer-key.json \
+  --iam-account=telemetry-writer@wrack-control.iam.gserviceaccount.com
+gh secret set TELEMETRY_SA_KEY < telemetry-writer-key.json
+rm -f telemetry-writer-key.json   # delete local copy immediately
+```
+
+See `cloud/bigquery/README.md` for the full setup guide, including options and
+verification steps.
 
 ### Data Privacy
 

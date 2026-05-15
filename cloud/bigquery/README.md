@@ -1,237 +1,160 @@
-# Wrack Telemetry - BigQuery Infrastructure
+# BigQuery Telemetry Infrastructure
 
-This directory contains the BigQuery infrastructure for the Wrack robot telemetry system.
+Scripts and schemas for the Wrack telemetry data warehouse in Google BigQuery.
 
 ## Overview
 
-The telemetry system collects events from:
-- **EV3 Robot** (`ev3`) - Battery status, command execution, device status
-- **Raspberry Pi** (`rpi`) - Video stream health, vision pipeline metrics
-- **Cloud Functions** (`cloud_functions`) - API requests, errors
-- **Web Client** (`web`) - User interactions
-- **iOS Client** (`ios`) - User interactions
+| File | Purpose |
+|------|---------|
+| `deploy.sh` | Creates the `wrack_telemetry` dataset, `events` table, and SQL views |
+| `setup-iam.sh` | Creates the `telemetry-writer` service account with minimal dataset-scoped permissions |
+| `schemas/events.sql` | `events` table DDL — partitioned by date, clustered by `source` and `event_type` |
+| `schemas/views.sql` | Pre-built SQL views (`events_last_24h`, `battery_events`, etc.) |
+| `test-insert.sh` | Inserts a sample row and queries views — useful for smoke-testing |
 
-All events are stored in a centralized BigQuery dataset with proper partitioning and retention policies.
+## Prerequisites
 
-## Structure
+- [Google Cloud SDK](https://cloud.google.com/sdk/docs/install) (`gcloud` + `bq` CLIs)
+- A GCP principal authenticated via `gcloud auth login` (or a service account with sufficient IAM) with:
+  - `bigquery.datasets.create` (for `deploy.sh`)
+  - `iam.serviceAccounts.create`, `iam.serviceAccountKeys.create`, `bigquery.datasets.setIamPolicy` (for `setup-iam.sh`)
+- Target project set or provided via `GCP_PROJECT_ID` environment variable (default: `wrack-control`)
 
-```
-cloud/bigquery/
-├── README.md              # This file
-├── deploy.sh              # Deployment script for dataset, tables, and views
-├── setup-iam.sh           # Service account and IAM setup (PEN-155)
-└── schemas/
-    ├── events.sql         # Main events table schema
-    └── views.sql          # Analytical views
-```
+---
 
-## Schema Design
+## Step 1 — Deploy BigQuery Infrastructure
 
-### Events Table
-
-**Table**: `wrack_telemetry.events`
-
-**Key fields**:
-- `event_id` - UUID for each event
-- `event_type` - Type of event (battery_status, command_received, etc.)
-- `source` - Where the event came from (ev3, rpi, cloud_functions, web, ios)
-- `timestamp` - Event creation time (UTC)
-- `payload` - JSON with event-specific data
-
-**Optimizations**:
-- **Partitioned** by `DATE(timestamp)` for efficient time-range queries
-- **Clustered** by `source` and `event_type` for fast filtering
-- **90-day expiration** on partitions for cost control
-- **Partition filter required** to prevent expensive full-table scans
-
-### Views
-
-Pre-built views for common queries:
-- `events_last_24h` - Recent events
-- `battery_events` - Battery status with extracted fields
-- `command_events` - Command tracking (received → executed)
-- `error_events` - Error monitoring
-- `api_requests` - Cloud Functions performance
-- `device_status_events` - Hardware health
-
-## Deployment
-
-### Prerequisites
-
-1. Google Cloud SDK installed with `bq` CLI
-2. Authenticated with appropriate GCP project:
-   ```bash
-   gcloud auth login
-   gcloud config set project wrack-control
-   ```
-3. Permissions: `bigquery.datasets.create`, `bigquery.tables.create`
-
-### Deploy
+Run this first. It creates the dataset, events table, and views:
 
 ```bash
-cd cloud/bigquery
-./deploy.sh
+# Default project (wrack-control)
+bash cloud/bigquery/deploy.sh
+
+# Specify a different project
+GCP_PROJECT_ID=my-project bash cloud/bigquery/deploy.sh
 ```
 
-The script will:
-1. Create the `wrack_telemetry` dataset in `europe-west3`
-2. Create the `events` table with partitioning and clustering
-3. Create analytical views
-4. Verify the deployment
+The script is idempotent — safe to re-run after schema changes.
 
-### Configuration
+---
 
-Environment variables (optional):
-- `GCP_PROJECT_ID` - GCP project ID (default: `wrack-control`)
+## Step 2 — Create the Telemetry Service Account (PEN-155)
 
-Example:
+Run `setup-iam.sh` **after** `deploy.sh`. It:
+
+1. Creates service account `telemetry-writer@<project>.iam.gserviceaccount.com`
+2. Grants `roles/bigquery.dataEditor` on the `wrack_telemetry` **dataset only** (no project-level IAM)
+3. Generates a JSON key file
+
 ```bash
-GCP_PROJECT_ID=wrack-control-dev ./deploy.sh
+# Default project, key written to ./telemetry-writer-key.json
+bash cloud/bigquery/setup-iam.sh
+
+# Specify project and key output path
+GCP_PROJECT_ID=my-project bash cloud/bigquery/setup-iam.sh \
+  --key-output-file /tmp/telemetry-sa-key.json
+
+# Dry run — print commands without executing
+bash cloud/bigquery/setup-iam.sh --dry-run
 ```
 
-## Usage
+### Options
 
-### Querying Events
+| Flag | Description |
+|------|-------------|
+| `--key-output-file <path>` | Path for the generated JSON key (default: `telemetry-writer-key.json`) |
+| `--skip-key-generation` | Create SA and set permissions but do not generate a key |
+| `--dry-run` | Print commands that would run without executing them |
 
-Always include a partition filter (date range) for best performance:
+---
 
-```sql
--- Events from today
-SELECT *
-FROM `wrack-control.wrack_telemetry.events`
-WHERE DATE(timestamp) = CURRENT_DATE()
-LIMIT 100;
+## Step 3 — Store the Key Securely
 
--- Battery events from last 7 days
-SELECT *
-FROM `wrack-control.wrack_telemetry.battery_events`
-WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
-ORDER BY timestamp DESC;
+The JSON key produced by `setup-iam.sh` must be stored as a **GitHub Actions secret** and then deleted locally. **Never commit a key file to git.**
 
--- Command success rate by device
-SELECT
-  device_id,
-  COUNT(*) as total_commands,
-  COUNTIF(success = 'true') as successful,
-  ROUND(COUNTIF(success = 'true') / COUNT(*) * 100, 2) as success_rate_pct
-FROM `wrack-control.wrack_telemetry.command_events`
-WHERE event_type = 'command_executed'
-  AND DATE(timestamp) >= CURRENT_DATE() - 7
-GROUP BY device_id;
-```
+### Add to GitHub Actions secrets
 
-### Inserting Events
-
-Events are inserted via:
-1. **Cloud Functions** - Telemetry ingestion endpoint (PEN-158)
-2. **Direct BigQuery API** - From EV3/RPi using service account (PEN-155)
-
-Example insertion (requires service account):
 ```bash
-bq query --use_legacy_sql=false '
-INSERT INTO `wrack-control.wrack_telemetry.events`
-  (event_id, event_type, source, timestamp, ingested_at, payload, version)
-VALUES
-  (GENERATE_UUID(), "battery_status", "ev3", CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP(),
-   JSON '{"voltage_mv": 7200, "percentage": 85}', "1.0.0")
-'
+# Using the GitHub CLI
+gh secret set TELEMETRY_SA_KEY < telemetry-writer-key.json
+
+# Or via the GitHub web UI:
+# https://github.com/YOUR_ORG/wrack/settings/secrets/actions
 ```
 
-## Cost Management
+### Delete the local key
 
-**Estimated costs** (based on 100K events/day):
-
-| Resource | Size | Cost/month (approx) |
-|----------|------|---------------------|
-| Storage (90 days) | ~10 GB | $0.20 |
-| Queries | ~1 TB scanned/month | $5.00 |
-| Streaming inserts | 100K/day | $0.50 |
-| **Total** | | **~$5.70/month** |
-
-**Cost controls**:
-- 90-day partition expiration (automatic deletion)
-- Partition filter requirement (prevents full scans)
-- Clustering reduces query costs
-- JSON payload avoids schema evolution costs
-
-## Monitoring
-
-### Check table size
 ```bash
-bq show --format=prettyjson wrack-control:wrack_telemetry.events | grep numBytes
+rm -f telemetry-writer-key.json
 ```
 
-### Check partition info
+The pattern `*-key.json` is in `.gitignore` as an additional safety net.
+
+### Secret naming convention
+
+| Secret | Contents | Used by |
+|--------|----------|---------|
+| `GCP_SA_KEY` | Admin service account key (deploy BigQuery infra) | `.github/workflows/deploy-bigquery.yml` |
+| `TELEMETRY_SA_KEY` | `telemetry-writer` key (insert events only) | Future telemetry Cloud Function |
+
+---
+
+## Service Account Details
+
+| Attribute | Value |
+|-----------|-------|
+| Email | `telemetry-writer@wrack-control.iam.gserviceaccount.com` |
+| Display name | Wrack Telemetry Writer |
+| IAM role | `roles/bigquery.dataEditor` |
+| IAM scope | `wrack_telemetry` dataset only |
+| Purpose | Streaming / batch insert of telemetry events from Cloud Functions and EV3 |
+
+The `BigQuery Data Editor` role at dataset level allows the service account to:
+- Insert rows into tables (`bigquery.tables.updateData`)
+- Read table data (`bigquery.tables.getData`)
+- List tables (`bigquery.tables.list`)
+
+It does **not** grant the ability to create/drop datasets, run jobs project-wide, or access any other dataset.
+
+---
+
+## Verifying the IAM Binding
+
+After running `setup-iam.sh`, confirm the binding with:
+
 ```bash
-bq query --use_legacy_sql=false '
-SELECT
-  partition_id,
-  total_rows,
-  total_logical_bytes / 1024 / 1024 as size_mb
-FROM `wrack-control.wrack_telemetry.INFORMATION_SCHEMA.PARTITIONS`
-WHERE table_name = "events"
-ORDER BY partition_id DESC
-LIMIT 10
-'
+bq get-iam-policy wrack-control:wrack_telemetry
 ```
 
-### Query performance
-```sql
--- Slowest query types
-SELECT
-  JSON_VALUE(payload, '$.event_type') as event_type,
-  COUNT(*) as count,
-  AVG(TIMESTAMP_DIFF(ingested_at, timestamp, MILLISECOND)) as avg_latency_ms
-FROM `wrack-control.wrack_telemetry.events`
-WHERE DATE(timestamp) = CURRENT_DATE()
-GROUP BY event_type
-ORDER BY avg_latency_ms DESC;
+Expected output includes:
+
+```json
+{
+  "bindings": [
+    {
+      "members": ["serviceAccount:telemetry-writer@wrack-control.iam.gserviceaccount.com"],
+      "role": "roles/bigquery.dataEditor"
+    }
+  ]
+}
 ```
 
-## Related Tickets
+---
 
-- **PEN-154**: Create BigQuery dataset and events table ✅ (this directory)
-- **PEN-155**: Create service account for telemetry writes (see `setup-iam.sh`)
-- **PEN-156**: Define event schemas and validation (see `shared/telemetry-types/`)
-- **PEN-158**: Create telemetry ingestion Cloud Function
+## CI/CD Integration
 
-## Troubleshooting
+The `deploy-bigquery` workflow (`.github/workflows/deploy-bigquery.yml`) runs `deploy.sh` automatically on pushes to `main` that touch `cloud/bigquery/**`. It uses the `GCP_SA_KEY` secret for authentication.
 
-### "Table already exists" error
-This is safe to ignore. The deployment is idempotent and will skip existing resources.
+IAM setup (`setup-iam.sh`) is a **one-time manual operation** — it is intentionally not part of the automated CI pipeline to avoid unintended key rotation. Re-run it manually only when:
+- Setting up a fresh GCP project
+- Rotating the service account key
 
-### "Permission denied" error
-Ensure your user/service account has these roles:
-- `roles/bigquery.dataEditor` (for tables)
-- `roles/bigquery.user` (for queries)
+---
 
-### "Partition filter required" error
-All queries must include a date filter:
-```sql
-WHERE DATE(timestamp) >= '2026-05-01'  -- Add this
-```
+## Smoke Test
 
-### Cost unexpectedly high
-Check for:
-- Queries without partition filters (scan entire table)
-- Queries without clustering filters (scan all partitions)
-- Streaming inserts vs. batch (batch is cheaper)
+After both scripts run successfully, validate end-to-end insertion:
 
-Run this to find expensive queries:
 ```bash
-bq ls -j -a -n 100  # Show recent jobs
+bash cloud/bigquery/test-insert.sh
 ```
-
-## Next Steps
-
-1. **PEN-155**: Run `setup-iam.sh` to create service account
-2. **PEN-156**: Define event schemas in `shared/telemetry-types/`
-3. **PEN-158**: Create Cloud Function for telemetry ingestion
-4. Test insertion and querying
-
-## Resources
-
-- [BigQuery Partitioning](https://cloud.google.com/bigquery/docs/partitioned-tables)
-- [BigQuery Clustering](https://cloud.google.com/bigquery/docs/clustered-tables)
-- [BigQuery Pricing](https://cloud.google.com/bigquery/pricing)
-- [JSON Functions](https://cloud.google.com/bigquery/docs/reference/standard-sql/json_functions)
