@@ -38,7 +38,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --store-in-secret-manager) STORE_IN_SECRET_MANAGER=true ;;
-    --key-file) KEY_FILE="$2"; shift ;;
+    --key-file)
+      if [[ $# -lt 2 || "$2" == -* ]]; then
+        echo "Error: --key-file requires a path argument" >&2
+        exit 1
+      fi
+      KEY_FILE="$2"
+      shift
+      ;;
     --dry-run) DRY_RUN=true ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac

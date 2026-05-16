@@ -14,6 +14,8 @@ Usage:
     ROLE    — IAM role URI, e.g. roles/bigquery.dataEditor
 """
 
+from __future__ import annotations
+
 import json
 import sys
 
