@@ -326,3 +326,6 @@ module.exports = {
   validateCommand,
   sendCommandToRobot
 };
+
+// Register the telemetry ingestion function alongside the robot control function.
+require('./telemetry');
