@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://wrack.io/schemas/telemetry/payload/error",
+  "title": "ErrorPayload",
+  "description": "Payload for error events: logged whenever an unhandled or significant error occurs in any Wrack component",
+  "type": "object",
+  "required": ["error_type", "message"],
+  "additionalProperties": false,
+  "properties": {
+    "error_type": {
+      "type": "string",
+      "description": "Machine-readable error category (e.g. 'device_error', 'network_error', 'validation_error')"
+    },
+    "error_code": {
+      "type": "string",
+      "description": "Short symbolic code identifying the specific error (e.g. 'MOTOR_STALL', 'TIMEOUT')",
+      "nullable": true
+    },
+    "message": {
+      "type": "string",
+      "description": "Human-readable error description"
+    },
+    "component": {
+      "type": "string",
+      "description": "Module or subsystem that raised the error (e.g. 'DeviceManager', 'TelemetrySender')",
+      "nullable": true
+    },
+    "stack_trace": {
+      "type": "string",
+      "description": "Full stack trace when available (may be omitted on MicroPython)",
+      "nullable": true
+    },
+    "context": {
+      "type": "object",
+      "description": "Additional structured data relevant to diagnosing the error",
+      "additionalProperties": true,
+      "nullable": true
+    }
+  }
+}

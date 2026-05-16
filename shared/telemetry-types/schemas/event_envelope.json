@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://wrack.io/schemas/telemetry/event_envelope",
+  "title": "TelemetryEventEnvelope",
+  "description": "Common envelope for all Wrack telemetry events",
+  "type": "object",
+  "required": ["event_id", "event_type", "source", "timestamp", "payload"],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique event identifier (UUID v4)"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "battery_status",
+        "command_received",
+        "command_executed",
+        "device_status",
+        "error",
+        "api_request",
+        "motor_status",
+        "sensor_reading",
+        "terrain_scan",
+        "connection_status"
+      ],
+      "description": "Discriminator field identifying the event kind"
+    },
+    "source": {
+      "type": "string",
+      "enum": ["ev3", "rpi", "cloud_functions", "web", "ios"],
+      "description": "System component that produced the event"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp of when the event occurred at the source"
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Session UUID grouping related events across a robot session",
+      "nullable": true
+    },
+    "device_id": {
+      "type": "string",
+      "description": "Unique device identifier (e.g. ev3-001, rpi-camera-01)",
+      "nullable": true
+    },
+    "payload": {
+      "type": "object",
+      "description": "Event-type-specific data; validated against the per-type payload schema"
+    },
+    "version": {
+      "type": "string",
+      "description": "Schema version for this event (e.g. '1.0')",
+      "nullable": true
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Arbitrary tags for grouping or filtering events",
+      "nullable": true
+    },
+    "user_id": {
+      "type": "string",
+      "description": "User identifier when applicable (no PII)",
+      "nullable": true
+    },
+    "correlation_id": {
+      "type": "string",
+      "description": "Tracing ID to correlate events across system components",
+      "nullable": true
+    }
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://wrack.io/schemas/telemetry/payload/device_status",
+  "title": "DeviceStatusPayload",
+  "description": "Payload for device_status events: logged when a hardware device connects, disconnects, or changes state",
+  "type": "object",
+  "required": ["device_name", "status"],
+  "additionalProperties": false,
+  "properties": {
+    "device_name": {
+      "type": "string",
+      "description": "Logical device name as reported by DeviceManager (e.g. 'drive_L', 'turret', 'ultrasonic')"
+    },
+    "device_type": {
+      "type": "string",
+      "enum": ["motor", "sensor", "controller", "unknown"],
+      "description": "Category of hardware device"
+    },
+    "port": {
+      "type": "string",
+      "description": "Physical EV3 port label (e.g. 'A', 'B', 'S1', 'S2')",
+      "nullable": true
+    },
+    "status": {
+      "type": "string",
+      "enum": ["connected", "disconnected", "error", "stalled", "initializing"],
+      "description": "Current device state"
+    },
+    "previous_status": {
+      "type": "string",
+      "enum": ["connected", "disconnected", "error", "stalled", "initializing", "unknown"],
+      "description": "Device state before this transition",
+      "nullable": true
+    },
+    "error_message": {
+      "type": "string",
+      "description": "Error detail when status is 'error'",
+      "nullable": true
+    }
+  }
+}

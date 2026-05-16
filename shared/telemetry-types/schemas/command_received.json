@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://wrack.io/schemas/telemetry/payload/command_received",
+  "title": "CommandReceivedPayload",
+  "description": "Payload for command_received events: logged when the EV3 receives a command from any controller",
+  "type": "object",
+  "required": ["command"],
+  "additionalProperties": false,
+  "properties": {
+    "command": {
+      "type": "string",
+      "description": "Name of the command received (e.g. 'forward', 'stop', 'turret_left')"
+    },
+    "params": {
+      "type": "object",
+      "description": "Command parameters as supplied by the caller (e.g. speed, duration)",
+      "additionalProperties": true,
+      "nullable": true
+    },
+    "controller_type": {
+      "type": "string",
+      "enum": ["ps4", "network_remote", "unknown"],
+      "description": "Input source that generated the command"
+    },
+    "received_at_ms": {
+      "type": "number",
+      "description": "EV3 local monotonic timestamp (ms) at which the command arrived, for latency analysis"
+    }
+  }
+}

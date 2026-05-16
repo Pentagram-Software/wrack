@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://wrack.io/schemas/telemetry/payload/command_executed",
+  "title": "CommandExecutedPayload",
+  "description": "Payload for command_executed events: logged after the EV3 finishes executing a command",
+  "type": "object",
+  "required": ["command", "success"],
+  "additionalProperties": false,
+  "properties": {
+    "command": {
+      "type": "string",
+      "description": "Name of the command that was executed"
+    },
+    "success": {
+      "type": "boolean",
+      "description": "Whether the command completed without error"
+    },
+    "duration_ms": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Wall-clock time in milliseconds from receipt to completion"
+    },
+    "error_message": {
+      "type": "string",
+      "description": "Human-readable error description when success is false",
+      "nullable": true
+    },
+    "params": {
+      "type": "object",
+      "description": "Resolved command parameters used during execution",
+      "additionalProperties": true,
+      "nullable": true
+    },
+    "controller_type": {
+      "type": "string",
+      "enum": ["ps4", "network_remote", "unknown"],
+      "description": "Input source that generated the original command"
+    }
+  }
+}

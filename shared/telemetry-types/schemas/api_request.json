@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://wrack.io/schemas/telemetry/payload/api_request",
+  "title": "ApiRequestPayload",
+  "description": "Payload for api_request events: logged by Cloud Functions for every robot control API call",
+  "type": "object",
+  "required": ["endpoint", "status_code", "latency_ms"],
+  "additionalProperties": false,
+  "properties": {
+    "endpoint": {
+      "type": "string",
+      "description": "Cloud Function name or HTTP path that handled the request (e.g. 'controlRobot')"
+    },
+    "method": {
+      "type": "string",
+      "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      "description": "HTTP method used"
+    },
+    "command": {
+      "type": "string",
+      "description": "Robot command extracted from the request body, when applicable",
+      "nullable": true
+    },
+    "status_code": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 599,
+      "description": "HTTP status code returned to the caller"
+    },
+    "latency_ms": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Total request handling time in milliseconds (Cloud Function wall time)"
+    },
+    "robot_response_time_ms": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Time spent waiting for the EV3 TCP response in milliseconds",
+      "nullable": true
+    },
+    "client_ip_hash": {
+      "type": "string",
+      "description": "SHA-256 hash of the caller IP address (no raw PII stored)",
+      "nullable": true
+    },
+    "error_message": {
+      "type": "string",
+      "description": "Error detail when status_code >= 400",
+      "nullable": true
+    }
+  }
+}
