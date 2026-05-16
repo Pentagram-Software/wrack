@@ -17,21 +17,78 @@ Client App → Cloud Function (HTTP/POST) → EV3 Robot (TCP/JSON)
 The Cloud Function receives HTTP POST requests with commands, validates authentication, enforces safety limits, forwards commands to the EV3 robot over TCP, and returns responses to the client.
 
 ### Key Components
-- **index.js**: Main Cloud Function handler - processes HTTP requests, validates commands, manages TCP connection to robot
-- **index.test.js**: Jest unit tests for the Cloud Function (covers authentication, command validation, dispatching, and error handling)
-- **auth.js**: API authentication logic using X-API-Key header
-- **robot-server.py**: Python server running on EV3 robot (separate device) - receives TCP commands and controls motors
-- **test-client.js**: Test utilities and client examples for development
+- **index.js**: Robot control Cloud Function (`controlRobot`) - processes HTTP requests, validates commands, manages TCP connection to robot. Also requires `telemetry.js` so both functions are registered.
+- **telemetry.js**: Telemetry ingestion Cloud Function (`telemetryIngestion`) - accepts batched events, validates schema, batch-inserts into BigQuery `wrack_telemetry.events`.
+- **index.test.js**: Jest unit tests for `controlRobot` (authentication, command validation, dispatching, error handling).
+- **telemetry.test.js**: Jest unit tests for `telemetryIngestion` (32 tests covering validation, BigQuery inserts, partial failures, auth).
+- **auth.js**: API authentication logic using X-API-Key header (shared by both functions).
+- **robot-server.py**: Python server running on EV3 robot (separate device) - receives TCP commands and controls motors.
+- **test-client.js**: Test utilities and client examples for development.
 
 ---
 
 ## API Specification
 
-### Endpoint
+### controlRobot endpoint
 **URL:** `https://europe-central2-[PROJECT-ID].cloudfunctions.net/controlRobot`
 **Method:** POST
 **Region:** europe-central2
 **Authentication:** API Key via `X-API-Key` header
+
+### telemetryIngestion endpoint
+**URL:** `https://europe-central2-[PROJECT-ID].cloudfunctions.net/telemetryIngestion`
+**Method:** POST
+**Region:** europe-central2
+**Authentication:** API Key via `X-API-Key` header
+
+**Request:**
+```json
+{
+  "events": [
+    {
+      "event_id": "uuid-v4",
+      "event_type": "battery_status",
+      "source": "ev3",
+      "timestamp": "2024-01-15T10:00:00.000Z",
+      "payload": { "voltage_mv": 7200, "percentage": 85 },
+      "device_id": "ev3-001",
+      "session_id": "sess-abc",
+      "version": "1.0.0",
+      "tags": ["production"],
+      "user_id": "user-1",
+      "correlation_id": "corr-1"
+    }
+  ]
+}
+```
+
+**Required event fields:** `event_id`, `event_type`, `source`, `timestamp` (ISO 8601), `payload` (object).
+**Optional event fields:** `device_id`, `session_id`, `version`, `tags` (string array), `user_id`, `correlation_id`.
+
+**Response (all inserted — HTTP 200):**
+```json
+{ "success": true, "inserted": 5, "failed": 0 }
+```
+
+**Response (partial — HTTP 207):**
+```json
+{
+  "success": false,
+  "inserted": 3,
+  "failed": 2,
+  "errors": [
+    { "index": 1, "event_id": "uuid-bad", "errors": ["event_type is required"] }
+  ]
+}
+```
+
+**Environment variables required:**
+```bash
+API_KEY=your-secure-api-key-here
+BIGQUERY_PROJECT_ID=wrack-control
+BIGQUERY_DATASET=wrack_telemetry
+BIGQUERY_TABLE=events            # optional, defaults to "events"
+```
 
 ### Request Format
 ```json
@@ -112,14 +169,18 @@ API_KEY=abc123def456ghi789jkl012mno345pq  # Authentication key
 ## Development Commands
 
 ```bash
+# Local dev servers
+npm start                   # Start controlRobot on port 8080
+npm run start:telemetry     # Start telemetryIngestion on port 8080
+
 # Deployment
-npm run deploy              # Deploy to Google Cloud Functions
-gcloud functions deploy controlRobot  # Direct gcloud deploy
-gcloud builds submit --config cloudbuild.yaml  # Cloud Build deploy
+npm run deploy              # Deploy controlRobot to GCP europe-central2
+npm run deploy:telemetry    # Deploy telemetryIngestion to GCP europe-central2
+gcloud builds submit --config cloudbuild.yaml  # Deploy both via Cloud Build
 
 # Testing
-npm run test-robot         # Test all robot commands
-npm test                   # Run unit tests
+npm run test-robot         # Test all robot commands (requires live robot)
+npm test                   # Run all 48 unit tests (Jest)
 npm run lint              # Code linting
 ```
 
