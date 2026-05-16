@@ -13,6 +13,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working in this
 | `clients/web/` | TypeScript | Next.js web controller |
 | `shared/video-protocol/` | Swift / TypeScript | UDP frame format spec + platform libs |
 | `samples/python-video-receiver/` | Python | macOS test receiver for video stream |
+| `cloud/bigquery/` | Bash / SQL / Python | BigQuery DDL, IAM setup, telemetry helpers |
+| `docs/data-tracking/` | Markdown | Telemetry architecture and IAM setup guides |
 
 Sub-components `clients/web/` and `cloud/functions/` have their own `CLAUDE.md` files with additional detail.
 
@@ -41,6 +43,16 @@ make deploy-cloud   # runs gcloud functions deploy
 
 # Deploy edge code to Raspberry Pi
 make deploy-edge    # rsync to pi@raspberrypi.local
+
+# BigQuery telemetry — deploy dataset + tables (PEN-100)
+GCP_PROJECT_ID=wrack-control bash cloud/bigquery/deploy.sh
+
+# BigQuery telemetry — create/configure telemetry-writer service account (PEN-155)
+GCP_PROJECT_ID=wrack-control bash cloud/bigquery/setup-iam.sh
+# See docs/data-tracking/setup-iam.md for full instructions and key-storage guidance
+
+# BigQuery IAM helper — unit tests
+python -m pytest cloud/bigquery/tests/ -v
 ```
 
 ## System Architecture
@@ -61,8 +73,10 @@ Raspberry Pi camera ──H.264 UDP chunks (port 9999)──► iOS App / Web / 
 
 ### Telemetry Path
 ```
-EV3 sensors ──► Raspberry Pi vision model ──► BigQuery
+EV3 sensors ──► Raspberry Pi vision model ──► BigQuery (wrack_telemetry dataset)
 ```
+- Dataset DDL in `cloud/bigquery/schemas/`; deploy with `cloud/bigquery/deploy.sh`.
+- IAM setup (service account `telemetry-writer`) via `cloud/bigquery/setup-iam.sh`; see `docs/data-tracking/setup-iam.md`.
 
 ## Web Client (`clients/web/`)
 
