@@ -23,8 +23,8 @@ Other components (robot firmware, Raspberry Pi edge, iOS app) require physical h
 
 ### Testing
 
-- **Robot controller** (Python): `cd robot/controller && source .venv/bin/activate && python -m pytest event_handler/tests/ robot_controllers/tests/ wake_word/tests/ error_reporting/tests/ -q`. The top-level `tests/` dir and `ev3_devices/tests/` have import issues (legacy module paths and missing pybricks mocks) that are pre-existing.
-- **Cloud functions** (Jest): `cd cloud/functions && npm test` — runs Jest unit tests covering authentication, command validation, dispatching, and error handling.
+- **Robot controller** (Python): `cd robot/controller && source .venv/bin/activate && python -m pytest event_handler/tests/ robot_controllers/tests/ wake_word/tests/ error_reporting/tests/ telemetry/tests/ -q`. The top-level `tests/` dir and `ev3_devices/tests/` have import issues (legacy module paths and missing pybricks mocks) that are pre-existing.
+- **Cloud functions** (Jest): `cd cloud/functions && npm test` — runs Jest unit tests covering authentication, command validation, dispatching, error handling, and telemetry event schema validation (`schemas.test.ts`).
 - Refer to `robot/controller/AGENTS.md` for Python-specific dev guidance.
 
 ### System dependencies

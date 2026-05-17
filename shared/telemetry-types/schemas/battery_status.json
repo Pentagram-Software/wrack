@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://wrack.io/schemas/telemetry/payload/battery_status",
+  "title": "BatteryStatusPayload",
+  "description": "Payload for battery_status events emitted by the EV3 on a periodic timer",
+  "type": "object",
+  "required": ["voltage_mv", "percentage"],
+  "additionalProperties": false,
+  "properties": {
+    "voltage_mv": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Battery voltage in millivolts"
+    },
+    "voltage_v": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Battery voltage in volts (derived from voltage_mv for readability)"
+    },
+    "current_ma": {
+      "type": "number",
+      "description": "Battery current draw in milliamps (negative = charging)"
+    },
+    "percentage": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Estimated remaining charge as a percentage"
+    },
+    "battery_type": {
+      "type": "string",
+      "enum": ["rechargeable", "alkaline", "unknown"],
+      "description": "Physical battery type installed"
+    },
+    "is_critical": {
+      "type": "boolean",
+      "description": "True when voltage is below the low-battery threshold"
+    }
+  }
+}
