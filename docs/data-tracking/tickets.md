@@ -47,7 +47,7 @@ This document defines the implementation tickets for the BigQuery data tracking 
 Set up the BigQuery infrastructure for telemetry data storage.
 
 **Acceptance Criteria**:
-- [ ] Dataset `wrack_telemetry` created in EU region
+- [ ] Dataset `wrack_telemetry` created in `europe-central2`
 - [ ] Events table created with proper schema (see `requirements.md`)
 - [ ] Table partitioned by `timestamp` (daily)
 - [ ] Table clustered by `source`, `event_type`

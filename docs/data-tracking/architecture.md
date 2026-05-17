@@ -254,7 +254,7 @@ class EventHandler:
 ```bash
 # Create dataset
 bq mk --dataset \
-  --location=EU \
+  --location=europe-central2 \
   --description="Wrack telemetry data" \
   wrack-control:wrack_telemetry
 
@@ -389,7 +389,7 @@ GROUP BY source, event_type, hour;
 
 ## Cost Estimation
 
-### BigQuery Costs (EU region)
+### BigQuery Costs (`europe-central2`)
 
 | Item | Estimate | Monthly Cost |
 |------|----------|--------------|

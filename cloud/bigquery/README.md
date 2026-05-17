@@ -74,7 +74,7 @@ cd cloud/bigquery
 ```
 
 The script will:
-1. Create the `wrack_telemetry` dataset in `europe-west3`
+1. Create the `wrack_telemetry` dataset in `europe-central2`
 2. Create the `events` table with partitioning and clustering
 3. Create analytical views
 4. Verify the deployment

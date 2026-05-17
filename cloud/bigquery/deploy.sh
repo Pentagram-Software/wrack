@@ -7,7 +7,7 @@ set -e
 # Configuration
 PROJECT_ID="${GCP_PROJECT_ID:-wrack-control}"
 DATASET="wrack_telemetry"
-LOCATION="europe-west3"  # EU region for data residency
+LOCATION="europe-central2"  # Match Cloud Functions region
 # bq mk --dataset --default_table_expiration expects SECONDS (not ms); see
 # https://cloud.google.com/bigquery/docs/reference/bq-cli-reference#bq_mk
 DEFAULT_TABLE_EXPIRATION_SEC=$((90 * 24 * 60 * 60)) # 90 days
