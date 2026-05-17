@@ -39,39 +39,33 @@
       "description": "ISO 8601 UTC timestamp of when the event occurred at the source"
     },
     "session_id": {
-      "type": "string",
-      "description": "Session UUID grouping related events across a robot session",
-      "nullable": true
+      "type": ["string", "null"],
+      "description": "Session UUID grouping related events across a robot session"
     },
     "device_id": {
-      "type": "string",
-      "description": "Unique device identifier (e.g. ev3-001, rpi-camera-01)",
-      "nullable": true
+      "type": ["string", "null"],
+      "description": "Unique device identifier (e.g. ev3-001, rpi-camera-01)"
     },
     "payload": {
       "type": "object",
       "description": "Event-type-specific data; validated against the per-type payload schema"
     },
     "version": {
-      "type": "string",
-      "description": "Schema version for this event (e.g. '1.0')",
-      "nullable": true
+      "type": ["string", "null"],
+      "description": "Schema version for this event (e.g. '1.0')"
     },
     "tags": {
-      "type": "array",
+      "type": ["array", "null"],
       "items": { "type": "string" },
-      "description": "Arbitrary tags for grouping or filtering events",
-      "nullable": true
+      "description": "Arbitrary tags for grouping or filtering events"
     },
     "user_id": {
-      "type": "string",
-      "description": "User identifier when applicable (no PII)",
-      "nullable": true
+      "type": ["string", "null"],
+      "description": "User identifier when applicable (no PII)"
     },
     "correlation_id": {
-      "type": "string",
-      "description": "Tracing ID to correlate events across system components",
-      "nullable": true
+      "type": ["string", "null"],
+      "description": "Tracing ID to correlate events across system components"
     }
   }
 }

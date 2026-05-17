@@ -21,15 +21,13 @@
       "description": "Wall-clock time in milliseconds from receipt to completion"
     },
     "error_message": {
-      "type": "string",
-      "description": "Human-readable error description when success is false",
-      "nullable": true
+      "type": ["string", "null"],
+      "description": "Human-readable error description when success is false"
     },
     "params": {
-      "type": "object",
+      "type": ["object", "null"],
       "description": "Resolved command parameters used during execution",
-      "additionalProperties": true,
-      "nullable": true
+      "additionalProperties": true
     },
     "controller_type": {
       "type": "string",

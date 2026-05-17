@@ -12,10 +12,9 @@
       "description": "Name of the command received (e.g. 'forward', 'stop', 'turret_left')"
     },
     "params": {
-      "type": "object",
+      "type": ["object", "null"],
       "description": "Command parameters as supplied by the caller (e.g. speed, duration)",
-      "additionalProperties": true,
-      "nullable": true
+      "additionalProperties": true
     },
     "controller_type": {
       "type": "string",

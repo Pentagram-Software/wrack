@@ -308,6 +308,20 @@ class TestCommandExecutedPayload:
             validate_payload("command_executed",
                              _command_executed_payload(duration_ms=-1))
 
+    def test_invalid_controller_type_raises(self):
+        with pytest.raises(ValidationError):
+            validate_payload("command_executed",
+                             _command_executed_payload(controller_type="gamepad"))
+
+    def test_valid_controller_types(self):
+        for ct in ("ps4", "network_remote", "unknown"):
+            validate_payload("command_executed",
+                             _command_executed_payload(controller_type=ct))
+
+    def test_null_controller_type_passes(self):
+        validate_payload("command_executed",
+                         _command_executed_payload(controller_type=None))
+
 
 # ---------------------------------------------------------------------------
 # device_status payload

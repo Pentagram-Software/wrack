@@ -17,9 +17,8 @@
       "description": "Category of hardware device"
     },
     "port": {
-      "type": "string",
-      "description": "Physical EV3 port label (e.g. 'A', 'B', 'S1', 'S2')",
-      "nullable": true
+      "type": ["string", "null"],
+      "description": "Physical EV3 port label (e.g. 'A', 'B', 'S1', 'S2')"
     },
     "status": {
       "type": "string",
@@ -27,15 +26,13 @@
       "description": "Current device state"
     },
     "previous_status": {
-      "type": "string",
-      "enum": ["connected", "disconnected", "error", "stalled", "initializing", "unknown"],
-      "description": "Device state before this transition",
-      "nullable": true
+      "type": ["string", "null"],
+      "enum": ["connected", "disconnected", "error", "stalled", "initializing", "unknown", null],
+      "description": "Device state before this transition"
     },
     "error_message": {
-      "type": "string",
-      "description": "Error detail when status is 'error'",
-      "nullable": true
+      "type": ["string", "null"],
+      "description": "Error detail when status is 'error'"
     }
   }
 }

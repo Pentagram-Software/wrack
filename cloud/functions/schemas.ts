@@ -330,6 +330,15 @@ export function validateCommandExecutedPayload(payload: unknown): ValidationResu
     }
   }
 
+  if (p.controller_type !== undefined && p.controller_type !== null) {
+    if (!(VALID_CONTROLLER_TYPES as readonly string[]).includes(p.controller_type as string)) {
+      errors.push({
+        field: 'payload.controller_type',
+        message: `Must be one of: ${VALID_CONTROLLER_TYPES.join(', ')}`,
+      });
+    }
+  }
+
   return { valid: errors.length === 0, errors };
 }
 

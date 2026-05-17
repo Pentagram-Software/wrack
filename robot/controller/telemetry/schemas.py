@@ -247,6 +247,12 @@ def _validate_command_executed_payload(payload: Any) -> List[str]:
         if not isinstance(duration, (int, float)) or duration < 0:
             errors.append("payload.duration_ms must be a non-negative number")
 
+    if "controller_type" in payload and payload["controller_type"] is not None:
+        if payload["controller_type"] not in VALID_CONTROLLER_TYPES:
+            errors.append(
+                f"payload.controller_type must be one of: {', '.join(VALID_CONTROLLER_TYPES)}"
+            )
+
     return errors
 
 

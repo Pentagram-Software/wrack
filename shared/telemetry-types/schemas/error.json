@@ -12,29 +12,25 @@
       "description": "Machine-readable error category (e.g. 'device_error', 'network_error', 'validation_error')"
     },
     "error_code": {
-      "type": "string",
-      "description": "Short symbolic code identifying the specific error (e.g. 'MOTOR_STALL', 'TIMEOUT')",
-      "nullable": true
+      "type": ["string", "null"],
+      "description": "Short symbolic code identifying the specific error (e.g. 'MOTOR_STALL', 'TIMEOUT')"
     },
     "message": {
       "type": "string",
       "description": "Human-readable error description"
     },
     "component": {
-      "type": "string",
-      "description": "Module or subsystem that raised the error (e.g. 'DeviceManager', 'TelemetrySender')",
-      "nullable": true
+      "type": ["string", "null"],
+      "description": "Module or subsystem that raised the error (e.g. 'DeviceManager', 'TelemetrySender')"
     },
     "stack_trace": {
-      "type": "string",
-      "description": "Full stack trace when available (may be omitted on MicroPython)",
-      "nullable": true
+      "type": ["string", "null"],
+      "description": "Full stack trace when available (may be omitted on MicroPython)"
     },
     "context": {
-      "type": "object",
+      "type": ["object", "null"],
       "description": "Additional structured data relevant to diagnosing the error",
-      "additionalProperties": true,
-      "nullable": true
+      "additionalProperties": true
     }
   }
 }

@@ -336,6 +336,20 @@ describe('validateCommandExecutedPayload', () => {
   test('zero duration_ms passes', () => {
     expect(validateCommandExecutedPayload(commandExecutedPayload({ duration_ms: 0 })).valid).toBe(true);
   });
+
+  test('invalid controller_type fails', () => {
+    expect(validateCommandExecutedPayload(commandExecutedPayload({ controller_type: 'gamepad' })).valid).toBe(false);
+  });
+
+  test('all valid controller_types pass', () => {
+    for (const ct of ['ps4', 'network_remote', 'unknown']) {
+      expect(validateCommandExecutedPayload(commandExecutedPayload({ controller_type: ct })).valid).toBe(true);
+    }
+  });
+
+  test('null controller_type passes', () => {
+    expect(validateCommandExecutedPayload(commandExecutedPayload({ controller_type: null })).valid).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
