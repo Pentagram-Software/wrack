@@ -12,6 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working in this
 | `clients/ios/` | Swift | iPhone robot control + H.264 video |
 | `clients/web/` | TypeScript | Next.js web controller |
 | `shared/video-protocol/` | Swift / TypeScript | UDP frame format spec + platform libs |
+| `shared/telemetry-types/` | TypeScript / Python / JSON | Telemetry event schemas, types, and validation utilities |
 | `samples/python-video-receiver/` | Python | macOS test receiver for video stream |
 | `cloud/bigquery/` | Bash / SQL / Python | BigQuery DDL, IAM setup, telemetry helpers |
 | `docs/data-tracking/` | Markdown | Telemetry architecture and IAM setup guides |
@@ -37,6 +38,12 @@ cd clients/web && npx vitest run src/path/to/file.test.ts
 
 # Web linting
 cd clients/web && npm run lint
+
+# Cloud functions tests (Jest — includes TypeScript schema tests)
+cd cloud/functions && npm test
+
+# Robot controller tests (Python — includes telemetry schema tests)
+cd robot/controller && source .venv/bin/activate && python -m pytest event_handler/tests/ robot_controllers/tests/ wake_word/tests/ error_reporting/tests/ telemetry/tests/ -q
 
 # Deploy GCP functions
 make deploy-cloud   # runs gcloud functions deploy
