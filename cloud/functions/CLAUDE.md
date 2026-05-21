@@ -17,10 +17,12 @@ Client App → Cloud Function (HTTP/POST) → EV3 Robot (TCP/JSON)
 The Cloud Function receives HTTP POST requests with commands, validates authentication, enforces safety limits, forwards commands to the EV3 robot over TCP, and returns responses to the client.
 
 ### Key Components
-- **index.js**: Robot control Cloud Function (`controlRobot`) - processes HTTP requests, validates commands, manages TCP connection to robot. Also requires `telemetry.js` so both functions are registered.
+- **index.js**: Robot control Cloud Function (`controlRobot`) - processes HTTP requests, validates commands, manages TCP connection to robot, emits `api_request` telemetry events. Also requires `telemetry.js` so both functions are registered.
+- **api-telemetry.js**: Fire-and-forget telemetry helper used by `controlRobot`. Builds `api_request` events and inserts them to BigQuery via `setImmediate` (non-blocking). Errors are swallowed so they cannot affect command execution.
 - **telemetry.js**: Telemetry ingestion Cloud Function (`telemetryIngestion`) - accepts batched events, validates schema, batch-inserts into BigQuery `wrack_telemetry.events`.
-- **index.test.js**: Jest unit tests for `controlRobot` (authentication, command validation, dispatching, error handling).
-- **telemetry.test.js**: Jest unit tests for `telemetryIngestion` (32 tests covering validation, BigQuery inserts, partial failures, auth).
+- **index.test.js**: Jest unit tests for `controlRobot` (authentication, command validation, dispatching, error handling, telemetry logging assertions).
+- **api-telemetry.test.js**: Jest unit tests for `api-telemetry.js` (sanitizeParams, buildApiRequestEvent, logApiRequest fire-and-forget behaviour, BigQuery error isolation).
+- **telemetry.test.js**: Jest unit tests for `telemetryIngestion` (validation, BigQuery inserts, partial failures, auth).
 - **auth.js**: API authentication logic using X-API-Key header (shared by both functions).
 - **robot-server.py**: Python server running on EV3 robot (separate device) - receives TCP commands and controls motors.
 - **test-client.js**: Test utilities and client examples for development.
@@ -180,7 +182,7 @@ gcloud builds submit --config cloudbuild.yaml  # Deploy both via Cloud Build
 
 # Testing
 npm run test-robot         # Test all robot commands (requires live robot)
-npm test                   # Run all 48 unit tests (Jest)
+npm test                   # Run all 175 unit tests (Jest — js + ts projects)
 npm run lint              # Code linting
 ```
 
