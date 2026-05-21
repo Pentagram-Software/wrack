@@ -219,6 +219,24 @@ describe('validateEvent()', () => {
     const { valid } = validateEvent({ ...validEvent, tags: [] });
     expect(valid).toBe(true);
   });
+
+  test('rejects null event without throwing', () => {
+    const { valid, errors } = validateEvent(null);
+    expect(valid).toBe(false);
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  test('rejects undefined event without throwing', () => {
+    const { valid, errors } = validateEvent(undefined);
+    expect(valid).toBe(false);
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  test('rejects array-typed event without throwing', () => {
+    const { valid, errors } = validateEvent([]);
+    expect(valid).toBe(false);
+    expect(errors.length).toBeGreaterThan(0);
+  });
 });
 
 // ─── prepareRow unit tests ───────────────────────────────────────────────────
@@ -459,6 +477,53 @@ describe('telemetryIngestion handler — mixed valid and invalid events', () => 
     expect(res.data.errors[0].event_id).toBe('evt-bad');
     expect(mockInsert).toHaveBeenCalledTimes(1);
     expect(mockInsert.mock.calls[0][0]).toHaveLength(1);
+  });
+});
+
+// ─── Null/undefined items in events array ────────────────────────────────────
+
+describe('telemetryIngestion handler — null/undefined items in events array', () => {
+  const validEvent = {
+    event_id: 'evt-null-test',
+    event_type: 'battery_status',
+    source: 'ev3',
+    timestamp: '2024-01-15T10:00:00.000Z',
+    payload: { voltage_mv: 7200 },
+  };
+
+  test('treats a null element as a validation failure, not a 500', async () => {
+    const req = makeReq({ body: { events: [null] } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.data.success).toBe(false);
+    expect(res.data.failed).toBe(1);
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  test('treats undefined element as a validation failure, not a 500', async () => {
+    // JSON.parse turns undefined array slots into null, so test with null sentinel
+    const req = makeReq({ body: { events: [undefined] } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.data.success).toBe(false);
+    expect(res.data.failed).toBe(1);
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  test('processes valid events alongside null elements, returning 207', async () => {
+    const req = makeReq({ body: { events: [validEvent, null] } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(207);
+    expect(res.data.success).toBe(false);
+    expect(res.data.inserted).toBe(1);
+    expect(res.data.failed).toBe(1);
+    expect(mockInsert).toHaveBeenCalledTimes(1);
   });
 });
 

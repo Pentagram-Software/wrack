@@ -37,6 +37,10 @@ function _resetBigQueryClient() {
 function validateEvent(event) {
   const errors = [];
 
+  if (event === null || event === undefined || typeof event !== 'object' || Array.isArray(event)) {
+    return { valid: false, errors: ['event must be a non-null object'] };
+  }
+
   if (!event.event_id || typeof event.event_id !== 'string' || !event.event_id.trim()) {
     errors.push('event_id is required and must be a non-empty string');
   }
@@ -134,7 +138,7 @@ functions.http('telemetryIngestion', (req, res) => {
       } else {
         validationFailures.push({
           index: i,
-          event_id: event.event_id || null,
+          event_id: (event != null && event.event_id) || null,
           errors,
         });
       }
