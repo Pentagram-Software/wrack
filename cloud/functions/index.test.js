@@ -472,6 +472,12 @@ describe('controlRobot Cloud Function', () => {
   });
 
   describe('Telemetry logging', () => {
+    afterEach(() => {
+      // Reset logApiRequest to a plain jest.fn() so that a mockImplementation
+      // set within one test (e.g. the "throws" test) does not leak into the next.
+      logApiRequest.mockReset();
+    });
+
     /**
      * Helper: run the handler and wait for the response JSON to be sent.
      * Returns the resolved response object.

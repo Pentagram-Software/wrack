@@ -28,7 +28,11 @@ const {
   _resetBqClient,
 } = require('./api-telemetry');
 
-beforeEach(() => {
+beforeEach(async () => {
+  // Drain any setImmediate callbacks queued by the previous test before
+  // resetting mocks, so stale callbacks don't inflate call counts.
+  await new Promise((resolve) => setImmediate(resolve));
+
   jest.clearAllMocks();
   _resetBqClient();
 

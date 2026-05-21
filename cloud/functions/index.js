@@ -200,15 +200,22 @@ functions.http('controlRobot', (req, res) => {
     function sendResponse(statusCode, body, { robotLatencyMs = null } = {}) {
       const totalLatencyMs = Date.now() - requestStart;
       const errorMessage = (body && body.error) || null;
-      logApiRequest({
-        command,
-        params,
-        statusCode,
-        totalLatencyMs,
-        robotLatencyMs,
-        clientIpHash,
-        errorMessage,
-      });
+      // Telemetry is best-effort: a thrown error must never prevent the HTTP
+      // response from being sent (acceptance criterion: logging errors must not
+      // affect command execution).
+      try {
+        logApiRequest({
+          command,
+          params,
+          statusCode,
+          totalLatencyMs,
+          robotLatencyMs,
+          clientIpHash,
+          errorMessage,
+        });
+      } catch (logErr) {
+        console.error('[controlRobot] Telemetry logging error (ignored):', logErr.message);
+      }
       return res.status(statusCode).json(body);
     }
 
@@ -224,7 +231,7 @@ functions.http('controlRobot', (req, res) => {
         return sendResponse(401, { error: authError.message });
       }
 
-      ({ command } = req.body);
+      command = req.body.command ?? null;
       params = req.body.params || {};
 
       if (!command) {
