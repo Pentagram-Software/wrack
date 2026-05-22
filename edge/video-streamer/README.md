@@ -5,6 +5,8 @@ A high-performance video streaming server for Raspberry Pi 5 with multiple strea
 ## 🚀 Features
 
 - **Multiple Streaming Protocols**:
+  - **WebRTC (aiortc)**: Browser-native real-time streaming with automatic
+    DTLS/SRTP encryption and RTP packetisation (< 500 ms target latency)
   - **UDP Streaming**: Low-latency, NAT-friendly chunked transmission
   - **TCP Streaming**: Reliable connection-based streaming
   - **HTTP/MJPEG**: Web browser compatible streaming
@@ -223,6 +225,55 @@ See [`UDP_Frame_Format_Documentation.md`](UDP_Frame_Format_Documentation.md) for
 - **Check network bandwidth**: Monitor with `iftop` or similar
 - **Optimize scene**: Reduce motion/complexity in camera view
 
+## 🌐 WebRTC Pipeline (PEN-56 / M3-1)
+
+The `webrtc_streamer.py` module provides the RTP/SRTP/DTLS pipeline required for
+browser-native real-time streaming.
+
+### Key classes
+
+| Class | Purpose |
+|-------|---------|
+| `FrameSource` | Abstract interface for video frame providers (enables DI) |
+| `Picamera2FrameSource` | Pi-hardware-backed source (Pi only) |
+| `H264VideoStreamTrack` | aiortc track; drives the 90 kHz RTP clock at configured FPS |
+| `WebRTCConfig` | STUN server URIs and bitrate bounds |
+| `WebRTCStreamer` | Manages `RTCPeerConnection` lifecycle; SDP offer/answer handler |
+
+### Security
+
+DTLS/SRTP is mandatory in WebRTC (RFC 5763 / RFC 5764).  aiortc generates a
+per-session X.509 certificate; its SHA-256 fingerprint appears as
+`a=fingerprint:` in every SDP answer.  Browsers verify this fingerprint before
+establishing the SRTP session.  No additional configuration is required.
+
+### Minimal integration example
+
+```python
+import asyncio
+from config import parse_stream_config
+from webrtc_streamer import WebRTCConfig, WebRTCStreamer, Picamera2FrameSource
+
+async def main():
+    config = parse_stream_config()
+    source = Picamera2FrameSource(config)
+    source.start()
+
+    streamer = WebRTCStreamer(
+        frame_source=source,
+        stream_config=config,
+        webrtc_config=WebRTCConfig(stun_servers=["stun:stun.l.google.com:19302"]),
+    )
+
+    # Receive sdp_offer from your signaling channel, then:
+    sdp_answer = await streamer.handle_offer(sdp_offer)
+    # Send sdp_answer back to the browser via the signaling channel.
+
+asyncio.run(main())
+```
+
+Signaling transport (WebSocket / HTTP) is handled by the M3-2 signaling server.
+
 ## ✅ Testing
 
 ### Option A: Virtual Environment (recommended on Raspberry Pi)
@@ -234,7 +285,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 
 pip install -r requirements.txt
-pytest -q
+pytest -q tests/
 ```
 
 ### Option B: System package
