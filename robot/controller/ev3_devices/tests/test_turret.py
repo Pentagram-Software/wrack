@@ -146,4 +146,89 @@ class TestTurret:
         self.turret.turn_right(90)
         self.turret.move_with_steering(100, 50)
 
+    # ------------------------------------------------------------------
+    # refresh_motor() tests (hot-plug support)
+    # ------------------------------------------------------------------
+
+    def test_refresh_motor_picks_up_new_device(self):
+        """After a reconnect the turret should use the new motor instance."""
+        old_motor = self.turret.turret_motor
+
+        # Simulate reconnect: device manager now has a brand-new motor object
+        new_motor = MockMotor(MockPort.C)
+        self.device_manager.devices["turret_motor"] = new_motor
+
+        self.turret.refresh_motor()
+
+        assert self.turret.turret_motor is new_motor
+        assert self.turret.turret_motor is not old_motor
+
+    def test_refresh_motor_homes_turret(self):
+        """refresh_motor should re-home the turret after picking up the new device."""
+        new_motor = MockMotor(MockPort.C)
+        new_motor._angle = 45  # Pretend turret is off-centre
+        self.device_manager.devices["turret_motor"] = new_motor
+
+        self.turret.refresh_motor()
+
+        # home_turret calls reset_angle(0), so angle should be reset
+        assert new_motor._angle == 0
+        assert self.turret.current_target_angle == 0
+
+    def test_refresh_motor_clears_reference_when_unavailable(self):
+        """If the motor is still unavailable after reconnect, turret_motor should be None."""
+        # Remove motor from device manager (still unavailable)
+        self.device_manager.devices["turret_motor"] = None
+        self.device_manager.available_devices.remove("turret_motor")
+
+        self.turret.refresh_motor()
+
+        assert self.turret.turret_motor is None
+
+    def test_refresh_motor_on_turret_with_no_motor(self):
+        """refresh_motor should work even if turret started without a motor."""
+        turret_no_motor = Turret(DeviceManager())
+        assert turret_no_motor.turret_motor is None
+
+        # Should not raise
+        turret_no_motor.refresh_motor()
+        assert turret_no_motor.turret_motor is None
+
+    def test_speed_control_works_after_motor_refresh(self):
+        """Turret should respond to speed_control after a refresh_motor call."""
+        new_motor = MockMotor(MockPort.C)
+        self.device_manager.devices["turret_motor"] = new_motor
+        self.turret.refresh_motor()
+
+        self.turret.speed_control(100, 0)  # Full right, outside deadzone
+        assert new_motor._speed == 360  # max_speed
+
+    def test_stop_works_after_motor_refresh(self):
+        """Turret stop should use the refreshed motor reference."""
+        new_motor = MockMotor(MockPort.C)
+        self.device_manager.devices["turret_motor"] = new_motor
+        self.turret.refresh_motor()
+
+        new_motor.run(200)  # set some speed
+        self.turret.stop()
+        assert new_motor._speed == 0
+        assert new_motor._running == False
+
+    def test_refresh_motor_without_device_manager(self):
+        """refresh_motor should be safe when device_manager is None."""
+        from ev3_devices import Turret as TurretClass
+        # Create a turret bypassing the normal init path
+        turret_no_dm = TurretClass.__new__(TurretClass)
+        turret_no_dm.device_manager = None
+        turret_no_dm.turret_motor = None
+        turret_no_dm.current_target_angle = 0
+        turret_no_dm.max_angle = 90
+        turret_no_dm.min_angle = -90
+        turret_no_dm.max_speed = 360
+
+        # Should not raise
+        turret_no_dm.refresh_motor()
+        assert turret_no_dm.turret_motor is None
+
+
 # Tests can be run with: pytest tests/test_turret_pytest.py 
