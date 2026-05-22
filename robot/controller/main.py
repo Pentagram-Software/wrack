@@ -133,6 +133,62 @@ else:
 # Print device status
 device_manager.print_device_status()
 
+# ---------------------------------------------------------------------------
+# Hot-plug monitoring
+# Checks every 1 s so devices come back within 1-2 s after reconnection.
+# ---------------------------------------------------------------------------
+
+def _on_hotplug_reconnect(device_name, status):
+    """
+    Called by PortMonitor when a device comes back online.
+    Re-initialises any higher-level subsystems that cache a reference to the
+    reconnected device so they start working again without a robot restart.
+    """
+    print("Hot-plug: '{}' reconnected on {}".format(
+        device_name, status.get('port', 'unknown')))
+
+    # Turret caches its motor reference at init time – refresh it.
+    if device_name == "turret_motor":
+        turret.refresh_motor()
+        print("Hot-plug: turret system refreshed")
+
+    # TankDriveSystem checks is_device_available() on every call so it
+    # resumes automatically; re-running initialize() keeps _is_initialized
+    # accurate for status queries.
+    if device_name in ("drive_L_motor", "drive_R_motor"):
+        tank_drive_system.initialize()
+        print("Hot-plug: tank drive system re-initialised")
+
+    # If TerrainScanner couldn't be created at boot (sensors were missing),
+    # try to create it now that a sensor has reconnected.
+    if device_name in ("us_sensor", "gyro_sensor"):
+        global terrain_scanner
+        if terrain_scanner is None and TerrainScanner and \
+                device_manager.are_devices_available(["us_sensor", "gyro_sensor"]):
+            try:
+                terrain_scanner = TerrainScanner(
+                    device_manager, tank_drive_system, ev3.speaker)
+                print("Hot-plug: TerrainScanner initialised after sensor reconnect")
+            except Exception as e:
+                print("Hot-plug: TerrainScanner init failed after reconnect: {}".format(e))
+
+
+def _on_hotplug_disconnect(device_name, status):
+    """Called by PortMonitor when a device is detected as disconnected."""
+    print("Hot-plug: '{}' disconnected from {}".format(
+        device_name, status.get('port', 'unknown')))
+
+
+# Register callbacks before enabling monitoring so they are queued and applied
+# immediately when the monitor thread starts.
+device_manager.register_reconnect_callback(_on_hotplug_reconnect)
+device_manager.register_disconnect_callback(_on_hotplug_disconnect)
+
+# Enable the background port monitor (1 s check interval → reconnect detected
+# within 1-2 s, satisfying the acceptance criteria).
+device_manager.enable_port_monitoring(check_interval=1.0)
+print("Hot-plug monitoring enabled (1 s check interval)")
+
 def test_device_management():
     """
     Test function to demonstrate device management capabilities.
