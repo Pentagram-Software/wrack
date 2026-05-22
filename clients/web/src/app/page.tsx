@@ -9,6 +9,8 @@ import TurretControls from '@/components/TurretControls';
 import SpeechControls from '@/components/SpeechControls';
 import ConnectionTest from '@/components/ConnectionTest';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import UserMenu from '@/components/UserMenu';
+import AuthGuard from '@/components/AuthGuard';
 
 export default function Home() {
   const [isCameraExpanded, setIsCameraExpanded] = useState(false);
@@ -21,16 +23,23 @@ export default function Home() {
             <h1 className="text-2xl font-bold text-primary">WRACK Control Center</h1>
             <p className="text-on-surface-variant text-sm mt-1">EV3 Mindstorms Device Management</p>
           </div>
-          <ThemeToggle />
+          <div className="flex items-center gap-3">
+            <ThemeToggle />
+            <UserMenu />
+          </div>
         </div>
       </header>
 
       <main className="flex h-[calc(100vh-80px)]">
         {/* Left Panel - EV3 Device Status */}
         <div className="w-1/2 bg-surface-container border-r border-outline-variant p-6 overflow-y-auto space-y-4">
-          <ConnectionTest />
-          <EV3StatusPanel />
-          <SpeechControls />
+          <AuthGuard permission="VIEW_STATUS">
+            <ConnectionTest />
+            <EV3StatusPanel />
+          </AuthGuard>
+          <AuthGuard permission="CONTROL_EV3">
+            <SpeechControls />
+          </AuthGuard>
         </div>
 
         {/* Right Panel - Map and Controls */}
@@ -43,10 +52,12 @@ export default function Home() {
           {/* Camera Section (Expandable) */}
           {isCameraExpanded && (
             <div className="h-1/2 bg-surface-container border-t border-outline-variant">
-              <CameraView 
-                onClose={() => setIsCameraExpanded(false)} 
-                isExpanded={true}
-              />
+              <AuthGuard permission="STREAM_VIDEO">
+                <CameraView 
+                  onClose={() => setIsCameraExpanded(false)} 
+                  isExpanded={true}
+                />
+              </AuthGuard>
             </div>
           )}
 
@@ -54,25 +65,31 @@ export default function Home() {
           <div className="bg-surface-container-high border-t border-outline-variant p-4">
             <div className="flex justify-between items-start space-x-6">
               {/* Camera Toggle Button */}
-              <button
-                onClick={() => setIsCameraExpanded(!isCameraExpanded)}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  isCameraExpanded 
-                    ? 'bg-error text-on-error hover:opacity-90' 
-                    : 'bg-primary text-on-primary hover:opacity-90'
-                }`}
-              >
-                {isCameraExpanded ? 'Hide Camera' : 'Show Camera'}
-              </button>
+              <AuthGuard permission="STREAM_VIDEO" fallback={null}>
+                <button
+                  onClick={() => setIsCameraExpanded(!isCameraExpanded)}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    isCameraExpanded 
+                      ? 'bg-error text-on-error hover:opacity-90' 
+                      : 'bg-primary text-on-primary hover:opacity-90'
+                  }`}
+                >
+                  {isCameraExpanded ? 'Hide Camera' : 'Show Camera'}
+                </button>
+              </AuthGuard>
 
               {/* Vehicle Controls */}
               <div className="flex-1 max-w-xs">
-                <VehicleControls />
+                <AuthGuard permission="CONTROL_EV3">
+                  <VehicleControls />
+                </AuthGuard>
               </div>
 
               {/* Turret Controls */}
               <div className="flex-1 max-w-xs">
-                <TurretControls />
+                <AuthGuard permission="CONTROL_EV3">
+                  <TurretControls />
+                </AuthGuard>
               </div>
             </div>
           </div>
