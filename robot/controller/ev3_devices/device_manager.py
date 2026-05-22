@@ -74,7 +74,11 @@ class DeviceManager:
         
         # Track disconnected devices that should ignore commands
         self._disconnected_devices = set()
-        
+
+        # Application-level callbacks queued before enable_port_monitoring() is called
+        self._pending_reconnect_callbacks = []
+        self._pending_disconnect_callbacks = []
+
     def try_init_device(self, device_type, port, device_name):
         """
         Try to initialize a device on a specific port.
@@ -622,6 +626,43 @@ class DeviceManager:
         
         return system_info
     
+
+    def register_reconnect_callback(self, callback):
+        """
+        Register a callback to be called when any device reconnects.
+
+        If port monitoring is already enabled the callback is registered
+        immediately.  If it has not been enabled yet, the callback is queued
+        and will be registered automatically when ``enable_port_monitoring()``
+        is called.
+
+        Args:
+            callback: Function with signature ``(device_name, status_dict)``
+        """
+        with self._device_lock:
+            self._pending_reconnect_callbacks.append(callback)
+            port_monitor = self._port_monitor
+
+        if port_monitor is not None:
+            port_monitor.on_reconnect(callback)
+
+    def register_disconnect_callback(self, callback):
+        """
+        Register a callback to be called when any device disconnects.
+
+        Behaves the same as ``register_reconnect_callback`` but for
+        disconnection events.
+
+        Args:
+            callback: Function with signature ``(device_name, status_dict)``
+        """
+        with self._device_lock:
+            self._pending_disconnect_callbacks.append(callback)
+            port_monitor = self._port_monitor
+
+        if port_monitor is not None:
+            port_monitor.on_disconnect(callback)
+
     def enable_port_monitoring(self, check_interval=1.0):
         """
         Enable port monitoring for device disconnect/reconnect detection.
@@ -659,10 +700,20 @@ class DeviceManager:
         for device_name, device_type, port in devices_to_register:
             self._port_monitor.register_device(device_name, device_type, port)
         
-        # Set up callbacks for disconnect/reconnect events
+        # Set up internal callbacks for disconnect/reconnect events
         self._port_monitor.on_disconnect(self._on_device_disconnect)
         self._port_monitor.on_reconnect(self._on_device_reconnect)
-        
+
+        # Register any application-level callbacks that were queued before monitoring started
+        with self._device_lock:
+            pending_reconnect = list(self._pending_reconnect_callbacks)
+            pending_disconnect = list(self._pending_disconnect_callbacks)
+
+        for cb in pending_reconnect:
+            self._port_monitor.on_reconnect(cb)
+        for cb in pending_disconnect:
+            self._port_monitor.on_disconnect(cb)
+
         # Start the monitoring thread
         self._port_monitor.start()
         
