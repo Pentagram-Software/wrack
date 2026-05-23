@@ -142,6 +142,18 @@ ROBOT_PORT=27700                     # Default EV3 server port
 API_KEY=<your-secure-api-key>       # Generate a strong random key
 ```
 
+#### Telemetry (BigQuery) — optional
+
+Telemetry is **disabled by default**. Set `BIGQUERY_PROJECT_ID` to enable it. If the variable is absent, all telemetry calls are silent no-ops and robot control is unaffected.
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `BIGQUERY_PROJECT_ID` | No (enables telemetry when set) | — | GCP project that owns the BigQuery dataset |
+| `BIGQUERY_DATASET` | No | `wrack_telemetry` | BigQuery dataset name |
+| `BIGQUERY_TABLE` | No | `events` | BigQuery table name |
+
+The Cloud Function uses the `telemetry-writer` service account (IAM setup in `cloud/bigquery/setup-iam.sh`) with `roles/bigquery.dataEditor` scoped to the dataset. In Cloud Functions, authentication uses the attached service account automatically; for local development, set `GOOGLE_APPLICATION_CREDENTIALS` to your key file path.
+
 ### Hardware Configuration
 
 Update `robot-server.py` if your motor/sensor ports differ:
@@ -379,6 +391,8 @@ curl -X POST https://europe-central2-yourproject.cloudfunctions.net/controlRobot
 mindstorms-cloud-controller/
 ├── index.js                 # Main Cloud Function handler
 ├── auth.js                  # API key authentication
+├── bigquery-client.js       # BigQuery wrapper (telemetry ingestion)
+├── schemas.ts               # Telemetry event schema validation (TypeScript)
 ├── robot-server.py          # EV3 Python server (deploy to robot)
 ├── test-client.js           # Test client for development
 ├── example_client.py        # Python example client
@@ -386,6 +400,7 @@ mindstorms-cloud-controller/
 ├── cloudbuild.yaml          # Cloud Build configuration
 ├── deploy.yaml              # Deployment configuration
 ├── Dockerfile               # Container configuration
+├── .env.example             # Environment variable reference
 ├── .gitignore               # Git ignore patterns
 ├── .gcloudignore            # GCloud ignore patterns
 ├── PROJECT_STATUS.md        # Detailed project status and roadmap
