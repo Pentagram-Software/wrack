@@ -19,7 +19,7 @@ Raspberry Pi ──UDP video──► iOS App                              │
 | `robot/controller/` | EV3 robot firmware + PS4 controller support | Python |
 | `edge/video-streamer/` | UDP video streamer running on Raspberry Pi | Python |
 | `edge/vision/` | Image analysis model on Raspberry Pi | Python |
-| `cloud/functions/` | GCP Cloud Functions | Python |
+| `cloud/functions/` | GCP Cloud Functions (controlRobot + telemetryIngestion) | Node.js |
 | `cloud/bigquery/` | BigQuery schemas and migrations | SQL |
 | `clients/ios/` | iPhone app — robot control + video stream | Swift |
 | `clients/web/` | Web controller — robot state, video, map | TypeScript |
