@@ -109,14 +109,25 @@ function _sleep(ms) {
  * Wraps `table.insert(rows)` with exponential-backoff retry for transient
  * errors.  PartialFailureErrors (schema/data issues on individual rows) are
  * not retried and are re-thrown immediately.
+ *
+ * Each row is sent using the {insertId, json} streaming-insert format so that
+ * retries are idempotent (BigQuery deduplicates within ~1 minute by insertId).
  */
 async function _insertWithRetry(rows) {
   const table = _getTable();
   let lastError;
 
+  // Wrap rows with insertId for idempotent retries.
+  // event_id is the stable per-event dedupe key; fall back to a timestamp-
+  // based key for events that lack one.
+  const rowsWithId = rows.map((row) => ({
+    insertId: row.event_id || `${row.event_type || 'evt'}-${Date.now()}`,
+    json: row,
+  }));
+
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      await table.insert(rows);
+      await table.insert(rowsWithId);
       return;
     } catch (err) {
       lastError = err;

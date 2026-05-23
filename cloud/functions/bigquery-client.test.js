@@ -217,17 +217,18 @@ describe('insertEvent()', () => {
     expect(mockInsert).toHaveBeenCalledTimes(1);
   });
 
-  test('passes formatted row to BigQuery table.insert', async () => {
+  test('passes formatted row to BigQuery table.insert wrapped with insertId', async () => {
     mockInsert.mockResolvedValueOnce(undefined);
 
     await insertEvent(VALID_EVENT);
 
     const [rows] = mockInsert.mock.calls[0];
     expect(rows).toHaveLength(1);
-    expect(rows[0].event_id).toBe(VALID_EVENT.event_id);
-    expect(rows[0].event_type).toBe(VALID_EVENT.event_type);
-    expect(typeof rows[0].payload).toBe('string');
-    expect(rows[0].ingested_at).toBeDefined();
+    expect(rows[0].insertId).toBe(VALID_EVENT.event_id);
+    expect(rows[0].json.event_id).toBe(VALID_EVENT.event_id);
+    expect(rows[0].json.event_type).toBe(VALID_EVENT.event_type);
+    expect(typeof rows[0].json.payload).toBe('string');
+    expect(rows[0].json.ingested_at).toBeDefined();
   });
 
   test('returns error result for null input', async () => {
