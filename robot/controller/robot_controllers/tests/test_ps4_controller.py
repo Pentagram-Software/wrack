@@ -192,6 +192,107 @@ class TestPS4Controller:
         # The PS5 DualSense entry comes first in the file, so event4 is returned
         assert result == "/dev/input/event4"
 
+    def test_find_controller_device_skips_ps5_touchpad_sub_device(self):
+        """find_controller_device() must not return the touchpad event node.
+
+        When a PS5 DualSense is connected via Bluetooth the Linux HID driver
+        exposes several separate input devices.  The touchpad sub-device has a
+        name like "DualSense Wireless Controller Touchpad" and its event node
+        must be skipped so that the main gamepad node is returned instead.
+        """
+        from robot_controllers.ps4_controller import find_controller_device
+
+        # Touchpad entry appears BEFORE the main gamepad entry – this was the
+        # failure mode reported in the Codex review.
+        proc_content = (
+            "I: Bus=0005 Vendor=054c Product=0ce6 Version=0100\n"
+            "N: Name=\"DualSense Wireless Controller Touchpad\"\n"
+            "H: Handlers=event3\n"
+            "B: EV=1b\n"
+            "\n"
+            "I: Bus=0005 Vendor=054c Product=0ce6 Version=0100\n"
+            "N: Name=\"DualSense Wireless Controller\"\n"
+            "H: Handlers=event4 js0\n"
+            "B: EV=1b\n"
+        )
+        with patch("builtins.open", mock_open(read_data=proc_content)):
+            result = find_controller_device()
+        # event3 (touchpad) must be skipped; event4 (gamepad) must be returned
+        assert result == "/dev/input/event4"
+
+    def test_find_controller_device_skips_ps4_touchpad_sub_device(self):
+        """find_controller_device() skips the PS4 touchpad event node."""
+        from robot_controllers.ps4_controller import find_controller_device
+
+        proc_content = (
+            "I: Bus=0005 Vendor=054c Product=05c4 Version=0100\n"
+            "N: Name=\"Sony Interactive Entertainment Wireless Controller Touchpad\"\n"
+            "H: Handlers=event2\n"
+            "B: EV=1b\n"
+            "\n"
+            "I: Bus=0005 Vendor=054c Product=05c4 Version=0100\n"
+            "N: Name=\"Sony Interactive Entertainment Wireless Controller\"\n"
+            "H: Handlers=event5 js0\n"
+            "B: EV=1b\n"
+        )
+        with patch("builtins.open", mock_open(read_data=proc_content)):
+            result = find_controller_device()
+        assert result == "/dev/input/event5"
+
+    def test_find_controller_device_skips_motion_sensors_sub_device(self):
+        """find_controller_device() skips motion-sensor sub-devices."""
+        from robot_controllers.ps4_controller import find_controller_device
+
+        proc_content = (
+            "I: Bus=0005 Vendor=054c Product=0ce6 Version=0100\n"
+            "N: Name=\"DualSense Wireless Controller Motion Sensors\"\n"
+            "H: Handlers=event6\n"
+            "B: EV=1b\n"
+            "\n"
+            "I: Bus=0005 Vendor=054c Product=0ce6 Version=0100\n"
+            "N: Name=\"DualSense Wireless Controller\"\n"
+            "H: Handlers=event7 js0\n"
+            "B: EV=1b\n"
+        )
+        with patch("builtins.open", mock_open(read_data=proc_content)):
+            result = find_controller_device()
+        assert result == "/dev/input/event7"
+
+    def test_find_controller_device_skips_all_non_gamepad_sub_devices(self):
+        """find_controller_device() skips touchpad AND motion-sensors, returns gamepad."""
+        from robot_controllers.ps4_controller import find_controller_device
+
+        # All three kernel sub-devices appear before the main gamepad
+        proc_content = (
+            "I: Bus=0005 Vendor=054c Product=0ce6 Version=0100\n"
+            "N: Name=\"DualSense Wireless Controller Touchpad\"\n"
+            "H: Handlers=event3\n"
+            "B: EV=1b\n"
+            "\n"
+            "I: Bus=0005 Vendor=054c Product=0ce6 Version=0100\n"
+            "N: Name=\"DualSense Wireless Controller Motion Sensors\"\n"
+            "H: Handlers=event4\n"
+            "B: EV=1b\n"
+            "\n"
+            "I: Bus=0005 Vendor=054c Product=0ce6 Version=0100\n"
+            "N: Name=\"DualSense Wireless Controller\"\n"
+            "H: Handlers=event5 js0\n"
+            "B: EV=1b\n"
+        )
+        with patch("builtins.open", mock_open(read_data=proc_content)):
+            result = find_controller_device()
+        assert result == "/dev/input/event5"
+
+    def test_excluded_device_keywords_constant_exists(self):
+        """EXCLUDED_DEVICE_KEYWORDS constant is defined and contains expected keywords."""
+        from robot_controllers.ps4_controller import EXCLUDED_DEVICE_KEYWORDS
+
+        assert isinstance(EXCLUDED_DEVICE_KEYWORDS, list)
+        assert len(EXCLUDED_DEVICE_KEYWORDS) > 0
+        keywords_lower = [kw.lower() for kw in EXCLUDED_DEVICE_KEYWORDS]
+        assert "touchpad" in keywords_lower
+        assert any("motion" in kw for kw in keywords_lower)
+
     def test_callback_registration_methods(self):
         """Test callback registration methods"""
         def test_callback(sender):

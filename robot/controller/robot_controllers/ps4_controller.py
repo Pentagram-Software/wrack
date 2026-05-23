@@ -39,13 +39,25 @@ KNOWN_CONTROLLER_NAMES = [
     "Wireless Controller",                                        # Generic fallback (PS4/PS5)
 ]
 
+# Sub-strings that identify non-gamepad input sub-devices exposed by the Linux
+# Bluetooth HID driver (touchpad, motion sensors, accelerometer).  These are
+# intentionally excluded so that find_controller_device() only returns the path
+# to the main gamepad event node and never the touchpad or IMU node.
+EXCLUDED_DEVICE_KEYWORDS = [
+    "touchpad",
+    "motion sensors",
+    "motion sensor",
+    "accelerometer",
+]
+
 
 def find_controller_device():
     """Scan /proc/bus/input/devices to find a connected PlayStation controller.
 
     Tries each name in KNOWN_CONTROLLER_NAMES (most-specific first) and returns
-    the first matching /dev/input/event* path.  Returns None when no device is
-    found or when the proc file cannot be read (e.g. in unit-test environments).
+    the first matching /dev/input/event* path.  Non-gamepad sub-devices (touchpad,
+    motion sensors) are explicitly skipped.  Returns None when no device is found
+    or when the proc file cannot be read (e.g. in unit-test environments).
     """
     try:
         with open("/proc/bus/input/devices", "r") as f:
@@ -69,8 +81,17 @@ def find_controller_device():
                             break
 
             if device_name and event_file:
+                device_name_lower = device_name.lower()
+
+                # Skip non-gamepad sub-devices (touchpad, IMU, etc.) before
+                # checking against KNOWN_CONTROLLER_NAMES.  Without this guard
+                # the substring check below would match e.g. "... Wireless
+                # Controller Touchpad" and return the wrong event node.
+                if any(kw in device_name_lower for kw in EXCLUDED_DEVICE_KEYWORDS):
+                    continue
+
                 for known_name in KNOWN_CONTROLLER_NAMES:
-                    if known_name.lower() in device_name.lower():
+                    if known_name.lower() in device_name_lower:
                         return event_file
 
     except Exception as e:
