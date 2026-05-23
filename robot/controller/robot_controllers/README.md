@@ -1,10 +1,11 @@
 # Robot Controllers Library
 
-A comprehensive library providing controller interfaces for robotics applications. Supports PS4 controllers and network remote control via TCP/IP.
+A comprehensive library providing controller interfaces for robotics applications. Supports PS4 DualShock 4 and PS5 DualSense controllers, as well as network remote control via TCP/IP.
 
 ## Features
 
-- **PS4 Controller Support**: Full PS4 DualShock controller integration
+- **PlayStation Controller Support**: Full PS4 DualShock 4 and PS5 DualSense integration via the same class and API. Both controllers share identical Linux evdev button/axis codes, so all actions work identically on either device.
+- **Automatic Controller Detection**: Scans `/proc/bus/input/devices` by device name to locate the correct `/dev/input/event*` file automatically — no hardcoded event numbers required.
 - **Network Remote Control**: TCP/IP based remote control with JSON commands
 - **Event-Driven Architecture**: Built on event handlers for responsive control
 - **Threaded Operation**: Non-blocking controller operation
@@ -25,12 +26,14 @@ pip install -e .
 
 ## Usage
 
-### PS4 Controller
+### PlayStation Controller (PS4 / PS5)
+
+`PS4Controller` supports both the PS4 DualShock 4 and the PS5 DualSense. The controller is detected automatically by scanning `/proc/bus/input/devices` for known Sony controller names, so no manual event-path configuration is needed.
 
 ```python
 from robot_controllers import PS4Controller
 
-# Initialize controller
+# Initialize controller — works with PS4 DualShock 4 and PS5 DualSense
 controller = PS4Controller()
 
 # Register event callbacks
@@ -116,7 +119,30 @@ if ps4.connect():
 remote.start()
 ```
 
-## PS4 Controller API
+## PlayStation Controller API (PS4 / PS5)
+
+### Button / Axis Compatibility
+
+Both controllers expose the same Linux evdev codes. The table below shows the mapping for quick reference:
+
+| Physical button | PS4 label | PS5 label | evdev code |
+|----------------|-----------|-----------|------------|
+| Cross (X)      | X         | Cross     | 304 (BTN_SOUTH) |
+| Circle         | Circle    | Circle    | 305 (BTN_EAST)  |
+| Triangle       | Triangle  | Triangle  | 307 (BTN_NORTH) |
+| Square         | Square    | Square    | 308 (BTN_WEST)  |
+| Left shoulder  | L1        | L1        | 310 (BTN_TL)    |
+| Right shoulder | R1        | R1        | 311 (BTN_TR)    |
+| Left trigger   | L2        | L2        | 312 (BTN_TL2)   |
+| Right trigger  | R2        | R2        | 313 (BTN_TR2)   |
+| Menu           | Options   | Options   | 315 (BTN_START) |
+| Share/Create   | Share     | Create    | 314 (BTN_SELECT)|
+| Left stick X   | —         | —         | ABS_X (0)       |
+| Left stick Y   | —         | —         | ABS_Y (1)       |
+| Right stick X  | —         | —         | ABS_RX (3)      |
+| Right stick Y  | —         | —         | ABS_RY (4)      |
+| D-pad H        | —         | —         | ABS_HAT0X (16)  |
+| D-pad V        | —         | —         | ABS_HAT0Y (17)  |
 
 ### Events
 
@@ -131,12 +157,15 @@ remote.start()
 - `onRightArrowPressed(callback)` - D-pad right press
 - `onUpArrowPressed(callback)` - D-pad up press
 - `onDownArrowPressed(callback)` - D-pad down press
+- `onLRArrowReleased(callback)` - D-pad left/right released
+- `onUDArrowReleased(callback)` - D-pad up/down released
 - `onL1Button(callback)` - L1 button press
 - `onR1Button(callback)` - R1 button press
+- `onL2Button(callback)` - L2 button press
+- `onR2Button(callback)` - R2 button press
 
 ### Methods
 
-- `connect()` - Connect to PS4 controller (returns True/False)
 - `is_connected()` - Check connection status
 - `start()` - Start controller thread
 - `stop()` - Stop controller thread
@@ -144,7 +173,7 @@ remote.start()
 ### Properties
 
 - `l_left`, `l_forward` - Left joystick values (-1000 to 1000)
-- `r_left`, `r_forward` - Right joystick values (-1000 to 1000)
+- `r_left`, `r_forward` - Right joystick values (-100 to 100)
 - `connected` - Connection status
 
 ## Network Remote Controller API
@@ -230,10 +259,10 @@ pytest tests/
 
 ## Hardware Requirements
 
-### PS4 Controller
-- PS4 DualShock controller
+### PlayStation Controller (PS4 / PS5)
+- PS4 DualShock 4 **or** PS5 DualSense controller
 - Bluetooth connection to EV3
-- Linux input device support
+- Linux input device support (kernel driver: `hid-sony` for PS4, `hid-playstation` for PS5)
 
 ### Network Remote Controller
 - Network connection (WiFi/Ethernet)

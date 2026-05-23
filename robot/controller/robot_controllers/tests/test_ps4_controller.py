@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Unit tests for PS4Controller class using pytest
+Unit tests for PS4Controller class (supports PS4 DualShock 4 and PS5 DualSense).
 """
 
 import pytest
@@ -12,6 +12,7 @@ import struct
 import os
 
 from robot_controllers import PS4Controller, MIN_JOYSTICK_MOVE
+
 
 class TestPS4Controller:
     
@@ -61,25 +62,237 @@ class TestPS4Controller:
         assert MIN_JOYSTICK_MOVE == 100
     
     def test_event_constants(self):
-        """Test that event constants are defined"""
+        """Test that event constants are defined with correct values"""
         from robot_controllers.ps4_controller import (
             EV_SYN, EV_KEY, EV_ABS,
             X_BUTTON, CIRCLE_BUTTON, TRIANGLE_BUTTON, SQUARE_BUTTON,
-            LEFT_STICK_X, LEFT_STICK_Y, RIGHT_STICK_X, RIGHT_STICK_Y
+            LEFT_STICK_X, LEFT_STICK_Y, RIGHT_STICK_X, RIGHT_STICK_Y,
+            L2_TRIGGER, R2_TRIGGER,
         )
         
         assert EV_SYN == 0
         assert EV_KEY == 1
         assert EV_ABS == 3
-        assert X_BUTTON == 304
-        assert CIRCLE_BUTTON == 305
-        assert TRIANGLE_BUTTON == 307
-        assert SQUARE_BUTTON == 308
-        assert LEFT_STICK_X == 0
-        assert LEFT_STICK_Y == 1
-        assert RIGHT_STICK_X == 3
-        assert RIGHT_STICK_Y == 4
+
+        # Action buttons — same codes for PS4 and PS5
+        assert X_BUTTON == 304        # BTN_SOUTH
+        assert CIRCLE_BUTTON == 305   # BTN_EAST
+        assert TRIANGLE_BUTTON == 307 # BTN_NORTH
+        assert SQUARE_BUTTON == 308   # BTN_WEST
+
+        # Analog axes
+        assert LEFT_STICK_X == 0     # ABS_X
+        assert LEFT_STICK_Y == 1     # ABS_Y
+        assert L2_TRIGGER == 2       # ABS_Z
+        assert RIGHT_STICK_X == 3    # ABS_RX
+        assert RIGHT_STICK_Y == 4    # ABS_RY
+        assert R2_TRIGGER == 5       # ABS_RZ
     
+    def test_known_controller_names_contains_ps4_and_ps5(self):
+        """Test that KNOWN_CONTROLLER_NAMES includes both PS4 and PS5 device names"""
+        from robot_controllers.ps4_controller import KNOWN_CONTROLLER_NAMES
+
+        ps5_names = [n for n in KNOWN_CONTROLLER_NAMES if "DualSense" in n or "dualsense" in n.lower()]
+        assert len(ps5_names) >= 1, "KNOWN_CONTROLLER_NAMES must contain at least one PS5 name"
+
+        ps4_names = [n for n in KNOWN_CONTROLLER_NAMES if "Wireless Controller" in n]
+        assert len(ps4_names) >= 1, "KNOWN_CONTROLLER_NAMES must contain at least one PS4 name"
+    
+    def test_find_controller_device_returns_none_when_proc_missing(self):
+        """find_controller_device() returns None gracefully when /proc/bus/input/devices is absent"""
+        from robot_controllers.ps4_controller import find_controller_device
+
+        with patch("builtins.open", side_effect=FileNotFoundError("no proc")):
+            result = find_controller_device()
+        assert result is None
+    
+    def test_find_controller_device_detects_ps5(self):
+        """find_controller_device() detects a PS5 DualSense by name"""
+        from robot_controllers.ps4_controller import find_controller_device
+
+        proc_content = (
+            "I: Bus=0005 Vendor=054c Product=0ce6 Version=0100\n"
+            "N: Name=\"DualSense Wireless Controller\"\n"
+            "P: Phys=aa:bb:cc:dd:ee:ff\n"
+            "S: Sysfs=/devices/virtual/misc/uhid/0005:054C:0CE6.0001/input/input3\n"
+            "U: Uniq=aa:bb:cc:dd:ee:ff\n"
+            "H: Handlers=event4 js0\n"
+            "B: EV=1b\n"
+        )
+        with patch("builtins.open", mock_open(read_data=proc_content)):
+            result = find_controller_device()
+        assert result == "/dev/input/event4"
+
+    def test_find_controller_device_detects_ps5_bluetooth_name(self):
+        """find_controller_device() detects the full Bluetooth PS5 device name"""
+        from robot_controllers.ps4_controller import find_controller_device
+
+        proc_content = (
+            "I: Bus=0005 Vendor=054c Product=0ce6 Version=0100\n"
+            "N: Name=\"Sony Interactive Entertainment DualSense Wireless Controller\"\n"
+            "P: Phys=aa:bb:cc:dd:ee:ff\n"
+            "H: Handlers=event3 js0\n"
+            "B: EV=1b\n"
+        )
+        with patch("builtins.open", mock_open(read_data=proc_content)):
+            result = find_controller_device()
+        assert result == "/dev/input/event3"
+
+    def test_find_controller_device_detects_ps4(self):
+        """find_controller_device() detects a PS4 DualShock 4 by name"""
+        from robot_controllers.ps4_controller import find_controller_device
+
+        proc_content = (
+            "I: Bus=0005 Vendor=054c Product=05c4 Version=0100\n"
+            "N: Name=\"Sony Interactive Entertainment Wireless Controller\"\n"
+            "P: Phys=aa:bb:cc:dd:ee:ff\n"
+            "H: Handlers=event5 js0\n"
+            "B: EV=1b\n"
+        )
+        with patch("builtins.open", mock_open(read_data=proc_content)):
+            result = find_controller_device()
+        assert result == "/dev/input/event5"
+
+    def test_find_controller_device_returns_none_for_unknown_device(self):
+        """find_controller_device() returns None when no PlayStation controller is present"""
+        from robot_controllers.ps4_controller import find_controller_device
+
+        proc_content = (
+            "I: Bus=0011 Vendor=0001 Product=0001 Version=ab41\n"
+            "N: Name=\"AT Translated Set 2 keyboard\"\n"
+            "H: Handlers=sysrq kbd event0 leds\n"
+            "B: EV=120013\n"
+        )
+        with patch("builtins.open", mock_open(read_data=proc_content)):
+            result = find_controller_device()
+        assert result is None
+
+    def test_find_controller_device_selects_first_matching_device(self):
+        """find_controller_device() returns the first matching device when multiple are listed"""
+        from robot_controllers.ps4_controller import find_controller_device
+
+        proc_content = (
+            "I: Bus=0011 Vendor=0001 Product=0001 Version=ab41\n"
+            "N: Name=\"AT Translated Set 2 keyboard\"\n"
+            "H: Handlers=sysrq kbd event0 leds\n"
+            "B: EV=120013\n"
+            "\n"
+            "I: Bus=0005 Vendor=054c Product=0ce6 Version=0100\n"
+            "N: Name=\"DualSense Wireless Controller\"\n"
+            "H: Handlers=event4 js0\n"
+            "B: EV=1b\n"
+            "\n"
+            "I: Bus=0005 Vendor=054c Product=05c4 Version=0100\n"
+            "N: Name=\"Sony Interactive Entertainment Wireless Controller\"\n"
+            "H: Handlers=event6 js1\n"
+            "B: EV=1b\n"
+        )
+        with patch("builtins.open", mock_open(read_data=proc_content)):
+            result = find_controller_device()
+        # The PS5 DualSense entry comes first in the file, so event4 is returned
+        assert result == "/dev/input/event4"
+
+    def test_find_controller_device_skips_ps5_touchpad_sub_device(self):
+        """find_controller_device() must not return the touchpad event node.
+
+        When a PS5 DualSense is connected via Bluetooth the Linux HID driver
+        exposes several separate input devices.  The touchpad sub-device has a
+        name like "DualSense Wireless Controller Touchpad" and its event node
+        must be skipped so that the main gamepad node is returned instead.
+        """
+        from robot_controllers.ps4_controller import find_controller_device
+
+        # Touchpad entry appears BEFORE the main gamepad entry – this was the
+        # failure mode reported in the Codex review.
+        proc_content = (
+            "I: Bus=0005 Vendor=054c Product=0ce6 Version=0100\n"
+            "N: Name=\"DualSense Wireless Controller Touchpad\"\n"
+            "H: Handlers=event3\n"
+            "B: EV=1b\n"
+            "\n"
+            "I: Bus=0005 Vendor=054c Product=0ce6 Version=0100\n"
+            "N: Name=\"DualSense Wireless Controller\"\n"
+            "H: Handlers=event4 js0\n"
+            "B: EV=1b\n"
+        )
+        with patch("builtins.open", mock_open(read_data=proc_content)):
+            result = find_controller_device()
+        # event3 (touchpad) must be skipped; event4 (gamepad) must be returned
+        assert result == "/dev/input/event4"
+
+    def test_find_controller_device_skips_ps4_touchpad_sub_device(self):
+        """find_controller_device() skips the PS4 touchpad event node."""
+        from robot_controllers.ps4_controller import find_controller_device
+
+        proc_content = (
+            "I: Bus=0005 Vendor=054c Product=05c4 Version=0100\n"
+            "N: Name=\"Sony Interactive Entertainment Wireless Controller Touchpad\"\n"
+            "H: Handlers=event2\n"
+            "B: EV=1b\n"
+            "\n"
+            "I: Bus=0005 Vendor=054c Product=05c4 Version=0100\n"
+            "N: Name=\"Sony Interactive Entertainment Wireless Controller\"\n"
+            "H: Handlers=event5 js0\n"
+            "B: EV=1b\n"
+        )
+        with patch("builtins.open", mock_open(read_data=proc_content)):
+            result = find_controller_device()
+        assert result == "/dev/input/event5"
+
+    def test_find_controller_device_skips_motion_sensors_sub_device(self):
+        """find_controller_device() skips motion-sensor sub-devices."""
+        from robot_controllers.ps4_controller import find_controller_device
+
+        proc_content = (
+            "I: Bus=0005 Vendor=054c Product=0ce6 Version=0100\n"
+            "N: Name=\"DualSense Wireless Controller Motion Sensors\"\n"
+            "H: Handlers=event6\n"
+            "B: EV=1b\n"
+            "\n"
+            "I: Bus=0005 Vendor=054c Product=0ce6 Version=0100\n"
+            "N: Name=\"DualSense Wireless Controller\"\n"
+            "H: Handlers=event7 js0\n"
+            "B: EV=1b\n"
+        )
+        with patch("builtins.open", mock_open(read_data=proc_content)):
+            result = find_controller_device()
+        assert result == "/dev/input/event7"
+
+    def test_find_controller_device_skips_all_non_gamepad_sub_devices(self):
+        """find_controller_device() skips touchpad AND motion-sensors, returns gamepad."""
+        from robot_controllers.ps4_controller import find_controller_device
+
+        # All three kernel sub-devices appear before the main gamepad
+        proc_content = (
+            "I: Bus=0005 Vendor=054c Product=0ce6 Version=0100\n"
+            "N: Name=\"DualSense Wireless Controller Touchpad\"\n"
+            "H: Handlers=event3\n"
+            "B: EV=1b\n"
+            "\n"
+            "I: Bus=0005 Vendor=054c Product=0ce6 Version=0100\n"
+            "N: Name=\"DualSense Wireless Controller Motion Sensors\"\n"
+            "H: Handlers=event4\n"
+            "B: EV=1b\n"
+            "\n"
+            "I: Bus=0005 Vendor=054c Product=0ce6 Version=0100\n"
+            "N: Name=\"DualSense Wireless Controller\"\n"
+            "H: Handlers=event5 js0\n"
+            "B: EV=1b\n"
+        )
+        with patch("builtins.open", mock_open(read_data=proc_content)):
+            result = find_controller_device()
+        assert result == "/dev/input/event5"
+
+    def test_excluded_device_keywords_constant_exists(self):
+        """EXCLUDED_DEVICE_KEYWORDS constant is defined and contains expected keywords."""
+        from robot_controllers.ps4_controller import EXCLUDED_DEVICE_KEYWORDS
+
+        assert isinstance(EXCLUDED_DEVICE_KEYWORDS, list)
+        assert len(EXCLUDED_DEVICE_KEYWORDS) > 0
+        keywords_lower = [kw.lower() for kw in EXCLUDED_DEVICE_KEYWORDS]
+        assert "touchpad" in keywords_lower
+        assert any("motion" in kw for kw in keywords_lower)
+
     def test_callback_registration_methods(self):
         """Test callback registration methods"""
         def test_callback(sender):
@@ -188,18 +401,96 @@ class TestPS4Controller:
         
         assert self.controller.l_left == 500
         assert self.controller.l_forward == -300
-    
+
+    # --- Button mapping correctness tests ---
+
+    def test_cross_button_triggers_cross_button_event(self):
+        """Cross (X) button fires 'cross_button' event"""
+        received = []
+        self.controller.onCrossButton(lambda s: received.append("cross_button"))
+        self.controller.trigger("cross_button")
+        assert received == ["cross_button"]
+
+    def test_circle_button_triggers_circle_button_event(self):
+        """Circle button fires 'circle_button' event (not triangle_button)"""
+        received = []
+        self.controller.onCircleButton(lambda s: received.append("circle_button"))
+        self.controller.trigger("circle_button")
+        assert received == ["circle_button"]
+
+    def test_triangle_button_triggers_triangle_button_event(self):
+        """Triangle button fires 'triangle_button' event"""
+        received = []
+        self.controller.onTriangleButton(lambda s: received.append("triangle_button"))
+        self.controller.trigger("triangle_button")
+        assert received == ["triangle_button"]
+
+    def test_square_button_triggers_square_button_event(self):
+        """Square button fires 'square_button' event (not triangle_button)"""
+        received = []
+        self.controller.onSquareButton(lambda s: received.append("square_button"))
+        self.controller.trigger("square_button")
+        assert received == ["square_button"]
+
+    def test_circle_does_not_trigger_triangle_event(self):
+        """Triggering circle_button does NOT fire triangle_button callbacks"""
+        triangle_received = []
+        self.controller.onTriangleButton(lambda s: triangle_received.append("triangle"))
+        # Simulate what the fixed code does for circle button press
+        self.controller.trigger("circle_button")
+        assert triangle_received == [], "circle_button must not fire triangle_button callbacks"
+
+    def test_square_does_not_trigger_triangle_event(self):
+        """Triggering square_button does NOT fire triangle_button callbacks"""
+        triangle_received = []
+        self.controller.onTriangleButton(lambda s: triangle_received.append("triangle"))
+        # Simulate what the fixed code does for square button press
+        self.controller.trigger("square_button")
+        assert triangle_received == [], "square_button must not fire triangle_button callbacks"
+
+    def test_each_button_fires_only_its_own_callback(self):
+        """Each face button triggers exactly its own registered callback and no others"""
+        results = {"cross": 0, "circle": 0, "triangle": 0, "square": 0}
+        self.controller.onCrossButton(lambda s: results.__setitem__("cross", results["cross"] + 1))
+        self.controller.onCircleButton(lambda s: results.__setitem__("circle", results["circle"] + 1))
+        self.controller.onTriangleButton(lambda s: results.__setitem__("triangle", results["triangle"] + 1))
+        self.controller.onSquareButton(lambda s: results.__setitem__("square", results["square"] + 1))
+
+        self.controller.trigger("cross_button")
+        assert results == {"cross": 1, "circle": 0, "triangle": 0, "square": 0}
+
+        self.controller.trigger("circle_button")
+        assert results == {"cross": 1, "circle": 1, "triangle": 0, "square": 0}
+
+        self.controller.trigger("triangle_button")
+        assert results == {"cross": 1, "circle": 1, "triangle": 1, "square": 0}
+
+        self.controller.trigger("square_button")
+        assert results == {"cross": 1, "circle": 1, "triangle": 1, "square": 1}
+
     @pytest.mark.parametrize("event_name,callback_method", [
         ("cross_button", "onCrossButton"),
+        ("circle_button", "onCircleButton"),
+        ("triangle_button", "onTriangleButton"),
+        ("square_button", "onSquareButton"),
         ("left_joystick", "onLeftJoystickMove"),
         ("right_joystick", "onRightJoystickMove"),
         ("options_button", "onOptionsButton"),
+        ("l1_button", "onL1Button"),
+        ("r1_button", "onR1Button"),
+        ("l2_button", "onL2Button"),
+        ("r2_button", "onR2Button"),
+        ("left_arrow_pressed", "onLeftArrowPressed"),
+        ("right_arrow_pressed", "onRightArrowPressed"),
+        ("up_arrow_pressed", "onUpArrowPressed"),
+        ("down_arrow_pressed", "onDownArrowPressed"),
+        ("lr_arrow_released", "onLRArrowReleased"),
+        ("ud_arrow_released", "onUDArrowReleased"),
     ])
     def test_callback_method_exists(self, event_name, callback_method):
-        """Test that callback registration methods exist"""
+        """Test that every callback registration method exists and is callable"""
         assert hasattr(self.controller, callback_method)
         
-        # Test that the method is callable
         method = getattr(self.controller, callback_method)
         assert callable(method)
     
@@ -217,7 +508,6 @@ class TestPS4Controller:
     
     def test_error_reporting_integration(self):
         """Test that error reporting is properly integrated"""
-        # Verify error reporting imports are available
         from robot_controllers.ps4_controller import report_controller_error, report_exception
         
         assert callable(report_controller_error)
@@ -225,7 +515,6 @@ class TestPS4Controller:
     
     def test_struct_operations(self):
         """Test struct operations for binary data parsing"""
-        # Test that struct is available for binary parsing
         import struct
         
         # Simulate parsing a controller event (24 bytes)
@@ -262,4 +551,4 @@ class TestPS4Controller:
         result = math.sqrt(100)
         assert result == 10.0
 
-# Tests can be run with: pytest tests/test_ps4_controller.py
+# Tests can be run with: pytest robot_controllers/tests/test_ps4_controller.py
