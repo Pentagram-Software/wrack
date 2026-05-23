@@ -37,6 +37,7 @@ const {
   insertEvents,
   _formatRow,
   _isRetryableError,
+  _isRetryableReason,
   _resetClient,
   _setSleepFn,
 } = require('./bigquery-client');
@@ -261,6 +262,52 @@ describe('_isRetryableError()', () => {
   });
 });
 
+// ─── _isRetryableReason() ────────────────────────────────────────────────────
+
+describe('_isRetryableReason()', () => {
+  test.each(['backendError', 'backenderror', 'BACKENDERROR'])(
+    'returns true for backendError (case-insensitive): %s',
+    (reason) => {
+      expect(_isRetryableReason(reason)).toBe(true);
+    }
+  );
+
+  test.each(['rateLimitExceeded', 'ratelimitexceeded'])(
+    'returns true for rateLimitExceeded (case-insensitive): %s',
+    (reason) => {
+      expect(_isRetryableReason(reason)).toBe(true);
+    }
+  );
+
+  test('returns true for internalError', () => {
+    expect(_isRetryableReason('internalError')).toBe(true);
+  });
+
+  test('returns true for unavailable', () => {
+    expect(_isRetryableReason('unavailable')).toBe(true);
+  });
+
+  test('returns false for invalid', () => {
+    expect(_isRetryableReason('invalid')).toBe(false);
+  });
+
+  test('returns false for stopped', () => {
+    expect(_isRetryableReason('stopped')).toBe(false);
+  });
+
+  test('returns false for null', () => {
+    expect(_isRetryableReason(null)).toBe(false);
+  });
+
+  test('returns false for undefined', () => {
+    expect(_isRetryableReason(undefined)).toBe(false);
+  });
+
+  test('returns false for empty string', () => {
+    expect(_isRetryableReason('')).toBe(false);
+  });
+});
+
 // ─── insertEvent() ───────────────────────────────────────────────────────────
 
 describe('insertEvent() — disabled client', () => {
@@ -301,26 +348,27 @@ describe('insertEvent() — successful insert', () => {
     expect(result.error).toBeUndefined();
   });
 
-  test('calls BigQuery insert with one row', async () => {
+  test('calls BigQuery insert with one row wrapped in {insertId, json}', async () => {
     await insertEvent(validEvent);
     expect(mockInsert).toHaveBeenCalledTimes(1);
     const rows = mockInsert.mock.calls[0][0];
     expect(rows).toHaveLength(1);
-    expect(rows[0].event_id).toBe(validEvent.event_id);
+    expect(rows[0].insertId).toBe(validEvent.event_id);
+    expect(rows[0].json.event_id).toBe(validEvent.event_id);
   });
 
   test('row sent to BigQuery has payload as JSON string', async () => {
     await insertEvent(validEvent);
     const rows = mockInsert.mock.calls[0][0];
-    expect(typeof rows[0].payload).toBe('string');
-    expect(JSON.parse(rows[0].payload)).toEqual(validEvent.payload);
+    expect(typeof rows[0].json.payload).toBe('string');
+    expect(JSON.parse(rows[0].json.payload)).toEqual(validEvent.payload);
   });
 
   test('row sent to BigQuery includes ingested_at', async () => {
     await insertEvent(validEvent);
     const rows = mockInsert.mock.calls[0][0];
-    expect(rows[0].ingested_at).toBeDefined();
-    expect(new Date(rows[0].ingested_at).getTime()).not.toBeNaN();
+    expect(rows[0].json.ingested_at).toBeDefined();
+    expect(new Date(rows[0].json.ingested_at).getTime()).not.toBeNaN();
   });
 });
 
@@ -352,14 +400,52 @@ describe('insertEvent() — PartialFailureError', () => {
     expect(result.errors[0].errors[0]).toMatch(/Required field missing/);
   });
 
-  test('does not retry on PartialFailureError', async () => {
+  test('does not retry on PartialFailureError with non-retryable reasons', async () => {
     const partialError = new Error('PartialFailureError');
     partialError.name = 'PartialFailureError';
-    partialError.errors = [];
+    partialError.errors = [
+      { row: { event_id: 'evt-partial' }, errors: [{ reason: 'invalid', message: 'bad field' }] },
+    ];
     mockInsert = jest.fn().mockRejectedValue(partialError);
 
     await insertEvent(validEvent);
     expect(mockInsert).toHaveBeenCalledTimes(1);
+  });
+
+  test('retries row with retryable PartialFailureError reason (backendError)', async () => {
+    const partialError = new Error('PartialFailureError');
+    partialError.name = 'PartialFailureError';
+    partialError.errors = [
+      {
+        row: { event_id: 'evt-partial' },
+        errors: [{ reason: 'backendError', message: 'transient backend error' }],
+      },
+    ];
+    mockInsert = jest.fn()
+      .mockRejectedValueOnce(partialError)
+      .mockResolvedValue([]);
+
+    const result = await insertEvent(validEvent);
+    expect(mockInsert).toHaveBeenCalledTimes(2);
+    expect(result.success).toBe(true);
+  });
+
+  test('retries row with retryable PartialFailureError reason (rateLimitExceeded)', async () => {
+    const partialError = new Error('PartialFailureError');
+    partialError.name = 'PartialFailureError';
+    partialError.errors = [
+      {
+        row: { event_id: 'evt-partial' },
+        errors: [{ reason: 'rateLimitExceeded', message: 'too many requests' }],
+      },
+    ];
+    mockInsert = jest.fn()
+      .mockRejectedValueOnce(partialError)
+      .mockResolvedValue([]);
+
+    const result = await insertEvent(validEvent);
+    expect(mockInsert).toHaveBeenCalledTimes(2);
+    expect(result.success).toBe(true);
   });
 });
 
@@ -533,12 +619,21 @@ describe('insertEvents() — successful batch insert', () => {
     expect(rows).toHaveLength(3);
   });
 
+  test('each row is wrapped as {insertId, json} with event_id as insertId', async () => {
+    await insertEvents(events);
+    const rows = mockInsert.mock.calls[0][0];
+    rows.forEach((row, i) => {
+      expect(row.insertId).toBe(events[i].event_id);
+      expect(row.json.event_id).toBe(events[i].event_id);
+    });
+  });
+
   test('each row has payload as JSON string', async () => {
     await insertEvents(events);
     const rows = mockInsert.mock.calls[0][0];
     rows.forEach((row, i) => {
-      expect(typeof row.payload).toBe('string');
-      expect(JSON.parse(row.payload)).toEqual(events[i].payload);
+      expect(typeof row.json.payload).toBe('string');
+      expect(JSON.parse(row.json.payload)).toEqual(events[i].payload);
     });
   });
 
@@ -546,8 +641,8 @@ describe('insertEvents() — successful batch insert', () => {
     await insertEvents(events);
     const rows = mockInsert.mock.calls[0][0];
     rows.forEach((row) => {
-      expect(row.ingested_at).toBeDefined();
-      expect(new Date(row.ingested_at).getTime()).not.toBeNaN();
+      expect(row.json.ingested_at).toBeDefined();
+      expect(new Date(row.json.ingested_at).getTime()).not.toBeNaN();
     });
   });
 
@@ -597,14 +692,62 @@ describe('insertEvents() — PartialFailureError', () => {
     expect(result.errors[0].errors[0]).toMatch(/Schema mismatch/);
   });
 
-  test('does not retry on PartialFailureError', async () => {
+  test('does not retry on PartialFailureError with non-retryable reasons', async () => {
     const partialError = new Error('PartialFailureError');
     partialError.name = 'PartialFailureError';
-    partialError.errors = [];
+    partialError.errors = [
+      { row: { event_id: 'evt-pf-1' }, errors: [{ reason: 'invalid', message: 'Schema mismatch' }] },
+    ];
     mockInsert = jest.fn().mockRejectedValue(partialError);
 
     await insertEvents(events);
     expect(mockInsert).toHaveBeenCalledTimes(1);
+  });
+
+  test('retries only rows with retryable per-row reasons', async () => {
+    const mixedPartialError = new Error('PartialFailureError');
+    mixedPartialError.name = 'PartialFailureError';
+    mixedPartialError.errors = [
+      {
+        row: { event_id: 'evt-pf-1' },
+        errors: [{ reason: 'backendError', message: 'transient error' }],
+      },
+      {
+        row: { event_id: 'evt-pf-2' },
+        errors: [{ reason: 'invalid', message: 'Schema mismatch' }],
+      },
+    ];
+    mockInsert = jest.fn()
+      .mockRejectedValueOnce(mixedPartialError)
+      .mockResolvedValue([]);
+
+    const result = await insertEvents(events);
+    // Retried once for evt-pf-1
+    expect(mockInsert).toHaveBeenCalledTimes(2);
+    // Second call only contains the retryable row
+    const retryRows = mockInsert.mock.calls[1][0];
+    expect(retryRows).toHaveLength(1);
+    expect(retryRows[0].insertId).toBe('evt-pf-1');
+    // evt-pf-2 had a permanent failure so overall result is partial failure
+    expect(result.partialFailure).toBe(true);
+  });
+
+  test('succeeds for all rows when retryable PartialFailureError row succeeds on retry', async () => {
+    const retryableError = new Error('PartialFailureError');
+    retryableError.name = 'PartialFailureError';
+    retryableError.errors = [
+      {
+        row: { event_id: 'evt-pf-1' },
+        errors: [{ reason: 'backendError', message: 'transient' }],
+      },
+    ];
+    mockInsert = jest.fn()
+      .mockRejectedValueOnce(retryableError)
+      .mockResolvedValue([]);
+
+    const result = await insertEvents(events);
+    expect(mockInsert).toHaveBeenCalledTimes(2);
+    expect(result.success).toBe(true);
   });
 });
 

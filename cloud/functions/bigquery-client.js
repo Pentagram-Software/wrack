@@ -10,8 +10,15 @@
  *    object so callers can log/ignore failures without try/catch boilerplate.
  *  - Lazy singleton: the BigQuery client is created on first use.
  *  - Retry: exponential back-off for transient 429 / 5xx / UNAVAILABLE errors
- *    (up to MAX_RETRIES attempts). PartialFailureError is never retried because
- *    it signals bad data rather than a transient infra issue.
+ *    (up to MAX_RETRIES attempts).
+ *  - PartialFailureError handling: per-row error reasons are inspected.
+ *    Rows with retryable reasons (backendError, rateLimitExceeded, etc.) are
+ *    retried separately; rows with non-retryable reasons (invalid schema, etc.)
+ *    are reported immediately without retrying.
+ *  - Idempotent retries: each row is sent with its event_id as the BigQuery
+ *    streaming-insert deduplication key (insertId), so retrying after a
+ *    transient failure cannot produce duplicate rows within BigQuery's ~1-min
+ *    dedup window.
  */
 
 const { BigQuery } = require('@google-cloud/bigquery');
@@ -53,8 +60,11 @@ function isEnabled() {
  * Stamps ingested_at and serialises payload to a JSON string (required by the
  * BigQuery JSON column type when using the streaming insert API).
  *
+ * The returned object is the row data. Before calling table.insert() the row
+ * is wrapped as {insertId: row.event_id, json: row} for deduplication.
+ *
  * @param {object} event  Validated telemetry event envelope.
- * @returns {object}  Row ready for table.insert().
+ * @returns {object}  Row data (not yet wrapped with insertId).
  */
 function _formatRow(event) {
   return {
@@ -109,6 +119,24 @@ function _isRetryableError(error) {
   return false;
 }
 
+/**
+ * Returns true for BigQuery per-row error reasons that are transient and worth
+ * retrying.
+ *
+ * @param {string} reason  Per-row reason string from BigQuery PartialFailureError.
+ * @returns {boolean}
+ */
+function _isRetryableReason(reason) {
+  if (!reason) return false;
+  const r = reason.toLowerCase();
+  return (
+    r === 'backenderror' ||
+    r === 'ratelimitexceeded' ||
+    r === 'internalerror' ||
+    r === 'unavailable'
+  );
+}
+
 // ─── Private helpers ─────────────────────────────────────────────────────────
 
 function _getClient() {
@@ -119,11 +147,29 @@ function _getClient() {
 }
 
 /**
- * Insert rows into BigQuery with exponential-backoff retry for transient
- * errors.  PartialFailureError is surfaced immediately (no retry) because it
- * indicates invalid data.
+ * Extract the row data from a PartialFailureError entry.
+ * When rows are sent as {insertId, json}, e.row is the wrapper object;
+ * when mocked in tests as plain objects, e.row is the data directly.
  *
- * @param {object[]} rows  Pre-formatted BigQuery rows.
+ * @param {object} e  One entry from PartialFailureError.errors.
+ * @returns {object}  The underlying row data object.
+ */
+function _rowDataFromError(e) {
+  return e.row && e.row.json ? e.row.json : (e.row || {});
+}
+
+/**
+ * Insert rows into BigQuery with exponential-backoff retry for transient
+ * errors.
+ *
+ * Rows are sent using the {insertId, json} streaming-insert format so that
+ * retries are idempotent (BigQuery deduplicates within ~1 minute by insertId).
+ *
+ * For PartialFailureError: per-row reasons are inspected.  Rows with retryable
+ * reasons are retried; rows with non-retryable reasons are surfaced
+ * immediately without further attempts.
+ *
+ * @param {object[]} rows     Pre-formatted BigQuery row data objects.
  * @param {number}   attempt  Current attempt index (0-based).
  * @returns {Promise<{success: boolean, partialFailure?: boolean, error?: Error}>}
  */
@@ -131,11 +177,48 @@ async function _insertWithRetry(rows, attempt = 0) {
   const client = _getClient();
   const table = client.dataset(_datasetId()).table(_tableId());
 
+  // Wrap rows with insertId for idempotent retries.
+  // event_id is the stable per-event dedupe key; fall back to a timestamp-
+  // based key for events that lack one.
+  const rowsWithId = rows.map((row) => ({
+    insertId: row.event_id || `${row.event_type || 'evt'}-${Date.now()}`,
+    json: row,
+  }));
+
   try {
-    await table.insert(rows);
+    await table.insert(rowsWithId);
     return { success: true };
   } catch (error) {
     if (error.name === 'PartialFailureError') {
+      const rowErrors = error.errors || [];
+
+      // Separate failed rows into retryable (transient) and non-retryable (bad data).
+      const retryableRowErrors = rowErrors.filter((e) =>
+        (e.errors || []).some((re) => _isRetryableReason(re.reason))
+      );
+      const permanentRowErrors = rowErrors.filter(
+        (e) => !(e.errors || []).some((re) => _isRetryableReason(re.reason))
+      );
+
+      if (retryableRowErrors.length > 0 && attempt < MAX_RETRIES) {
+        const retryableIds = new Set(
+          retryableRowErrors.map((e) => _rowDataFromError(e).event_id).filter(Boolean)
+        );
+        const retryRows = rows.filter((r) => retryableIds.has(r.event_id));
+
+        const delayMs = BASE_DELAY_MS * Math.pow(2, attempt);
+        await _sleepFn(delayMs);
+        const retryResult = await _insertWithRetry(retryRows, attempt + 1);
+
+        if (permanentRowErrors.length > 0) {
+          const permanentError = new Error('Some rows failed permanently');
+          permanentError.name = 'PartialFailureError';
+          permanentError.errors = permanentRowErrors;
+          return { success: false, partialFailure: true, error: permanentError };
+        }
+        return retryResult;
+      }
+
       return { success: false, partialFailure: true, error };
     }
 
@@ -151,10 +234,13 @@ async function _insertWithRetry(rows, attempt = 0) {
 
 /** Parse BigQuery PartialFailureError into a structured errors array. */
 function _parsePartialFailure(bqError) {
-  return (bqError.errors || []).map((e) => ({
-    event_id: e.row ? e.row.event_id : null,
-    errors: (e.errors || []).map((err) => err.message || err.reason || 'BigQuery insert error'),
-  }));
+  return (bqError.errors || []).map((e) => {
+    const rowData = _rowDataFromError(e);
+    return {
+      event_id: rowData.event_id || null,
+      errors: (e.errors || []).map((err) => err.message || err.reason || 'BigQuery insert error'),
+    };
+  });
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -279,6 +365,7 @@ module.exports = {
   insertEvents,
   _formatRow,
   _isRetryableError,
+  _isRetryableReason,
   _resetClient,
   _setSleepFn,
 };
