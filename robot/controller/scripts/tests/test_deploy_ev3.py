@@ -172,20 +172,40 @@ class TestGetFilesToDeploy(unittest.TestCase):
 class TestCreateLauncherScript(unittest.TestCase):
     """Tests for the create_launcher_script function."""
     
-    def test_release_mode_uses_optimization(self):
-        """Test that release mode launcher uses -O flag."""
+    def test_release_mode_uses_pybricks_interpreter(self):
+        """Test that release mode launcher uses pybricks-micropython."""
         script = create_launcher_script("release")
-        self.assertIn("python3 -O", script)
+        self.assertIn("pybricks-micropython", script)
         self.assertIn("RELEASE MODE", script)
         self.assertIn("__debug__ = False", script)
-    
-    def test_debug_mode_no_optimization(self):
-        """Test that debug mode launcher doesn't use -O flag."""
+
+    def test_release_mode_uses_optimization_flag(self):
+        """Test that release mode launcher passes -O to the interpreter."""
+        script = create_launcher_script("release")
+        # The script stores the interpreter in $INTERPRETER and invokes it
+        # with -O; both tokens must be present in the script.
+        self.assertIn("-O", script)
+        self.assertIn('"$INTERPRETER" -O', script)
+
+    def test_debug_mode_uses_pybricks_interpreter(self):
+        """Test that debug mode launcher uses pybricks-micropython."""
         script = create_launcher_script("debug")
-        self.assertNotIn("python3 -O", script)
+        self.assertIn("pybricks-micropython", script)
         self.assertIn("DEBUG MODE", script)
         self.assertIn("__debug__ = True", script)
-    
+
+    def test_debug_mode_no_optimization_flag(self):
+        """Test that debug mode launcher does not pass -O to the interpreter."""
+        script = create_launcher_script("debug")
+        self.assertNotIn('"$INTERPRETER" -O', script)
+
+    def test_launcher_has_interpreter_guard(self):
+        """Test that both launchers abort when pybricks-micropython is absent."""
+        for mode in ["release", "debug"]:
+            script = create_launcher_script(mode)
+            self.assertIn("command -v", script)
+            self.assertIn("exit 1", script)
+
     def test_launcher_is_executable_script(self):
         """Test that launcher script has proper shebang."""
         for mode in ["release", "debug"]:
@@ -197,6 +217,14 @@ class TestCreateLauncherScript(unittest.TestCase):
         for mode in ["release", "debug"]:
             script = create_launcher_script(mode)
             self.assertIn("main.py", script)
+
+    def test_launcher_does_not_use_python3_directly(self):
+        """Test that launchers do not call python3 instead of pybricks-micropython."""
+        for mode in ["release", "debug"]:
+            script = create_launcher_script(mode)
+            # 'python3' must NOT appear as a bare invocation; the correct
+            # interpreter is pybricks-micropython stored in $INTERPRETER.
+            self.assertNotIn("exec python3", script)
 
 
 class TestPrepareDeploymentPackage(unittest.TestCase):
@@ -251,22 +279,24 @@ class TestPrepareDeploymentPackage(unittest.TestCase):
             shutil.rmtree(temp_dir)
     
     def test_release_mode_launcher_content(self):
-        """Test that release mode creates correct launcher."""
+        """Test that release mode creates correct launcher with pybricks-micropython -O."""
         temp_dir, files = prepare_deployment_package(self.source_dir, "release")
         try:
             with open(os.path.join(temp_dir, "run.sh")) as f:
                 content = f.read()
-            self.assertIn("python3 -O", content)
+            self.assertIn("pybricks-micropython", content)
+            self.assertIn('"$INTERPRETER" -O', content)
         finally:
             shutil.rmtree(temp_dir)
     
     def test_debug_mode_launcher_content(self):
-        """Test that debug mode creates correct launcher."""
+        """Test that debug mode creates correct launcher without -O flag."""
         temp_dir, files = prepare_deployment_package(self.source_dir, "debug")
         try:
             with open(os.path.join(temp_dir, "run.sh")) as f:
                 content = f.read()
-            self.assertNotIn("python3 -O", content)
+            self.assertIn("pybricks-micropython", content)
+            self.assertNotIn('"$INTERPRETER" -O', content)
         finally:
             shutil.rmtree(temp_dir)
 

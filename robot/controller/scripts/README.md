@@ -18,9 +18,15 @@ This directory contains scripts for deploying the robot controller to an EV3 bri
 
 ## Release vs Debug Mode
 
+Both modes use `pybricks-micropython` as the interpreter, which is the correct
+runtime for code written against the Pybricks API.  The EV3 must have
+`pybricks-micropython` available on its `$PATH` (this is the case when the
+brick runs ev3dev with the pybricks package installed, or a Pybricks firmware
+image that provides the interpreter).
+
 ### Release Mode (`--mode release`)
 
-- **Python optimization enabled** (`python3 -O`)
+- **Pybricks MicroPython optimization enabled** (`pybricks-micropython -O`)
 - `__debug__` is `False`
 - `assert` statements are removed
 - Debug-only code blocks are skipped
@@ -29,7 +35,7 @@ This directory contains scripts for deploying the robot controller to an EV3 bri
 
 ### Debug Mode (`--mode debug`)
 
-- **No optimization** (`python3`)
+- **No optimization** (`pybricks-micropython`)
 - `__debug__` is `True`
 - `assert` statements are active
 - All debug code blocks execute
@@ -114,10 +120,11 @@ The `run.sh` script automatically uses the correct Python flags based on the dep
 
 ## Requirements
 
-- Python 3.6+ on the deployment machine
+- Python 3.6+ on the **deployment machine** (to run `deploy_ev3.py`)
 - `rsync` installed on the deployment machine
 - SSH access to the EV3 brick
-- EV3 running ev3dev or Pybricks with SSH enabled
+- EV3 running ev3dev with `pybricks-micropython` available on `$PATH`
+  (provided by the `python3-pybricks` apt package or a Pybricks firmware image)
 
 ## Troubleshooting
 
@@ -135,9 +142,35 @@ The script verifies `main.py` and `run.sh` exist after deployment. If verificati
 2. Verify remote path exists
 3. Use `--verbose` for detailed output
 
+### `ImportError: No module named 'pybricks'` when running `./run.sh`
+
+This means `run.sh` is calling the wrong Python interpreter.  The robot code
+uses the Pybricks API which is **only** available via `pybricks-micropython`,
+not the system `python3`.
+
+Verify the interpreter is available on the EV3:
+
+```bash
+ssh robot@<EV3_IP> which pybricks-micropython
+```
+
+If the command is not found, install the Pybricks package on ev3dev:
+
+```bash
+ssh robot@<EV3_IP> sudo apt-get install -y python3-pybricks
+```
+
+Re-deploy after fixing the environment so that a fresh `run.sh` is generated:
+
+```bash
+./scripts/deploy_release.sh <EV3_IP>
+```
+
 ### Debug Mode Not Working
 
-Ensure you're using `./run.sh` to start the robot, not `python3 main.py` directly. The `run.sh` script applies the correct optimization flags.
+Ensure you're using `./run.sh` to start the robot, not `python3 main.py`
+directly.  The `run.sh` script uses the correct `pybricks-micropython`
+interpreter with the right optimization flags.
 
 ## Code Changes for Debug/Release
 
@@ -148,4 +181,4 @@ if __debug__:
     print("Debug: Motor speed =", speed)  # Only in debug mode
 ```
 
-In release mode (`python3 -O`), these blocks are completely removed by the Python interpreter.
+In release mode (`pybricks-micropython -O`), these blocks are completely removed by the interpreter.

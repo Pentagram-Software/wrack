@@ -261,38 +261,54 @@ def prepare_deployment_package(
 
 def create_launcher_script(mode: str) -> str:
     """Create a shell script to launch the robot controller."""
+    # Guard snippet shared by both modes: abort with a clear message if the
+    # Pybricks MicroPython interpreter is not present on the EV3.
+    interpreter_guard = '''\
+INTERPRETER="pybricks-micropython"
+if ! command -v "$INTERPRETER" >/dev/null 2>&1; then
+    echo "ERROR: '$INTERPRETER' not found on this system." >&2
+    echo "Make sure the EV3 is running ev3dev with the pybricks package" >&2
+    echo "installed, or Pybricks firmware that provides this interpreter." >&2
+    exit 1
+fi
+'''
+
     if mode == "release":
-        # Release mode: run with -O flag for optimization
-        return '''#!/bin/bash
+        # Release mode: run with -O flag for optimization.
+        # pybricks-micropython (MicroPython) honours -O the same way CPython
+        # does at level 1: assert statements are stripped and __debug__ is
+        # set to False.
+        return f'''#!/bin/bash
 # EV3 Robot Controller Launcher - RELEASE MODE
-# This script runs the robot controller with Python optimization enabled.
+# Runs the robot controller with Pybricks MicroPython optimization enabled.
 # __debug__ will be False, assert statements are removed.
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+{interpreter_guard}
 echo "Starting EV3 Robot Controller (RELEASE MODE)..."
 echo "Optimization: ENABLED (__debug__ = False)"
 
-# Run with -O flag for optimization (removes asserts, sets __debug__=False)
-# Use -OO for additional optimization (also removes docstrings)
-exec python3 -O main.py "$@"
+# -O removes assert statements and sets __debug__=False
+exec "$INTERPRETER" -O main.py "$@"
 '''
     else:
-        # Debug mode: run normally
-        return '''#!/bin/bash
+        # Debug mode: run without optimization flags.
+        return f'''#!/bin/bash
 # EV3 Robot Controller Launcher - DEBUG MODE
-# This script runs the robot controller with full debugging enabled.
+# Runs the robot controller with full debugging enabled.
 # __debug__ will be True, all assert statements are active.
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+{interpreter_guard}
 echo "Starting EV3 Robot Controller (DEBUG MODE)..."
 echo "Optimization: DISABLED (__debug__ = True)"
 
 # Run without optimization flags for full debugging
-exec python3 main.py "$@"
+exec "$INTERPRETER" main.py "$@"
 '''
 
 
