@@ -55,7 +55,7 @@ export interface BatteryStatusPayload {
   is_critical?: boolean;
 }
 
-export type ControllerType = 'ps4' | 'network_remote' | 'unknown';
+export type ControllerType = 'ps4' | 'ps5' | 'network_remote' | 'unknown';
 
 export interface CommandReceivedPayload {
   command: string;
@@ -159,7 +159,7 @@ const VALID_BATTERY_TYPES: readonly BatteryType[] = [
 ] as const;
 
 const VALID_CONTROLLER_TYPES: readonly ControllerType[] = [
-  'ps4', 'network_remote', 'unknown',
+  'ps4', 'ps5', 'network_remote', 'unknown',
 ] as const;
 
 const VALID_HTTP_METHODS: readonly HttpMethod[] = [
