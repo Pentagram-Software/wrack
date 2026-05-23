@@ -312,52 +312,115 @@ exec "$INTERPRETER" main.py "$@"
 '''
 
 
-def deploy_to_ev3(
+def _ssh_target(user: str, host: str, port: int) -> List[str]:
+    """Build base ssh command targeting the EV3."""
+    return ["ssh", "-p", str(port), f"{user}@{host}"]
+
+
+def deploy_to_ev3_via_tar(
     package_dir: str,
     host: str,
     user: str = DEFAULT_EV3_USER,
     remote_path: str = DEFAULT_EV3_PATH,
     port: int = DEFAULT_SSH_PORT,
     dry_run: bool = False,
-    verbose: bool = False
+    verbose: bool = False,
 ) -> bool:
     """
-    Deploy the package to an EV3 brick using rsync over SSH.
-    
-    Args:
-        package_dir: Local directory containing the deployment package
-        host: EV3 IP address or hostname
-        user: SSH username
-        remote_path: Destination path on EV3
-        port: SSH port
-        dry_run: If True, only show what would be done
-        verbose: Print detailed progress
-    
-    Returns:
-        True if deployment succeeded, False otherwise
+    Deploy the package to an EV3 brick using tar over SSH.
+
+    This works on lightweight ev3dev images that do not ship rsync.
+    Only ssh and tar are required on the EV3.
     """
+    ssh_cmd = _ssh_target(user, host, port)
+    prepare_remote_cmd = f"mkdir -p {remote_path} && rm -rf {remote_path}/*"
+    extract_remote_cmd = f"tar xzf - -C {remote_path}"
+
+    if dry_run:
+        if verbose:
+            print(f"Would deploy via tar+ssh to {user}@{host}:{remote_path}")
+            print(f"  ssh prepare: {prepare_remote_cmd}")
+            print(f"  tar czf - -C {package_dir} . | ssh ... {extract_remote_cmd}")
+        return True
+
+    if verbose:
+        print(f"Deploying via tar+ssh to {user}@{host}:{remote_path}")
+
+    try:
+        subprocess.run(
+            ssh_cmd + [prepare_remote_cmd],
+            check=True,
+            capture_output=not verbose,
+            text=True,
+        )
+
+        tar_create = subprocess.Popen(
+            ["tar", "czf", "-", "-C", package_dir, "."],
+            stdout=subprocess.PIPE,
+        )
+        try:
+            extract_result = subprocess.run(
+                ssh_cmd + [extract_remote_cmd],
+                stdin=tar_create.stdout,
+                check=True,
+                capture_output=not verbose,
+                text=True,
+            )
+        finally:
+            if tar_create.stdout:
+                tar_create.stdout.close()
+            tar_returncode = tar_create.wait()
+
+        if tar_returncode != 0:
+            print(
+                f"Deployment failed: tar create exited with {tar_returncode}",
+                file=sys.stderr,
+            )
+            return False
+
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Deployment failed: {e}", file=sys.stderr)
+        if e.stderr:
+            print(f"Error output: {e.stderr}", file=sys.stderr)
+        return False
+    except FileNotFoundError as e:
+        print(f"Error: required command not found: {e}", file=sys.stderr)
+        return False
+
+
+def deploy_to_ev3_via_rsync(
+    package_dir: str,
+    host: str,
+    user: str = DEFAULT_EV3_USER,
+    remote_path: str = DEFAULT_EV3_PATH,
+    port: int = DEFAULT_SSH_PORT,
+    dry_run: bool = False,
+    verbose: bool = False,
+) -> bool:
+    """Deploy the package using rsync over SSH (optional, requires rsync on EV3)."""
     rsync_cmd = [
         "rsync",
-        "-avz",  # archive, verbose, compress
-        "--delete",  # Remove files on destination that don't exist in source
+        "-avz",
+        "--delete",
         "-e", f"ssh -p {port}",
         f"{package_dir}/",
-        f"{user}@{host}:{remote_path}/"
+        f"{user}@{host}:{remote_path}/",
     ]
-    
+
     if dry_run:
         rsync_cmd.insert(1, "--dry-run")
-    
+
     if verbose:
-        print(f"Deploying to {user}@{host}:{remote_path}")
+        print(f"Deploying via rsync to {user}@{host}:{remote_path}")
         print(f"Command: {' '.join(rsync_cmd)}")
-    
+
     try:
-        result = subprocess.run(
+        subprocess.run(
             rsync_cmd,
             check=True,
             capture_output=not verbose,
-            text=True
+            text=True,
         )
         return True
     except subprocess.CalledProcessError as e:
@@ -366,8 +429,44 @@ def deploy_to_ev3(
             print(f"Error output: {e.stderr}", file=sys.stderr)
         return False
     except FileNotFoundError:
-        print("Error: rsync not found. Please install rsync.", file=sys.stderr)
+        print("Error: rsync not found on local machine.", file=sys.stderr)
         return False
+
+
+def deploy_to_ev3(
+    package_dir: str,
+    host: str,
+    user: str = DEFAULT_EV3_USER,
+    remote_path: str = DEFAULT_EV3_PATH,
+    port: int = DEFAULT_SSH_PORT,
+    dry_run: bool = False,
+    verbose: bool = False,
+    method: str = "tar",
+) -> bool:
+    """
+    Deploy the package to an EV3 brick over SSH.
+
+    Args:
+        package_dir: Local directory containing the deployment package
+        host: EV3 IP address or hostname
+        user: SSH username
+        remote_path: Destination path on EV3
+        port: SSH port
+        dry_run: If True, only show what would be done
+        verbose: Print detailed progress
+        method: "tar" (default, works on stock ev3dev) or "rsync"
+
+    Returns:
+        True if deployment succeeded, False otherwise
+    """
+    if method == "rsync":
+        return deploy_to_ev3_via_rsync(
+            package_dir, host, user, remote_path, port, dry_run, verbose
+        )
+
+    return deploy_to_ev3_via_tar(
+        package_dir, host, user, remote_path, port, dry_run, verbose
+    )
 
 
 def verify_deployment(
@@ -486,6 +585,12 @@ Examples:
         default=None,
         help="Source directory (default: auto-detect from script location)"
     )
+    parser.add_argument(
+        "--method",
+        choices=["tar", "rsync"],
+        default="tar",
+        help="Transfer method (default: tar — works on ev3dev without rsync)"
+    )
     
     args = parser.parse_args()
     
@@ -537,7 +642,8 @@ Examples:
             remote_path=args.path,
             port=args.port,
             dry_run=args.dry_run,
-            verbose=args.verbose
+            verbose=args.verbose,
+            method=args.method,
         )
         
         if not success:

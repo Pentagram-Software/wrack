@@ -360,8 +360,7 @@ def move(value):
     Returns:
         None
     """
-    # Apply very aggressive deadzone filtering to prevent race conditions
-    LARGE_DEADZONE = 200  # Much larger deadzone for reliable stop detection
+    LARGE_DEADZONE = MIN_JOYSTICK_MOVE
     
     # Global state to prevent race conditions
     global robot_is_stopped

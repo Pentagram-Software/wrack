@@ -11,6 +11,7 @@ allowing the system to gracefully handle device failures.
 import threading
 import time
 from error_reporting import report_device_error, report_exception
+from threading_compat import create_lock
 
 
 class PortMonitor:
@@ -36,7 +37,7 @@ class PortMonitor:
         
         self._running = False
         self._monitor_thread = None
-        self._lock = threading.Lock()
+        self._lock = create_lock()
         
         # Track device connectivity status
         # Key: device_name, Value: dict with 'connected', 'port', 'device_type', 'last_check'

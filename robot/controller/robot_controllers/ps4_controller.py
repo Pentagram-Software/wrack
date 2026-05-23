@@ -3,10 +3,15 @@ from event_handler import EventHandler
 import threading
 import struct
 # import traceback  # Commented out due to EV3 compatibility issues
-from time import sleep
 from error_reporting import report_controller_error, report_exception
 
 MIN_JOYSTICK_MOVE = 100  # The minimum value of joystick move to be considered as a move (for -1000 to 1000 range)
+
+# Joystick axis ranges reported by Linux evdev (PS4 = 8-bit, PS5/DualSense = 16-bit)
+AXIS_RANGE_8BIT = (0, 255)
+AXIS_RANGE_16BIT = (0, 65535)
+AXIS_SENTINEL_VALUES = (4294967295, 4294967294)
+
     #const values representing particular events 
 
 #ev_type
@@ -137,6 +142,7 @@ class PS4Controller(EventHandler, threading.Thread):
         self.r_forward = 0
         self.last_joystick_event_time = 0
         self.connected = False
+        self._axis_range = None
     def __str__(self):
         return "PlayStation controller (PS4/PS5) for EV3"; 
     
@@ -203,47 +209,39 @@ class PS4Controller(EventHandler, threading.Thread):
 
                 #  Handle right joystick
                 if ev_type == EV_ABS and (code == RIGHT_STICK_X or code == RIGHT_STICK_Y):
-                    if(code == RIGHT_STICK_Y):
-                        self.r_forward = -1* self.scale(value, (0,255), (-100,100))
-                        # printIn(35,11,"Right y-axis:" + str(self.r_forward) + "   ")                        
-                    if(code == RIGHT_STICK_X):
-                        self.r_left = -1 * self.scale(value, (0,255), (-100,100))
-                        # printIn(35,10,"Right x-axis:" + str(self.r_left) + "   ")   
+                    if code == RIGHT_STICK_Y:
+                        scaled = self._scale_axis(value, (-100, 100))
+                        if scaled is not None:
+                            self.r_forward = -1 * scaled
+                    if code == RIGHT_STICK_X:
+                        scaled = self._scale_axis(value, (-100, 100))
+                        if scaled is not None:
+                            self.r_left = -1 * scaled
 
-                    # Apply deadzone filtering to right joystick too
-                    if abs(self.r_forward) < 50:  # Increased deadzone for right joystick
+                    if abs(self.r_forward) < 50:
                         self.r_forward = 0
                     if abs(self.r_left) < 50:
                         self.r_left = 0
-                        
-                    # Always trigger right joystick events to ensure stop commands are sent
-                    # Remove throttling to prevent race conditions with turret control
-                    self.trigger("right_joystick");
 
-                # Handle left joystick
+                    self.trigger("right_joystick")
+
+                # Handle left joystick (PS4 8-bit and PS5/DualSense 16-bit axes)
                 if ev_type == EV_ABS and (code == LEFT_STICK_X or code == LEFT_STICK_Y):
-                    # Store previous values to detect significant changes
-                    prev_l_forward = self.l_forward
-                    prev_l_left = self.l_left
-                    
-                    if(code == LEFT_STICK_Y and value < 255):                                             
-                        # Invert Y-axis: joystick up (value=0) should give positive l_forward
-                        self.l_forward = self.scale(value, (0,255), (1000,-1000))
-                        # Apply deadzone filtering immediately
-                        if abs(self.l_forward) < MIN_JOYSTICK_MOVE:
-                            self.l_forward = 0
-                        # printIn(1,11,"Left y-axis:" + str(self.l_forward)+ "   ")   
-                        
-                    if(code == LEFT_STICK_X and value < 255):
-                        self.l_left = self.scale(value, (0,255), (-1000,1000))
-                        # Apply deadzone filtering immediately
-                        if abs(self.l_left) < MIN_JOYSTICK_MOVE:
-                            self.l_left = 0
-                        # printIn(1,10,"Left x-axis:" + str(self.l_left ) + "   ")                        
+                    if code == LEFT_STICK_Y:
+                        scaled = self._scale_axis(value, (1000, -1000))
+                        if scaled is not None:
+                            self.l_forward = scaled
+                            if abs(self.l_forward) < MIN_JOYSTICK_MOVE:
+                                self.l_forward = 0
 
-                    # Always trigger joystick events to ensure real-time response
-                    # Remove throttling to prevent race conditions
-                    self.trigger("left_joystick");
+                    if code == LEFT_STICK_X:
+                        scaled = self._scale_axis(value, (-1000, 1000))
+                        if scaled is not None:
+                            self.l_left = scaled
+                            if abs(self.l_left) < MIN_JOYSTICK_MOVE:
+                                self.l_left = 0
+
+                    self.trigger("left_joystick")
 
 
 
@@ -310,7 +308,6 @@ class PS4Controller(EventHandler, threading.Thread):
                     # R3 (right stick click) — BTN_THUMBR (318)
                     # TODO: Handle R3 (318) if needed
 
-                sleep(0.001)            
                 # Finally, read another event
                 event = in_file.read(EVENT_SIZE)
                 
@@ -350,8 +347,38 @@ class PS4Controller(EventHandler, threading.Thread):
         """Check if the PlayStation controller is connected and working"""
         return self.connected
 
-    # A helper function for converting stick values (0 - 255)
-    # to more usable numbers (-100 - 100)6
+    def _is_axis_sentinel(self, value):
+        """Ignore release sentinel events; 255 is only a sentinel on 8-bit PS4 axes."""
+        if value in AXIS_SENTINEL_VALUES:
+            return True
+        if self._get_axis_range() == AXIS_RANGE_8BIT and value == 255:
+            return True
+        return False
+
+    def _detect_axis_range(self, value):
+        """Auto-detect 8-bit (PS4) vs 16-bit (PS5/DualSense) stick axis range."""
+        if self._axis_range is not None or self._is_axis_sentinel(value):
+            return
+        if value > 1000:
+            self._axis_range = AXIS_RANGE_16BIT
+        else:
+            self._axis_range = AXIS_RANGE_8BIT
+
+    def _get_axis_range(self):
+        return self._axis_range or AXIS_RANGE_8BIT
+
+    def _scale_axis(self, value, dst):
+        """
+        Scale a raw evdev axis value to the requested output range.
+
+        Returns None for sentinel/release values that should be ignored.
+        """
+        if self._is_axis_sentinel(value):
+            return None
+
+        self._detect_axis_range(value)
+        return self.scale(value, self._get_axis_range(), dst)
+
     def scale(self, val, src, dst):
         """
         Scale the given value from the scale of src to the scale of dst.

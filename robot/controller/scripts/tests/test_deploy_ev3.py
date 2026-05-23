@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 import shutil
+import subprocess
 import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -23,6 +24,9 @@ from deploy_ev3 import (
     prepare_deployment_package,
     create_launcher_script,
     verify_deployment,
+    deploy_to_ev3,
+    deploy_to_ev3_via_tar,
+    deploy_to_ev3_via_rsync,
     EXCLUDE_PATTERNS,
 )
 
@@ -315,6 +319,78 @@ class TestExcludePatterns(unittest.TestCase):
         self.assertIn("tests/", patterns_str)
         self.assertIn("__pycache__", patterns_str)
         self.assertIn(".venv", patterns_str)
+
+
+class TestDeployToEv3(unittest.TestCase):
+    """Tests for deploy transport methods."""
+
+    @patch("deploy_ev3.deploy_to_ev3_via_tar")
+    def test_deploy_to_ev3_defaults_to_tar(self, mock_tar):
+        mock_tar.return_value = True
+
+        result = deploy_to_ev3("/tmp/pkg", "192.168.1.100")
+
+        self.assertTrue(result)
+        mock_tar.assert_called_once()
+
+    @patch("deploy_ev3.deploy_to_ev3_via_rsync")
+    def test_deploy_to_ev3_can_use_rsync(self, mock_rsync):
+        mock_rsync.return_value = True
+
+        result = deploy_to_ev3("/tmp/pkg", "192.168.1.100", method="rsync")
+
+        self.assertTrue(result)
+        mock_rsync.assert_called_once()
+
+    @patch("deploy_ev3.subprocess.run")
+    @patch("deploy_ev3.subprocess.Popen")
+    def test_tar_deploy_runs_ssh_prepare_and_extract(self, mock_popen, mock_run):
+        mock_tar = MagicMock()
+        mock_tar.stdout = MagicMock()
+        mock_tar.returncode = 0
+        mock_tar.wait.return_value = 0
+        mock_popen.return_value = mock_tar
+        mock_run.return_value = MagicMock(returncode=0)
+
+        result = deploy_to_ev3_via_tar(
+            "/tmp/pkg",
+            "192.168.1.100",
+            user="robot",
+            remote_path="/home/robot/ev3PS4Controlled",
+            port=22,
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(mock_run.call_count, 2)
+        prepare_cmd = mock_run.call_args_list[0][0][0]
+        self.assertIn("robot@192.168.1.100", prepare_cmd)
+        self.assertIn("mkdir -p /home/robot/ev3PS4Controlled", prepare_cmd[-1])
+        mock_popen.assert_called_once_with(
+            ["tar", "czf", "-", "-C", "/tmp/pkg", "."],
+            stdout=subprocess.PIPE,
+        )
+
+    @patch("deploy_ev3.subprocess.run")
+    def test_tar_deploy_dry_run_skips_ssh(self, mock_run):
+        result = deploy_to_ev3_via_tar(
+            "/tmp/pkg",
+            "192.168.1.100",
+            dry_run=True,
+        )
+
+        self.assertTrue(result)
+        mock_run.assert_not_called()
+
+    @patch("deploy_ev3.subprocess.run")
+    def test_rsync_deploy_invokes_rsync(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+
+        result = deploy_to_ev3_via_rsync("/tmp/pkg", "192.168.1.100")
+
+        self.assertTrue(result)
+        rsync_cmd = mock_run.call_args[0][0]
+        self.assertEqual(rsync_cmd[0], "rsync")
+        self.assertIn("robot@192.168.1.100:/home/robot/ev3PS4Controlled/", rsync_cmd[-1])
 
 
 class TestVerifyDeployment(unittest.TestCase):

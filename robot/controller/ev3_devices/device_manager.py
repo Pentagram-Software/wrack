@@ -1,17 +1,26 @@
 from error_reporting import report_device_error, report_exception
+from threading_compat import create_lock
 import os  # type: ignore
 import time
-import threading
 
 
-# Exceptions that indicate a device has disconnected
-# These are typically I/O-related errors that occur when the device is physically
-# unplugged or communication with the device fails
-CONNECTIVITY_EXCEPTIONS = (
-    OSError,
-    IOError,
-    ConnectionError,
-    TimeoutError,
+# Exceptions that indicate a device has disconnected.
+# Pybricks MicroPython does not define IOError (merged into OSError in Python 3).
+def _available_exceptions(*names):
+    import builtins
+    types = []
+    for name in names:
+        exc_type = getattr(builtins, name, None)
+        if isinstance(exc_type, type):
+            types.append(exc_type)
+    return tuple(types)
+
+
+CONNECTIVITY_EXCEPTIONS = _available_exceptions(
+    "OSError",
+    "IOError",
+    "ConnectionError",
+    "TimeoutError",
 )
 
 
@@ -70,7 +79,7 @@ class DeviceManager:
         
         # Port monitoring for disconnect/reconnect handling
         self._port_monitor = None
-        self._device_lock = threading.Lock()  # Thread-safe device access
+        self._device_lock = create_lock()  # Thread-safe device access
         
         # Track disconnected devices that should ignore commands
         self._disconnected_devices = set()

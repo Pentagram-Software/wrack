@@ -542,13 +542,42 @@ class TestPS4Controller:
     def test_math_operations(self):
         """Test math operations are available (used for joystick calculations)"""
         import math
-        
+
         # Math should be available for controller calculations
         assert hasattr(math, 'sqrt')
         assert hasattr(math, 'atan2')
-        
+
         # Test basic math operations that might be used
         result = math.sqrt(100)
         assert result == 10.0
 
-# Tests can be run with: pytest robot_controllers/tests/test_ps4_controller.py
+
+class TestPS4ControllerAxisScaling:
+    """Tests for PS4/PS5 joystick axis normalization."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.controller = PS4Controller()
+
+    def test_8bit_axis_scaling(self):
+        assert self.controller._scale_axis(0, (1000, -1000)) == 1000
+        assert self.controller._scale_axis(254, (1000, -1000)) == pytest.approx(-992.16, abs=1)
+        assert abs(self.controller._scale_axis(127, (1000, -1000))) < 50
+        assert self.controller._scale_axis(255, (1000, -1000)) is None
+
+    def test_16bit_axis_scaling(self):
+        center = self.controller._scale_axis(32768, (-1000, 1000))
+        assert center is not None
+        assert abs(center) < 50
+
+        forward = self.controller._scale_axis(0, (1000, -1000))
+        assert forward == 1000
+
+        backward = self.controller._scale_axis(65535, (1000, -1000))
+        assert backward == -1000
+
+    def test_sentinel_values_are_ignored(self):
+        assert self.controller._scale_axis(255, (-1000, 1000)) is None
+        assert self.controller._scale_axis(4294967295, (-1000, 1000)) is None
+
+# Tests can be run with: pytest tests/test_ps4_controller.py
