@@ -5,7 +5,7 @@ Monorepo for the Pentagram robot controller system built around the LEGO Mindsto
 ## System Overview
 
 ```
-PS4 Controller ──bluetooth──► EV3 Robot ◄──────────────────────┐
+PS4/PS5 Controller ──bluetooth──► EV3 Robot ◄─────────────────────┐
                                                                   │
 Raspberry Pi ──UDP video──► iOS App                              │
              ──UDP video──► Web Controller ──REST──► GCP Cloud ──┘
@@ -16,7 +16,7 @@ Raspberry Pi ──UDP video──► iOS App                              │
 
 | Path | Description | Language |
 |------|-------------|----------|
-| `robot/controller/` | EV3 robot firmware + PS4 controller support | Python |
+| `robot/controller/` | EV3 robot firmware + PS4/PS5 controller support | Python |
 | `edge/video-streamer/` | UDP video streamer running on Raspberry Pi | Python |
 | `edge/vision/` | Image analysis model on Raspberry Pi | Python |
 | `cloud/functions/` | GCP Cloud Functions (controlRobot + telemetryIngestion) | Node.js |

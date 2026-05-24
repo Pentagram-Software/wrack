@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 import shutil
+import subprocess
 import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -23,6 +24,9 @@ from deploy_ev3 import (
     prepare_deployment_package,
     create_launcher_script,
     verify_deployment,
+    deploy_to_ev3,
+    deploy_to_ev3_via_tar,
+    deploy_to_ev3_via_rsync,
     EXCLUDE_PATTERNS,
 )
 
@@ -172,20 +176,40 @@ class TestGetFilesToDeploy(unittest.TestCase):
 class TestCreateLauncherScript(unittest.TestCase):
     """Tests for the create_launcher_script function."""
     
-    def test_release_mode_uses_optimization(self):
-        """Test that release mode launcher uses -O flag."""
+    def test_release_mode_uses_pybricks_interpreter(self):
+        """Test that release mode launcher uses pybricks-micropython."""
         script = create_launcher_script("release")
-        self.assertIn("python3 -O", script)
+        self.assertIn("pybricks-micropython", script)
         self.assertIn("RELEASE MODE", script)
         self.assertIn("__debug__ = False", script)
-    
-    def test_debug_mode_no_optimization(self):
-        """Test that debug mode launcher doesn't use -O flag."""
+
+    def test_release_mode_uses_optimization_flag(self):
+        """Test that release mode launcher passes -O to the interpreter."""
+        script = create_launcher_script("release")
+        # The script stores the interpreter in $INTERPRETER and invokes it
+        # with -O; both tokens must be present in the script.
+        self.assertIn("-O", script)
+        self.assertIn('"$INTERPRETER" -O', script)
+
+    def test_debug_mode_uses_pybricks_interpreter(self):
+        """Test that debug mode launcher uses pybricks-micropython."""
         script = create_launcher_script("debug")
-        self.assertNotIn("python3 -O", script)
+        self.assertIn("pybricks-micropython", script)
         self.assertIn("DEBUG MODE", script)
         self.assertIn("__debug__ = True", script)
-    
+
+    def test_debug_mode_no_optimization_flag(self):
+        """Test that debug mode launcher does not pass -O to the interpreter."""
+        script = create_launcher_script("debug")
+        self.assertNotIn('"$INTERPRETER" -O', script)
+
+    def test_launcher_has_interpreter_guard(self):
+        """Test that both launchers abort when pybricks-micropython is absent."""
+        for mode in ["release", "debug"]:
+            script = create_launcher_script(mode)
+            self.assertIn("command -v", script)
+            self.assertIn("exit 1", script)
+
     def test_launcher_is_executable_script(self):
         """Test that launcher script has proper shebang."""
         for mode in ["release", "debug"]:
@@ -197,6 +221,14 @@ class TestCreateLauncherScript(unittest.TestCase):
         for mode in ["release", "debug"]:
             script = create_launcher_script(mode)
             self.assertIn("main.py", script)
+
+    def test_launcher_does_not_use_python3_directly(self):
+        """Test that launchers do not call python3 instead of pybricks-micropython."""
+        for mode in ["release", "debug"]:
+            script = create_launcher_script(mode)
+            # 'python3' must NOT appear as a bare invocation; the correct
+            # interpreter is pybricks-micropython stored in $INTERPRETER.
+            self.assertNotIn("exec python3", script)
 
 
 class TestPrepareDeploymentPackage(unittest.TestCase):
@@ -251,22 +283,24 @@ class TestPrepareDeploymentPackage(unittest.TestCase):
             shutil.rmtree(temp_dir)
     
     def test_release_mode_launcher_content(self):
-        """Test that release mode creates correct launcher."""
+        """Test that release mode creates correct launcher with pybricks-micropython -O."""
         temp_dir, files = prepare_deployment_package(self.source_dir, "release")
         try:
             with open(os.path.join(temp_dir, "run.sh")) as f:
                 content = f.read()
-            self.assertIn("python3 -O", content)
+            self.assertIn("pybricks-micropython", content)
+            self.assertIn('"$INTERPRETER" -O', content)
         finally:
             shutil.rmtree(temp_dir)
     
     def test_debug_mode_launcher_content(self):
-        """Test that debug mode creates correct launcher."""
+        """Test that debug mode creates correct launcher without -O flag."""
         temp_dir, files = prepare_deployment_package(self.source_dir, "debug")
         try:
             with open(os.path.join(temp_dir, "run.sh")) as f:
                 content = f.read()
-            self.assertNotIn("python3 -O", content)
+            self.assertIn("pybricks-micropython", content)
+            self.assertNotIn('"$INTERPRETER" -O', content)
         finally:
             shutil.rmtree(temp_dir)
 
@@ -285,6 +319,78 @@ class TestExcludePatterns(unittest.TestCase):
         self.assertIn("tests/", patterns_str)
         self.assertIn("__pycache__", patterns_str)
         self.assertIn(".venv", patterns_str)
+
+
+class TestDeployToEv3(unittest.TestCase):
+    """Tests for deploy transport methods."""
+
+    @patch("deploy_ev3.deploy_to_ev3_via_tar")
+    def test_deploy_to_ev3_defaults_to_tar(self, mock_tar):
+        mock_tar.return_value = True
+
+        result = deploy_to_ev3("/tmp/pkg", "192.168.1.100")
+
+        self.assertTrue(result)
+        mock_tar.assert_called_once()
+
+    @patch("deploy_ev3.deploy_to_ev3_via_rsync")
+    def test_deploy_to_ev3_can_use_rsync(self, mock_rsync):
+        mock_rsync.return_value = True
+
+        result = deploy_to_ev3("/tmp/pkg", "192.168.1.100", method="rsync")
+
+        self.assertTrue(result)
+        mock_rsync.assert_called_once()
+
+    @patch("deploy_ev3.subprocess.run")
+    @patch("deploy_ev3.subprocess.Popen")
+    def test_tar_deploy_runs_ssh_prepare_and_extract(self, mock_popen, mock_run):
+        mock_tar = MagicMock()
+        mock_tar.stdout = MagicMock()
+        mock_tar.returncode = 0
+        mock_tar.wait.return_value = 0
+        mock_popen.return_value = mock_tar
+        mock_run.return_value = MagicMock(returncode=0)
+
+        result = deploy_to_ev3_via_tar(
+            "/tmp/pkg",
+            "192.168.1.100",
+            user="robot",
+            remote_path="/home/robot/ev3PS4Controlled",
+            port=22,
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(mock_run.call_count, 2)
+        prepare_cmd = mock_run.call_args_list[0][0][0]
+        self.assertIn("robot@192.168.1.100", prepare_cmd)
+        self.assertIn("mkdir -p /home/robot/ev3PS4Controlled", prepare_cmd[-1])
+        mock_popen.assert_called_once_with(
+            ["tar", "czf", "-", "-C", "/tmp/pkg", "."],
+            stdout=subprocess.PIPE,
+        )
+
+    @patch("deploy_ev3.subprocess.run")
+    def test_tar_deploy_dry_run_skips_ssh(self, mock_run):
+        result = deploy_to_ev3_via_tar(
+            "/tmp/pkg",
+            "192.168.1.100",
+            dry_run=True,
+        )
+
+        self.assertTrue(result)
+        mock_run.assert_not_called()
+
+    @patch("deploy_ev3.subprocess.run")
+    def test_rsync_deploy_invokes_rsync(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+
+        result = deploy_to_ev3_via_rsync("/tmp/pkg", "192.168.1.100")
+
+        self.assertTrue(result)
+        rsync_cmd = mock_run.call_args[0][0]
+        self.assertEqual(rsync_cmd[0], "rsync")
+        self.assertIn("robot@192.168.1.100:/home/robot/ev3PS4Controlled/", rsync_cmd[-1])
 
 
 class TestVerifyDeployment(unittest.TestCase):

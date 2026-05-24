@@ -328,14 +328,8 @@ class TankDriveSystem(DriveSystem):
         forward_speed = self.validate_speed(forward_speed)
         turn_speed = self.validate_speed(turn_speed)
         
-        # If both inputs are zero, stop the robot immediately and aggressively
         if forward_speed == 0 and turn_speed == 0:
             self.stop()
-            # Force hard stop by setting motor speeds to 0 explicitly
-            if self.is_device_available(self.left_motor_name):
-                self.safe_device_operation(self.left_motor_name, "run", 0)
-            if self.is_device_available(self.right_motor_name): 
-                self.safe_device_operation(self.right_motor_name, "run", 0)
             return
         
         # Calculate base motor speeds from forward input

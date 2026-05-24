@@ -268,9 +268,14 @@ class TestCommandReceivedPayload:
                              _command_received_payload(controller_type="gamepad"))
 
     def test_valid_controller_types(self):
-        for ct in ["ps4", "network_remote", "unknown"]:
+        for ct in ["ps4", "ps5", "network_remote", "unknown"]:
             validate_payload("command_received",
                              _command_received_payload(controller_type=ct))
+
+    def test_ps5_controller_type_accepted(self):
+        """ps5 is a valid controller_type for command_received events."""
+        validate_payload("command_received",
+                         _command_received_payload(controller_type="ps5"))
 
 
 # ---------------------------------------------------------------------------
@@ -314,9 +319,14 @@ class TestCommandExecutedPayload:
                              _command_executed_payload(controller_type="gamepad"))
 
     def test_valid_controller_types(self):
-        for ct in ("ps4", "network_remote", "unknown"):
+        for ct in ("ps4", "ps5", "network_remote", "unknown"):
             validate_payload("command_executed",
                              _command_executed_payload(controller_type=ct))
+
+    def test_ps5_controller_type_accepted(self):
+        """ps5 is a valid controller_type for command_executed events."""
+        validate_payload("command_executed",
+                         _command_executed_payload(controller_type="ps5"))
 
     def test_null_controller_type_passes(self):
         validate_payload("command_executed",

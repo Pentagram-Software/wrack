@@ -20,9 +20,10 @@ The Cloud Function receives HTTP POST requests with commands, validates authenti
 - **index.js**: Robot control Cloud Function (`controlRobot`) - processes HTTP requests, validates commands, manages TCP connection to robot, emits `api_request` telemetry events. Also requires `telemetry.js` so both functions are registered.
 - **api-telemetry.js**: Fire-and-forget telemetry helper used by `controlRobot`. Builds `api_request` events and inserts them to BigQuery via `setImmediate` (non-blocking). Errors are swallowed so they cannot affect command execution.
 - **telemetry.js**: Telemetry ingestion Cloud Function (`telemetryIngestion`) - accepts batched events, validates schema, batch-inserts into BigQuery `wrack_telemetry.events`.
-- **index.test.js**: Jest unit tests for `controlRobot` (authentication, command validation, dispatching, error handling, telemetry logging assertions).
-- **api-telemetry.test.js**: Jest unit tests for `api-telemetry.js` (sanitizeParams, buildApiRequestEvent, logApiRequest fire-and-forget behaviour, BigQuery error isolation).
-- **telemetry.test.js**: Jest unit tests for `telemetryIngestion` (validation, BigQuery inserts, partial failures, auth).
+- **bigquery-client.js**: Reusable BigQuery wrapper — lazy singleton init, `insertEvent`, `insertEvents` batch, exponential-backoff retry for 429/5xx/UNAVAILABLE errors, `PartialFailureError` handling. Opt-in/fail-safe: omitting `BIGQUERY_PROJECT_ID` silently disables all inserts.
+- **index.test.js**: Jest unit tests for `controlRobot` (authentication, command validation, dispatching, error handling).
+- **telemetry.test.js**: Jest unit tests for `telemetryIngestion` (32 tests covering validation, BigQuery inserts, partial failures, auth).
+- **bigquery-client.test.js**: Jest unit tests for the BigQuery client wrapper (60 tests covering isEnabled, _formatRow, _isRetryableError, insertEvent, insertEvents, retry behaviour, client initialisation).
 - **auth.js**: API authentication logic using X-API-Key header (shared by both functions).
 - **robot-server.py**: Python server running on EV3 robot (separate device) - receives TCP commands and controls motors.
 - **test-client.js**: Test utilities and client examples for development.
@@ -87,9 +88,9 @@ The Cloud Function receives HTTP POST requests with commands, validates authenti
 **Environment variables required:**
 ```bash
 API_KEY=your-secure-api-key-here
-BIGQUERY_PROJECT_ID=wrack-control
-BIGQUERY_DATASET=wrack_telemetry
-BIGQUERY_TABLE=events            # optional, defaults to "events"
+BIGQUERY_PROJECT_ID=wrack-control   # required to enable telemetry; omitting silently disables bigquery-client.js
+BIGQUERY_DATASET=wrack_telemetry    # optional, defaults to "wrack_telemetry"
+BIGQUERY_TABLE=events               # optional, defaults to "events"
 ```
 
 ### Request Format
@@ -182,7 +183,7 @@ gcloud builds submit --config cloudbuild.yaml  # Deploy both via Cloud Build
 
 # Testing
 npm run test-robot         # Test all robot commands (requires live robot)
-npm test                   # Run all 175 unit tests (Jest — js + ts projects)
+npm test                   # Run all 197 unit tests (Jest)
 npm run lint              # Code linting
 ```
 

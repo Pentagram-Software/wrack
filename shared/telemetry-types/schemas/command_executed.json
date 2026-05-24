@@ -31,7 +31,7 @@
     },
     "controller_type": {
       "type": "string",
-      "enum": ["ps4", "network_remote", "unknown"],
+      "enum": ["ps4", "ps5", "network_remote", "unknown"],
       "description": "Input source that generated the original command"
     }
   }

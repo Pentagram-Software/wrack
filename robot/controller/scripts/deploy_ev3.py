@@ -261,39 +261,176 @@ def prepare_deployment_package(
 
 def create_launcher_script(mode: str) -> str:
     """Create a shell script to launch the robot controller."""
+    # Guard snippet shared by both modes: abort with a clear message if the
+    # Pybricks MicroPython interpreter is not present on the EV3.
+    interpreter_guard = '''\
+INTERPRETER="pybricks-micropython"
+if ! command -v "$INTERPRETER" >/dev/null 2>&1; then
+    echo "ERROR: '$INTERPRETER' not found on this system." >&2
+    echo "Make sure the EV3 is running ev3dev with the pybricks package" >&2
+    echo "installed, or Pybricks firmware that provides this interpreter." >&2
+    exit 1
+fi
+'''
+
     if mode == "release":
-        # Release mode: run with -O flag for optimization
-        return '''#!/bin/bash
+        # Release mode: run with -O flag for optimization.
+        # pybricks-micropython (MicroPython) honours -O the same way CPython
+        # does at level 1: assert statements are stripped and __debug__ is
+        # set to False.
+        return f'''#!/bin/bash
 # EV3 Robot Controller Launcher - RELEASE MODE
-# This script runs the robot controller with Python optimization enabled.
+# Runs the robot controller with Pybricks MicroPython optimization enabled.
 # __debug__ will be False, assert statements are removed.
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+{interpreter_guard}
 echo "Starting EV3 Robot Controller (RELEASE MODE)..."
 echo "Optimization: ENABLED (__debug__ = False)"
 
-# Run with -O flag for optimization (removes asserts, sets __debug__=False)
-# Use -OO for additional optimization (also removes docstrings)
-exec python3 -O main.py "$@"
+# -O removes assert statements and sets __debug__=False
+exec "$INTERPRETER" -O main.py "$@"
 '''
     else:
-        # Debug mode: run normally
-        return '''#!/bin/bash
+        # Debug mode: run without optimization flags.
+        return f'''#!/bin/bash
 # EV3 Robot Controller Launcher - DEBUG MODE
-# This script runs the robot controller with full debugging enabled.
+# Runs the robot controller with full debugging enabled.
 # __debug__ will be True, all assert statements are active.
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+{interpreter_guard}
 echo "Starting EV3 Robot Controller (DEBUG MODE)..."
 echo "Optimization: DISABLED (__debug__ = True)"
 
 # Run without optimization flags for full debugging
-exec python3 main.py "$@"
+exec "$INTERPRETER" main.py "$@"
 '''
+
+
+def _ssh_target(user: str, host: str, port: int) -> List[str]:
+    """Build base ssh command targeting the EV3."""
+    return ["ssh", "-p", str(port), f"{user}@{host}"]
+
+
+def deploy_to_ev3_via_tar(
+    package_dir: str,
+    host: str,
+    user: str = DEFAULT_EV3_USER,
+    remote_path: str = DEFAULT_EV3_PATH,
+    port: int = DEFAULT_SSH_PORT,
+    dry_run: bool = False,
+    verbose: bool = False,
+) -> bool:
+    """
+    Deploy the package to an EV3 brick using tar over SSH.
+
+    This works on lightweight ev3dev images that do not ship rsync.
+    Only ssh and tar are required on the EV3.
+    """
+    ssh_cmd = _ssh_target(user, host, port)
+    prepare_remote_cmd = f"mkdir -p {remote_path} && rm -rf {remote_path}/*"
+    extract_remote_cmd = f"tar xzf - -C {remote_path}"
+
+    if dry_run:
+        if verbose:
+            print(f"Would deploy via tar+ssh to {user}@{host}:{remote_path}")
+            print(f"  ssh prepare: {prepare_remote_cmd}")
+            print(f"  tar czf - -C {package_dir} . | ssh ... {extract_remote_cmd}")
+        return True
+
+    if verbose:
+        print(f"Deploying via tar+ssh to {user}@{host}:{remote_path}")
+
+    try:
+        subprocess.run(
+            ssh_cmd + [prepare_remote_cmd],
+            check=True,
+            capture_output=not verbose,
+            text=True,
+        )
+
+        tar_create = subprocess.Popen(
+            ["tar", "czf", "-", "-C", package_dir, "."],
+            stdout=subprocess.PIPE,
+        )
+        try:
+            extract_result = subprocess.run(
+                ssh_cmd + [extract_remote_cmd],
+                stdin=tar_create.stdout,
+                check=True,
+                capture_output=not verbose,
+                text=True,
+            )
+        finally:
+            if tar_create.stdout:
+                tar_create.stdout.close()
+            tar_returncode = tar_create.wait()
+
+        if tar_returncode != 0:
+            print(
+                f"Deployment failed: tar create exited with {tar_returncode}",
+                file=sys.stderr,
+            )
+            return False
+
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Deployment failed: {e}", file=sys.stderr)
+        if e.stderr:
+            print(f"Error output: {e.stderr}", file=sys.stderr)
+        return False
+    except FileNotFoundError as e:
+        print(f"Error: required command not found: {e}", file=sys.stderr)
+        return False
+
+
+def deploy_to_ev3_via_rsync(
+    package_dir: str,
+    host: str,
+    user: str = DEFAULT_EV3_USER,
+    remote_path: str = DEFAULT_EV3_PATH,
+    port: int = DEFAULT_SSH_PORT,
+    dry_run: bool = False,
+    verbose: bool = False,
+) -> bool:
+    """Deploy the package using rsync over SSH (optional, requires rsync on EV3)."""
+    rsync_cmd = [
+        "rsync",
+        "-avz",
+        "--delete",
+        "-e", f"ssh -p {port}",
+        f"{package_dir}/",
+        f"{user}@{host}:{remote_path}/",
+    ]
+
+    if dry_run:
+        rsync_cmd.insert(1, "--dry-run")
+
+    if verbose:
+        print(f"Deploying via rsync to {user}@{host}:{remote_path}")
+        print(f"Command: {' '.join(rsync_cmd)}")
+
+    try:
+        subprocess.run(
+            rsync_cmd,
+            check=True,
+            capture_output=not verbose,
+            text=True,
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Deployment failed: {e}", file=sys.stderr)
+        if e.stderr:
+            print(f"Error output: {e.stderr}", file=sys.stderr)
+        return False
+    except FileNotFoundError:
+        print("Error: rsync not found on local machine.", file=sys.stderr)
+        return False
 
 
 def deploy_to_ev3(
@@ -303,11 +440,12 @@ def deploy_to_ev3(
     remote_path: str = DEFAULT_EV3_PATH,
     port: int = DEFAULT_SSH_PORT,
     dry_run: bool = False,
-    verbose: bool = False
+    verbose: bool = False,
+    method: str = "tar",
 ) -> bool:
     """
-    Deploy the package to an EV3 brick using rsync over SSH.
-    
+    Deploy the package to an EV3 brick over SSH.
+
     Args:
         package_dir: Local directory containing the deployment package
         host: EV3 IP address or hostname
@@ -316,42 +454,19 @@ def deploy_to_ev3(
         port: SSH port
         dry_run: If True, only show what would be done
         verbose: Print detailed progress
-    
+        method: "tar" (default, works on stock ev3dev) or "rsync"
+
     Returns:
         True if deployment succeeded, False otherwise
     """
-    rsync_cmd = [
-        "rsync",
-        "-avz",  # archive, verbose, compress
-        "--delete",  # Remove files on destination that don't exist in source
-        "-e", f"ssh -p {port}",
-        f"{package_dir}/",
-        f"{user}@{host}:{remote_path}/"
-    ]
-    
-    if dry_run:
-        rsync_cmd.insert(1, "--dry-run")
-    
-    if verbose:
-        print(f"Deploying to {user}@{host}:{remote_path}")
-        print(f"Command: {' '.join(rsync_cmd)}")
-    
-    try:
-        result = subprocess.run(
-            rsync_cmd,
-            check=True,
-            capture_output=not verbose,
-            text=True
+    if method == "rsync":
+        return deploy_to_ev3_via_rsync(
+            package_dir, host, user, remote_path, port, dry_run, verbose
         )
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"Deployment failed: {e}", file=sys.stderr)
-        if e.stderr:
-            print(f"Error output: {e.stderr}", file=sys.stderr)
-        return False
-    except FileNotFoundError:
-        print("Error: rsync not found. Please install rsync.", file=sys.stderr)
-        return False
+
+    return deploy_to_ev3_via_tar(
+        package_dir, host, user, remote_path, port, dry_run, verbose
+    )
 
 
 def verify_deployment(
@@ -470,6 +585,12 @@ Examples:
         default=None,
         help="Source directory (default: auto-detect from script location)"
     )
+    parser.add_argument(
+        "--method",
+        choices=["tar", "rsync"],
+        default="tar",
+        help="Transfer method (default: tar — works on ev3dev without rsync)"
+    )
     
     args = parser.parse_args()
     
@@ -521,7 +642,8 @@ Examples:
             remote_path=args.path,
             port=args.port,
             dry_run=args.dry_run,
-            verbose=args.verbose
+            verbose=args.verbose,
+            method=args.method,
         )
         
         if not success:

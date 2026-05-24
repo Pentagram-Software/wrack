@@ -3,10 +3,15 @@ from event_handler import EventHandler
 import threading
 import struct
 # import traceback  # Commented out due to EV3 compatibility issues
-from time import sleep
 from error_reporting import report_controller_error, report_exception
 
 MIN_JOYSTICK_MOVE = 100  # The minimum value of joystick move to be considered as a move (for -1000 to 1000 range)
+
+# Joystick axis ranges reported by Linux evdev (PS4 = 8-bit, PS5/DualSense = 16-bit)
+AXIS_RANGE_8BIT = (0, 255)
+AXIS_RANGE_16BIT = (0, 65535)
+AXIS_SENTINEL_VALUES = (4294967295, 4294967294)
+
     #const values representing particular events 
 
 #ev_type
@@ -23,10 +28,81 @@ SQUARE_BUTTON = 308;
 #ev_code (for ev_type == EV_ABS)
 LEFT_STICK_X = 0;
 LEFT_STICK_Y = 1;
+L2_TRIGGER = 2;    # ABS_Z  (analog L2 axis, range 0-255)
 RIGHT_STICK_X = 3;
 RIGHT_STICK_Y = 4;
-L2_TRIGGER = 3;
-R2_TRIGGER = 4;
+R2_TRIGGER = 5;    # ABS_RZ (analog R2 axis, range 0-255)
+
+# Known PlayStation controller device names as reported by the Linux input subsystem.
+# Used to locate the correct /dev/input/event* device by scanning
+# /proc/bus/input/devices rather than relying on hardcoded event numbers.
+KNOWN_CONTROLLER_NAMES = [
+    "DualSense Wireless Controller",                              # PS5 (generic/USB)
+    "Sony Interactive Entertainment DualSense Wireless Controller",  # PS5 (Bluetooth)
+    "Sony Interactive Entertainment Wireless Controller",         # PS4 (Bluetooth)
+    "Sony Computer Entertainment Wireless Controller",            # PS4 (older firmware)
+    "Wireless Controller",                                        # Generic fallback (PS4/PS5)
+]
+
+# Sub-strings that identify non-gamepad input sub-devices exposed by the Linux
+# Bluetooth HID driver (touchpad, motion sensors, accelerometer).  These are
+# intentionally excluded so that find_controller_device() only returns the path
+# to the main gamepad event node and never the touchpad or IMU node.
+EXCLUDED_DEVICE_KEYWORDS = [
+    "touchpad",
+    "motion sensors",
+    "motion sensor",
+    "accelerometer",
+]
+
+
+def find_controller_device():
+    """Scan /proc/bus/input/devices to find a connected PlayStation controller.
+
+    Tries each name in KNOWN_CONTROLLER_NAMES (most-specific first) and returns
+    the first matching /dev/input/event* path.  Non-gamepad sub-devices (touchpad,
+    motion sensors) are explicitly skipped.  Returns None when no device is found
+    or when the proc file cannot be read (e.g. in unit-test environments).
+    """
+    try:
+        with open("/proc/bus/input/devices", "r") as f:
+            content = f.read()
+
+        # Each device entry is separated by a blank line
+        blocks = content.strip().split('\n\n')
+        for block in blocks:
+            lines = block.strip().split('\n')
+            device_name = None
+            event_file = None
+
+            for line in lines:
+                if line.startswith('N: Name='):
+                    device_name = line.split('Name=')[1].strip().strip('"')
+                elif line.startswith('H: Handlers='):
+                    handlers = line.split('Handlers=')[1].strip()
+                    for handler in handlers.split():
+                        if handler.startswith('event'):
+                            event_file = '/dev/input/' + handler
+                            break
+
+            if device_name and event_file:
+                device_name_lower = device_name.lower()
+
+                # Skip non-gamepad sub-devices (touchpad, IMU, etc.) before
+                # checking against KNOWN_CONTROLLER_NAMES.  Without this guard
+                # the substring check below would match e.g. "... Wireless
+                # Controller Touchpad" and return the wrong event node.
+                if any(kw in device_name_lower for kw in EXCLUDED_DEVICE_KEYWORDS):
+                    continue
+
+                for known_name in KNOWN_CONTROLLER_NAMES:
+                    if known_name.lower() in device_name_lower:
+                        return event_file
+
+    except Exception as e:
+        print("Warning: Could not scan /proc/bus/input/devices:", e)
+
+    return None
 
 
 def printIn(x,y,text):
@@ -35,10 +111,14 @@ def printIn(x,y,text):
         print("\033["+str(y)+";"+str(x)+"H"+text)
 
 
-# Purpose: A class for handling PS4 controller events.
+# Purpose: A class for handling PlayStation controller events (PS4 DualShock 4 and PS5 DualSense).
+# Both controllers report identical Linux evdev button/axis codes, so the same
+# event-handling logic works for either device.  Device detection is done by
+# name via find_controller_device() so that the correct /dev/input/event* file
+# is opened regardless of which slot the kernel assigned.
 class PS4Controller(EventHandler, threading.Thread):
 
-    # A flag for stopping the main loop of handling PS4 controller events
+    # A flag for stopping the main loop of handling PlayStation controller events
     stopped = False;
     connected = False;  # Track connection status
     l_left = 0;
@@ -62,50 +142,56 @@ class PS4Controller(EventHandler, threading.Thread):
         self.r_forward = 0
         self.last_joystick_event_time = 0
         self.connected = False
+        self._axis_range = None
     def __str__(self):
-        return "PS4 controller for EV3"; 
+        return "PlayStation controller (PS4/PS5) for EV3"; 
     
-    # This is the main loop of handling PS4 controller events. It is run in a separate thread.
+    # This is the main loop of handling PlayStation controller events. It is run in a separate thread.
     def run(self):
-       # Open the Gamepad event file:
-        # /dev/input/event3 is for PS3 gamepad
-        # /dev/input/event4 is for PS4 gamepad
-        # look at contents of /proc/bus/input/devices if either one of them doesn't work.
-        # use 'cat /proc/bus/input/devices' and look for the event file.
+       # Open the Gamepad event file.
+        # First try to detect the device by name via /proc/bus/input/devices so that
+        # this works with both PS4 DualShock 4 and PS5 DualSense controllers without
+        # depending on a hardcoded event number.
+        # If name-based detection fails, fall back to probing the most common paths.
         infile_path = "/dev/input/event4"
         
         try:
-            # Check if PS4 controller device file exists
-            print("Checking for PS4 controller...")
+            print("Searching for PlayStation controller (PS4/PS5)...")
+
+            # Primary: detect by device name
+            detected_path = find_controller_device()
+            if detected_path:
+                print("PlayStation controller detected at", detected_path)
+                infile_path = detected_path
+            else:
+                # Fallback: probe fixed event paths
+                print("Name-based detection failed, probing fixed event paths...")
+                try:
+                    test_file = open(infile_path, "rb")
+                    test_file.close()
+                    print("Controller device found at", infile_path)
+                except Exception as e:
+                    print("Controller not found at", infile_path)
+                    report_controller_error("PS4Controller", "device file check", e, infile_path)
+                    print("Trying alternative paths...")
+                    for alt_path in ["/dev/input/event3", "/dev/input/event5", "/dev/input/event2"]:
+                        try:
+                            test_file = open(alt_path, "rb")
+                            test_file.close()
+                            infile_path = alt_path
+                            print("Found controller at", alt_path)
+                            break
+                        except Exception as e:
+                            print("Failed to access", alt_path)
+                            report_controller_error("PS4Controller", "alternative path check", e, alt_path)
+                            continue
+                    else:
+                        raise OSError("No PlayStation controller found")
             
-            # Try to check if file exists (simple way for MicroPython)
-            try:
-                test_file = open(infile_path, "rb")
-                test_file.close()
-                print("PS4 controller device found at", infile_path)
-            except Exception as e:
-                print("PS4 controller device not found at", infile_path)
-                report_controller_error("PS4Controller", "device file check", e, infile_path)
-                print("Trying alternative paths...")
-                # Try alternative event files
-                for alt_path in ["/dev/input/event3", "/dev/input/event5", "/dev/input/event2"]:
-                    try:
-                        test_file = open(alt_path, "rb")
-                        test_file.close()
-                        infile_path = alt_path
-                        print("Found controller at", alt_path)
-                        break
-                    except Exception as e:
-                        print("Failed to access", alt_path)
-                        report_controller_error("PS4Controller", "alternative path check", e, alt_path)
-                        continue
-                else:
-                    raise OSError("No PS4 controller found")
-            
-            print("Attempting to connect to PS4 controller at", infile_path)
+            print("Attempting to connect to PlayStation controller at", infile_path)
             # open file in binary mode
             in_file = open(infile_path, "rb")
-            print("PS4 controller connected successfully!")
+            print("PlayStation controller connected successfully!")
             self.connected = True  # Mark as connected
 
             # Read from the file
@@ -116,54 +202,46 @@ class PS4Controller(EventHandler, threading.Thread):
             i = 0;
             
             if __debug__:
-                print("Starting the PS4 loop...")            
+                print("Starting the PlayStation controller loop...")            
             while event and not self.stopped:
                 (tv_sec, tv_usec, ev_type, code, value) = struct.unpack(FORMAT, event)
 
 
-                #  Handle PS4 controller right joystick
+                #  Handle right joystick
                 if ev_type == EV_ABS and (code == RIGHT_STICK_X or code == RIGHT_STICK_Y):
-                    if(code == RIGHT_STICK_Y):
-                        self.r_forward = -1* self.scale(value, (0,255), (-100,100))
-                        # printIn(35,11,"Right y-axis:" + str(self.r_forward) + "   ")                        
-                    if(code == RIGHT_STICK_X):
-                        self.r_left = -1 * self.scale(value, (0,255), (-100,100))
-                        # printIn(35,10,"Right x-axis:" + str(self.r_left) + "   ")   
+                    if code == RIGHT_STICK_Y:
+                        scaled = self._scale_axis(value, (-100, 100))
+                        if scaled is not None:
+                            self.r_forward = -1 * scaled
+                    if code == RIGHT_STICK_X:
+                        scaled = self._scale_axis(value, (-100, 100))
+                        if scaled is not None:
+                            self.r_left = -1 * scaled
 
-                    # Apply deadzone filtering to right joystick too
-                    if abs(self.r_forward) < 50:  # Increased deadzone for right joystick
+                    if abs(self.r_forward) < 50:
                         self.r_forward = 0
                     if abs(self.r_left) < 50:
                         self.r_left = 0
-                        
-                    # Always trigger right joystick events to ensure stop commands are sent
-                    # Remove throttling to prevent race conditions with turret control
-                    self.trigger("right_joystick");
 
-                # Handle PS4 controller left joystick
+                    self.trigger("right_joystick")
+
+                # Handle left joystick (PS4 8-bit and PS5/DualSense 16-bit axes)
                 if ev_type == EV_ABS and (code == LEFT_STICK_X or code == LEFT_STICK_Y):
-                    # Store previous values to detect significant changes
-                    prev_l_forward = self.l_forward
-                    prev_l_left = self.l_left
-                    
-                    if(code == LEFT_STICK_Y and value < 255):                                             
-                        # Invert Y-axis: joystick up (value=0) should give positive l_forward
-                        self.l_forward = self.scale(value, (0,255), (1000,-1000))
-                        # Apply deadzone filtering immediately
-                        if abs(self.l_forward) < MIN_JOYSTICK_MOVE:
-                            self.l_forward = 0
-                        # printIn(1,11,"Left y-axis:" + str(self.l_forward)+ "   ")   
-                        
-                    if(code == LEFT_STICK_X and value < 255):
-                        self.l_left = self.scale(value, (0,255), (-1000,1000))
-                        # Apply deadzone filtering immediately
-                        if abs(self.l_left) < MIN_JOYSTICK_MOVE:
-                            self.l_left = 0
-                        # printIn(1,10,"Left x-axis:" + str(self.l_left ) + "   ")                        
+                    if code == LEFT_STICK_Y:
+                        scaled = self._scale_axis(value, (1000, -1000))
+                        if scaled is not None:
+                            self.l_forward = scaled
+                            if abs(self.l_forward) < MIN_JOYSTICK_MOVE:
+                                self.l_forward = 0
 
-                    # Always trigger joystick events to ensure real-time response
-                    # Remove throttling to prevent race conditions
-                    self.trigger("left_joystick");
+                    if code == LEFT_STICK_X:
+                        scaled = self._scale_axis(value, (-1000, 1000))
+                        if scaled is not None:
+                            self.l_left = scaled
+                            if abs(self.l_left) < MIN_JOYSTICK_MOVE:
+                                self.l_left = 0
+
+                    self.trigger("left_joystick")
 
 
 
@@ -186,46 +264,50 @@ class PS4Controller(EventHandler, threading.Thread):
                     if(code == 17 and value == 4294967295):
                         self.trigger("down_arrow_pressed");
 
-                # Handle PS4 controller buttons
+                # Handle controller buttons
+                # Note: PS4 DualShock 4 and PS5 DualSense use the same evdev key codes
+                # for all action buttons, shoulder buttons, triggers, and the d-pad.
                 if ev_type == EV_KEY:
-                    # Button code debug output removed for performance
-                    #TODO: Change it all into case statement
-                    # Handle PS4 controller X button
-                    if code == 304 and value == 1:
+                    # Cross (X) button — BTN_SOUTH (304)
+                    if code == X_BUTTON and value == 1:
                         self.trigger("cross_button");
-                    #Handle PS4 controller CIRCLE(305) button
-                    if code == 305 and value == 1:
+                    # Circle button — BTN_EAST (305)
+                    if code == CIRCLE_BUTTON and value == 1:
+                        self.trigger("circle_button");
+                    # Triangle button — BTN_NORTH (307)
+                    if code == TRIANGLE_BUTTON and value == 1:
                         self.trigger("triangle_button");
-                    #Handle PS4 controller SQUARE(308) button
-                    if code == 308 and value == 1:
-                        self.trigger("triangle_button");
-                    # Handle PS4 controller TRIANGLE(307) button
-                    if code == 307 and value == 1:
-                        self.trigger("triangle_button");
-                    
+                    # Square button — BTN_WEST (308)
+                    if code == SQUARE_BUTTON and value == 1:
+                        self.trigger("square_button");
 
-                    #Handle PS4 controller L1(310) button
+                    # L1 button — BTN_TL (310)
                     if code == 310 and value == 1:
                         self.trigger("l1_button");
-                    #Handle PS4 controller L2(312) button
+                    # L2 button — BTN_TL2 (312)
                     if code == 312 and value == 1:
                         self.trigger("l2_button");
-                    #Handle PS4 controller R1(311) button
+                    # R1 button — BTN_TR (311)
                     if code == 311 and value == 1:
                         self.trigger("r1_button");
-                    #Handle PS4 controller R2(313) button
+                    # R2 button — BTN_TR2 (313)
                     if code == 313 and value == 1:
                         self.trigger("r2_button");
 
-                    # TODO: Handle PS4 controller SHARE(314) button
-                    # TODO: Handle PS4 controller OPTIONS(315) button
+                    # Options button — BTN_START (315)
+                    # PS4: Options | PS5: Options
                     if code == 315 and value == 1:
                         self.trigger("options_button");
-                    # TODO: Handle PS4 controller PS(316) button
-                    # TODO: Handle PS4 controller L3(317) button
-                    # TODO: Handle PS4 controller R3(318) button
+                    # Share/Create button — BTN_SELECT (314)
+                    # PS4: Share | PS5: Create
+                    # TODO: Handle Share/Create button (314) if needed
+                    # PS/Home button — BTN_MODE (316)
+                    # TODO: Handle PS/Home button (316) if needed
+                    # L3 (left stick click) — BTN_THUMBL (317)
+                    # TODO: Handle L3 (317) if needed
+                    # R3 (right stick click) — BTN_THUMBR (318)
+                    # TODO: Handle R3 (318) if needed
 
-                sleep(0.001)            
                 # Finally, read another event
                 event = in_file.read(EVENT_SIZE)
                 
@@ -235,18 +317,18 @@ class PS4Controller(EventHandler, threading.Thread):
             # Handle both FileNotFoundError and PermissionError under OSError
             error_msg = str(e)
             report_controller_error("PS4Controller", "device access", e, infile_path)
-            if "No such file" in error_msg or "No PS4 controller found" in error_msg:
-                print("ERROR: PS4 controller not found!")
+            if "No such file" in error_msg or "No PlayStation controller found" in error_msg:
+                print("ERROR: PlayStation controller not found!")
                 print("Please ensure:")
-                print("1. PS4 controller is paired with EV3 via Bluetooth")
+                print("1. PS4 or PS5 controller is paired with EV3 via Bluetooth")
                 print("2. Controller is turned on and connected")
                 print("3. Check 'cat /proc/bus/input/devices' for correct event file")
                 print("Program will continue without controller input.")
             elif "Permission denied" in error_msg:
-                print("ERROR: Permission denied accessing PS4 controller")
+                print("ERROR: Permission denied accessing PlayStation controller")
                 print("Try running as root or check device permissions")
             else:
-                print("ERROR: PS4 controller access failed:", error_msg)
+                print("ERROR: PlayStation controller access failed:", error_msg)
                 print("Check device connection and permissions")
             self.connected = False
         except Exception as e:
@@ -255,18 +337,48 @@ class PS4Controller(EventHandler, threading.Thread):
             self.connected = False
 
     def handle_event(self, event):
-        # Override this method to handle PS4 controller events
+        # Override this method to handle PlayStation controller events
         pass
  
     def stop(self):
         self.stopped = True;
     
     def is_connected(self):
-        """Check if the PS4 controller is connected and working"""
+        """Check if the PlayStation controller is connected and working"""
         return self.connected
 
-    # A helper function for converting stick values (0 - 255)
-    # to more usable numbers (-100 - 100)6
+    def _is_axis_sentinel(self, value):
+        """Ignore release sentinel events; 255 is only a sentinel on 8-bit PS4 axes."""
+        if value in AXIS_SENTINEL_VALUES:
+            return True
+        if self._get_axis_range() == AXIS_RANGE_8BIT and value == 255:
+            return True
+        return False
+
+    def _detect_axis_range(self, value):
+        """Auto-detect 8-bit (PS4) vs 16-bit (PS5/DualSense) stick axis range."""
+        if self._axis_range is not None or self._is_axis_sentinel(value):
+            return
+        if value > 1000:
+            self._axis_range = AXIS_RANGE_16BIT
+        else:
+            self._axis_range = AXIS_RANGE_8BIT
+
+    def _get_axis_range(self):
+        return self._axis_range or AXIS_RANGE_8BIT
+
+    def _scale_axis(self, value, dst):
+        """
+        Scale a raw evdev axis value to the requested output range.
+
+        Returns None for sentinel/release values that should be ignored.
+        """
+        if self._is_axis_sentinel(value):
+            return None
+
+        self._detect_axis_range(value)
+        return self.scale(value, self._get_axis_range(), dst)
+
     def scale(self, val, src, dst):
         """
         Scale the given value from the scale of src to the scale of dst.
@@ -335,4 +447,3 @@ class PS4Controller(EventHandler, threading.Thread):
 
     def onDownArrowPressed(self, callback):
         self.on("down_arrow_pressed", callback)
-

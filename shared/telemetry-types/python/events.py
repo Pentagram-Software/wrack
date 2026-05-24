@@ -48,7 +48,7 @@ VALID_EVENT_TYPES: List[str] = [
 ]
 
 BatteryType = Literal["rechargeable", "alkaline", "unknown"]
-ControllerType = Literal["ps4", "network_remote", "unknown"]
+ControllerType = Literal["ps4", "ps5", "network_remote", "unknown"]
 DeviceStatusValue = Literal["connected", "disconnected", "error", "stalled", "initializing"]
 DeviceType = Literal["motor", "sensor", "controller", "unknown"]
 HttpMethod = Literal["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
@@ -145,7 +145,7 @@ VALID_DEVICE_TYPES: List[str] = ["motor", "sensor", "controller", "unknown"]
 
 VALID_BATTERY_TYPES: List[str] = ["rechargeable", "alkaline", "unknown"]
 
-VALID_CONTROLLER_TYPES: List[str] = ["ps4", "network_remote", "unknown"]
+VALID_CONTROLLER_TYPES: List[str] = ["ps4", "ps5", "network_remote", "unknown"]
 
 VALID_HTTP_METHODS: List[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 
