@@ -606,6 +606,15 @@ describe('controlRobot Cloud Function', () => {
       expect(logApiRequest).toHaveBeenCalledTimes(1);
       const callArgs = logApiRequest.mock.calls[0][0];
       expect(callArgs.statusCode).toBe(405);
+      expect(callArgs.method).toBe('GET');
+    });
+
+    test('logApiRequest receives the actual HTTP method for POST requests', async () => {
+      const req = createMockRequest({ body: { command: 'stop' } }); // method defaults to 'POST'
+      await runHandler(req);
+
+      const callArgs = logApiRequest.mock.calls[0][0];
+      expect(callArgs.method).toBe('POST');
     });
 
     test('sanitizes speak text in logged params', async () => {

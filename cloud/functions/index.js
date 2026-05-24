@@ -205,6 +205,7 @@ functions.http('controlRobot', (req, res) => {
       // affect command execution).
       try {
         logApiRequest({
+          method: req.method,
           command,
           params,
           statusCode,

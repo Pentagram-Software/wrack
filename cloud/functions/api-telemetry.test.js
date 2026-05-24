@@ -108,6 +108,7 @@ describe('sanitizeParams', () => {
 
 describe('buildApiRequestEvent', () => {
   const baseData = {
+    method: 'POST',
     command: 'forward',
     params: { speed: 500 },
     statusCode: 200,
@@ -188,6 +189,17 @@ describe('buildApiRequestEvent', () => {
     const event = buildApiRequestEvent({ ...baseData, clientIpHash: null });
     expect(event.payload.client_ip_hash).toBeNull();
   });
+
+  test('records the actual HTTP method in payload.method', () => {
+    const event = buildApiRequestEvent({ ...baseData, method: 'GET' });
+    expect(event.payload.method).toBe('GET');
+  });
+
+  test('defaults method to POST when not provided', () => {
+    const { method: _m, ...dataWithoutMethod } = baseData;
+    const event = buildApiRequestEvent(dataWithoutMethod);
+    expect(event.payload.method).toBe('POST');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -196,6 +208,7 @@ describe('buildApiRequestEvent', () => {
 
 describe('logApiRequest', () => {
   const baseData = {
+    method: 'POST',
     command: 'stop',
     params: {},
     statusCode: 200,
@@ -250,6 +263,15 @@ describe('logApiRequest', () => {
     expect(payload.status_code).toBe(200);
     expect(payload.latency_ms).toBe(50);
     expect(payload.robot_response_time_ms).toBe(20);
+  });
+
+  test('records non-POST method in BigQuery payload', async () => {
+    logApiRequest({ ...baseData, method: 'DELETE' });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const [rows] = mockInsert.mock.calls[0];
+    const payload = JSON.parse(rows[0].payload);
+    expect(payload.method).toBe('DELETE');
   });
 
   test('swallows BigQuery insert errors without throwing', async () => {

@@ -55,6 +55,7 @@ function sanitizeParams(command, params) {
  * Build a telemetry event envelope for an `api_request` event.
  *
  * @param {object} data
+ * @param {string}       data.method            - HTTP method of the incoming request (e.g. 'POST', 'GET').
  * @param {string|null}  data.command           - Robot command name (null when request failed before command parsing).
  * @param {object|null}  data.params            - Raw request params (will be sanitized).
  * @param {number}       data.statusCode        - HTTP status code returned to the caller.
@@ -65,6 +66,7 @@ function sanitizeParams(command, params) {
  * @returns {object} A valid telemetry event envelope.
  */
 function buildApiRequestEvent({
+  method = 'POST',
   command,
   params,
   statusCode,
@@ -80,7 +82,7 @@ function buildApiRequestEvent({
     timestamp: new Date().toISOString(),
     payload: {
       endpoint: 'controlRobot',
-      method: 'POST',
+      method: method,
       command: command != null ? String(command) : null,
       sanitized_params: sanitizeParams(command, params),
       status_code: statusCode,
@@ -100,7 +102,8 @@ function buildApiRequestEvent({
  * errors (build failures, BigQuery errors) are caught and logged to stderr
  * so they cannot affect command execution.
  *
- * @param {object} data - Same shape as {@link buildApiRequestEvent}.
+ * @param {object} data          - Same shape as {@link buildApiRequestEvent}.
+ * @param {string} [data.method] - HTTP method; defaults to 'POST' if omitted.
  */
 function logApiRequest(data) {
   setImmediate(() => {
