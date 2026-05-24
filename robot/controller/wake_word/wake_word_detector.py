@@ -29,11 +29,21 @@ except ImportError:
     pass
 
 
-DEFAULT_MODEL_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "models",
-    "hey_wrack.pb"
-)
+def _default_model_path():
+    """Resolve default model path; MicroPython os has no os.path submodule."""
+    try:
+        import os.path as ospath
+
+        return ospath.join(
+            ospath.dirname(ospath.abspath(__file__)),
+            "models",
+            "hey_wrack.pb",
+        )
+    except (ImportError, AttributeError):
+        return "models/hey_wrack.pb"
+
+
+DEFAULT_MODEL_PATH = _default_model_path()
 
 DEFAULT_ENGINE_PATH = "precise-engine"
 

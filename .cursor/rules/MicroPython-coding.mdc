@@ -1,0 +1,6 @@
+---
+globs: robot/controller/*.py
+alwaysApply: false
+---
+
+The robot/controller is runnung ion EV3 with mucropython oin it. Take it into consideration when developing code in this folder
