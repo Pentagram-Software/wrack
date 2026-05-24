@@ -11,7 +11,7 @@
 │  Edge             Raspberry Pi — video streamer      │
 │                              — vision model          │
 ├─────────────────────────────────────────────────────┤
-│  Robot            EV3 — controller │ PS4 support     │
+│  Robot            EV3 — controller │ PS4/PS5 support │
 └─────────────────────────────────────────────────────┘
 ```
 

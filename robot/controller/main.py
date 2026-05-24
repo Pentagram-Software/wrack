@@ -1,10 +1,11 @@
 #!/usr/bin/env pybricks-micropython
 
 """
-EV3 PS4 Controller Robot with Graceful Device Handling
+EV3 PlayStation Controller Robot with Graceful Device Handling
 
-This program controls an EV3 robot using a PS4 controller with robust
-device management that handles missing devices gracefully.
+This program controls an EV3 robot using a PS4 (DualShock 4) or PS5
+(DualSense) controller with robust device management that handles missing
+devices gracefully.
 
 Features:
 - Automatic device detection and initialization
@@ -314,8 +315,8 @@ def quit(value):
     # Cleanup devices
     device_manager.cleanup()
     
-    # Stop the PS4 controller
-    value.stop()                                                  
+    # Stop the PlayStation controller
+    value.stop()
 
 
 def driftLeft(value):
@@ -507,7 +508,7 @@ def main():
     
     # Check if controller connected successfully
     if controller.is_connected():
-        print("Setting up PS4 controller event handlers...")
+        print("Setting up PlayStation controller event handlers...")
         
         # Only set up pixy camera event handler if camera is available
         if device_manager.is_device_available("pixy_camera"):
@@ -545,9 +546,9 @@ def main():
             print("Drive motors not available - arrow controls disabled")
             
         controller.onRightJoystickMove(watch)
-        print("PS4 controller is ready for use!")
+        print("PlayStation controller (PS4/PS5) is ready for use!")
     else:
-        print("PS4 controller not available - program running in manual mode")
+        print("PlayStation controller not available - program running in manual mode")
         print("You can still use arrow buttons on the EV3 brick if available")
 
     # Set up Network Remote Controller event handlers
@@ -1026,7 +1027,7 @@ def main():
         print("")
         
         if controller.is_connected():
-            print("=== PS4 Controller Commands ===")
+            print("=== PlayStation Controller Commands (PS4/PS5) ===")
             print("Left Stick Y-axis: Forward/backward speed")
             print("Left Stick X-axis: Turning speed left/right")
             print("Right Stick X-axis: Turret speed left/right")
@@ -1041,16 +1042,17 @@ def main():
                 print("L2 Button: Start auto scanning")
                 print("R2 Button: Stop auto scanning")
             print("Options: Quit")
-            print("===============================")
+            print("================================================")
         else:
-            print("=== PS4 Controller Status ===")
-            print("PS4 controller not connected")
-            print("To connect PS4 controller:")
-            print("- Pair PS4 controller with EV3 Bluetooth")
-            print("- Hold PS + Share buttons to enter pairing mode")
+            print("=== PlayStation Controller Status ===")
+            print("PS4/PS5 controller not connected")
+            print("To connect a PlayStation controller:")
+            print("- PS4: Hold PS + Share buttons to enter pairing mode")
+            print("- PS5: Hold PS + Create buttons to enter pairing mode")
+            print("- Pair the controller with EV3 Bluetooth")
             print("- Use EV3 Bluetooth menu to connect")
             print("- Restart this program")
-            print("===============================")
+            print("=====================================")
         
         print("")
         print("=== Network Remote Controller ===")

@@ -71,7 +71,7 @@ VALID_DEVICE_TYPES: List[str] = ["motor", "sensor", "controller", "unknown"]
 
 VALID_BATTERY_TYPES: List[str] = ["rechargeable", "alkaline", "unknown"]
 
-VALID_CONTROLLER_TYPES: List[str] = ["ps4", "network_remote", "unknown"]
+VALID_CONTROLLER_TYPES: List[str] = ["ps4", "ps5", "network_remote", "unknown"]
 
 VALID_HTTP_METHODS: List[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 

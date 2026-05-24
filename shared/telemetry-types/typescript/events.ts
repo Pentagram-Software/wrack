@@ -63,7 +63,7 @@ export interface BatteryStatusPayload {
   is_critical?: boolean;
 }
 
-export type ControllerType = 'ps4' | 'network_remote' | 'unknown';
+export type ControllerType = 'ps4' | 'ps5' | 'network_remote' | 'unknown';
 
 /** Payload for `command_received` events. */
 export interface CommandReceivedPayload {

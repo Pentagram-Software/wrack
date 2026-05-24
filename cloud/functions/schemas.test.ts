@@ -291,9 +291,13 @@ describe('validateCommandReceivedPayload', () => {
   });
 
   test('all valid controller_types pass', () => {
-    for (const ct of ['ps4', 'network_remote', 'unknown']) {
+    for (const ct of ['ps4', 'ps5', 'network_remote', 'unknown']) {
       expect(validateCommandReceivedPayload(commandReceivedPayload({ controller_type: ct })).valid).toBe(true);
     }
+  });
+
+  test('ps5 controller_type is accepted', () => {
+    expect(validateCommandReceivedPayload(commandReceivedPayload({ controller_type: 'ps5' })).valid).toBe(true);
   });
 });
 
@@ -342,9 +346,13 @@ describe('validateCommandExecutedPayload', () => {
   });
 
   test('all valid controller_types pass', () => {
-    for (const ct of ['ps4', 'network_remote', 'unknown']) {
+    for (const ct of ['ps4', 'ps5', 'network_remote', 'unknown']) {
       expect(validateCommandExecutedPayload(commandExecutedPayload({ controller_type: ct })).valid).toBe(true);
     }
+  });
+
+  test('ps5 controller_type is accepted', () => {
+    expect(validateCommandExecutedPayload(commandExecutedPayload({ controller_type: 'ps5' })).valid).toBe(true);
   });
 
   test('null controller_type passes', () => {
