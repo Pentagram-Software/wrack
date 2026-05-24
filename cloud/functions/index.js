@@ -1,7 +1,8 @@
 const functions = require('@google-cloud/functions-framework');
 const cors = require('cors');
 const net = require('net');
-const { authenticateRequest } = require('./auth');
+const { authenticateRequest, getClientId } = require('./auth');
+const { logApiRequest } = require('./api-telemetry');
 
 const corsHandler = cors({
   origin: true,
@@ -174,28 +175,74 @@ function validateCommand(command, params) {
 
 functions.http('controlRobot', (req, res) => {
   corsHandler(req, res, async () => {
+    const requestStart = Date.now();
+
+    // Hoist command/params so they are visible inside sendResponse for telemetry.
+    let command = null;
+    let params = {};
+
+    // Derive client identifier for telemetry (best-effort; never blocks).
+    let clientIpHash = null;
+    try {
+      clientIpHash = getClientId(req);
+    } catch (_) { /* ignore — IP hash is optional */ }
+
+    /**
+     * Send an HTTP response and fire-and-forget a telemetry event.
+     * The telemetry call is deferred via setImmediate so it never adds
+     * to observed request latency.
+     *
+     * @param {number} statusCode
+     * @param {object} body
+     * @param {object} [options]
+     * @param {number|null} [options.robotLatencyMs]
+     */
+    function sendResponse(statusCode, body, { robotLatencyMs = null } = {}) {
+      const totalLatencyMs = Date.now() - requestStart;
+      const errorMessage = (body && body.error) || null;
+      // Telemetry is best-effort: a thrown error must never prevent the HTTP
+      // response from being sent (acceptance criterion: logging errors must not
+      // affect command execution).
+      try {
+        logApiRequest({
+          method: req.method,
+          command,
+          params,
+          statusCode,
+          totalLatencyMs,
+          robotLatencyMs,
+          clientIpHash,
+          errorMessage,
+        });
+      } catch (logErr) {
+        console.error('[controlRobot] Telemetry logging error (ignored):', logErr.message);
+      }
+      return res.status(statusCode).json(body);
+    }
+
     try {
       if (req.method !== 'POST') {
-        return res.status(405).json({ error: 'Method not allowed' });
+        return sendResponse(405, { error: 'Method not allowed' });
       }
 
       // Authenticate the request
       try {
         authenticateRequest(req);
       } catch (authError) {
-        return res.status(401).json({ error: authError.message });
+        return sendResponse(401, { error: authError.message });
       }
 
-      const { command, params = {} } = req.body;
+      command = req.body.command ?? null;
+      params = req.body.params || {};
 
       if (!command) {
-        return res.status(400).json({ error: 'Command is required' });
+        return sendResponse(400, { error: 'Command is required' });
       }
 
       try {
         validateCommand(command, params);
       } catch (validationError) {
-        return res.status(400).json({ error: validationError.message });
+        return sendResponse(400, { error: validationError.message });
       }
 
       console.log(`Executing command: ${command}`, params);
@@ -279,27 +326,30 @@ functions.http('controlRobot', (req, res) => {
           }
           break;
         default:
-          return res.status(400).json({ error: `Unsupported command: ${command}` });
+          return sendResponse(400, { error: `Unsupported command: ${command}` });
       }
       
       let result;
+      let robotLatencyMs = null;
       try {
+        const robotStart = Date.now();
         result = await sendCommandToRobot(action, direction, speed, duration, extraParams);
+        robotLatencyMs = Date.now() - robotStart;
       } catch (robotError) {
         console.error('Robot connection error:', robotError.message);
-        return res.status(502).json({
+        return sendResponse(502, {
           success: false,
           error: robotError.message,
           timestamp: new Date().toISOString()
         });
       }
       
-      res.status(200).json({
+      return sendResponse(200, {
         success: true,
         command,
         result,
         timestamp: new Date().toISOString()
-      });
+      }, { robotLatencyMs });
 
     } catch (error) {
       console.error('Error:', error.message);
@@ -311,7 +361,7 @@ functions.http('controlRobot', (req, res) => {
         statusCode = 502;
       }
       
-      res.status(statusCode).json({
+      return sendResponse(statusCode, {
         success: false,
         error: error.message,
         timestamp: new Date().toISOString()

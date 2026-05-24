@@ -105,7 +105,8 @@ EV3 sensors ──► Raspberry Pi vision model ──► BigQuery (wrack_teleme
 
 ## Cloud Functions (`cloud/functions/`)
 
-- `index.js` — HTTP handler and command validation
+- `index.js` — HTTP handler and command validation; emits `api_request` telemetry event on every request
+- `api-telemetry.js` — Fire-and-forget `api_request` telemetry logging to BigQuery (used by `index.js`); wraps BigQuery inserts in `setImmediate` so they never block the HTTP response
 - `auth.js` — `X-API-Key` header authentication
 - `robot-server.py` — Python TCP server running on the EV3 (separate deploy)
 - Deploy: `cd cloud/functions && npm run deploy` or `gcloud builds submit --config cloudbuild.yaml`

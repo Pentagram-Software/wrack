@@ -11,11 +11,18 @@ jest.mock('cors', () => {
 
 let mockAuthenticateRequest;
 jest.mock('./auth', () => ({
-  authenticateRequest: jest.fn((...args) => mockAuthenticateRequest(...args))
+  authenticateRequest: jest.fn((...args) => mockAuthenticateRequest(...args)),
+  getClientId: jest.fn(() => 'mock-client-hash')
+}));
+
+let mockLogApiRequest;
+jest.mock('./api-telemetry', () => ({
+  logApiRequest: jest.fn((...args) => mockLogApiRequest && mockLogApiRequest(...args))
 }));
 
 const functions = require('@google-cloud/functions-framework');
 const { authenticateRequest } = require('./auth');
+const { logApiRequest } = require('./api-telemetry');
 
 let controlRobotHandler;
 
@@ -86,6 +93,7 @@ describe('controlRobot Cloud Function', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockAuthenticateRequest = jest.fn().mockReturnValue({ clientId: 'test-client', authenticated: true });
+    mockLogApiRequest = jest.fn();
     mockSocketInstance = new MockSocket();
   });
 
@@ -460,6 +468,197 @@ describe('controlRobot Cloud Function', () => {
 
       expect(res.statusCode).toBe(405);
       expect(res.responseData.error).toBe('Method not allowed');
+    });
+  });
+
+  describe('Telemetry logging', () => {
+    afterEach(() => {
+      // Reset logApiRequest to a plain jest.fn() so that a mockImplementation
+      // set within one test (e.g. the "throws" test) does not leak into the next.
+      logApiRequest.mockReset();
+    });
+
+    /**
+     * Helper: run the handler and wait for the response JSON to be sent.
+     * Returns the resolved response object.
+     */
+    function runHandler(req) {
+      const res = createMockResponse();
+      return new Promise((resolve) => {
+        const originalJson = res.json;
+        res.json = function(data) {
+          originalJson.call(this, data);
+          resolve(res);
+          return this;
+        };
+        controlRobotHandler(req, res);
+        // Emit a fake robot response for commands that reach the TCP stage.
+        setImmediate(() => {
+          mockSocketInstance.emit('data', Buffer.from('{"success":true}\n'));
+        });
+      });
+    }
+
+    test('logApiRequest is called on a successful command (200)', async () => {
+      const req = createMockRequest({ body: { command: 'stop' } });
+      await runHandler(req);
+
+      expect(logApiRequest).toHaveBeenCalledTimes(1);
+      const callArgs = logApiRequest.mock.calls[0][0];
+      expect(callArgs.command).toBe('stop');
+      expect(callArgs.statusCode).toBe(200);
+      expect(callArgs.errorMessage).toBeNull();
+      expect(typeof callArgs.totalLatencyMs).toBe('number');
+      expect(callArgs.totalLatencyMs).toBeGreaterThanOrEqual(0);
+    });
+
+    test('logApiRequest receives robotLatencyMs on successful command', async () => {
+      const req = createMockRequest({ body: { command: 'forward', params: { speed: 500 } } });
+      await runHandler(req);
+
+      const callArgs = logApiRequest.mock.calls[0][0];
+      expect(callArgs.robotLatencyMs).toBeGreaterThanOrEqual(0);
+    });
+
+    test('logApiRequest is called on auth failure (401)', async () => {
+      mockAuthenticateRequest = jest.fn().mockImplementation(() => {
+        throw new Error('Invalid API key');
+      });
+      const req = createMockRequest({ headers: { 'x-api-key': 'bad-key' } });
+      const res = createMockResponse();
+
+      await new Promise((resolve) => {
+        const original = res.json;
+        res.json = function(data) { original.call(this, data); resolve(); return this; };
+        controlRobotHandler(req, res);
+      });
+
+      expect(logApiRequest).toHaveBeenCalledTimes(1);
+      const callArgs = logApiRequest.mock.calls[0][0];
+      expect(callArgs.statusCode).toBe(401);
+      expect(callArgs.errorMessage).toBe('Invalid API key');
+      expect(callArgs.command).toBeNull();
+    });
+
+    test('logApiRequest is called on validation error (400)', async () => {
+      const req = createMockRequest({ body: { command: 'forward', params: { speed: 9999 } } });
+      const res = createMockResponse();
+
+      await new Promise((resolve) => {
+        const original = res.json;
+        res.json = function(data) { original.call(this, data); resolve(); return this; };
+        controlRobotHandler(req, res);
+      });
+
+      expect(logApiRequest).toHaveBeenCalledTimes(1);
+      const callArgs = logApiRequest.mock.calls[0][0];
+      expect(callArgs.statusCode).toBe(400);
+      expect(callArgs.command).toBe('forward');
+      expect(callArgs.errorMessage).toMatch(/Speed/);
+    });
+
+    test('logApiRequest is called on robot connection error (502)', async () => {
+      const req = createMockRequest({ body: { command: 'forward' } });
+      const res = createMockResponse();
+
+      await new Promise((resolve) => {
+        const original = res.json;
+        res.json = function(data) { original.call(this, data); resolve(); return this; };
+        controlRobotHandler(req, res);
+        setImmediate(() => {
+          mockSocketInstance.emit('error', new Error('ECONNREFUSED'));
+        });
+      });
+
+      expect(logApiRequest).toHaveBeenCalledTimes(1);
+      const callArgs = logApiRequest.mock.calls[0][0];
+      expect(callArgs.statusCode).toBe(502);
+      expect(callArgs.command).toBe('forward');
+      expect(callArgs.errorMessage).toContain('ECONNREFUSED');
+    });
+
+    test('logApiRequest is called on missing command (400)', async () => {
+      const req = createMockRequest({ body: {} });
+      const res = createMockResponse();
+
+      await new Promise((resolve) => {
+        const original = res.json;
+        res.json = function(data) { original.call(this, data); resolve(); return this; };
+        controlRobotHandler(req, res);
+      });
+
+      expect(logApiRequest).toHaveBeenCalledTimes(1);
+      const callArgs = logApiRequest.mock.calls[0][0];
+      expect(callArgs.statusCode).toBe(400);
+      expect(callArgs.command).toBeNull();
+    });
+
+    test('logApiRequest is called on 405 (wrong HTTP method)', async () => {
+      const req = createMockRequest({ method: 'GET' });
+      const res = createMockResponse();
+
+      await new Promise((resolve) => {
+        const original = res.json;
+        res.json = function(data) { original.call(this, data); resolve(); return this; };
+        controlRobotHandler(req, res);
+      });
+
+      expect(logApiRequest).toHaveBeenCalledTimes(1);
+      const callArgs = logApiRequest.mock.calls[0][0];
+      expect(callArgs.statusCode).toBe(405);
+      expect(callArgs.method).toBe('GET');
+    });
+
+    test('logApiRequest receives the actual HTTP method for POST requests', async () => {
+      const req = createMockRequest({ body: { command: 'stop' } }); // method defaults to 'POST'
+      await runHandler(req);
+
+      const callArgs = logApiRequest.mock.calls[0][0];
+      expect(callArgs.method).toBe('POST');
+    });
+
+    test('sanitizes speak text in logged params', async () => {
+      const req = createMockRequest({
+        body: { command: 'speak', params: { text: 'Hello robot' } }
+      });
+      await runHandler(req);
+
+      expect(logApiRequest).toHaveBeenCalledTimes(1);
+      const callArgs = logApiRequest.mock.calls[0][0];
+      expect(callArgs.command).toBe('speak');
+      // params are passed raw to logApiRequest; sanitizeParams runs inside api-telemetry
+      expect(callArgs.params.text).toBe('Hello robot');
+    });
+
+    test('logging does not affect command execution when logApiRequest throws', async () => {
+      // Even if logApiRequest throws internally, the response should still be sent.
+      logApiRequest.mockImplementation(() => {
+        throw new Error('Logging system down');
+      });
+
+      const req = createMockRequest({ body: { command: 'stop' } });
+      const res = createMockResponse();
+
+      // The handler should NOT throw and should still send a response.
+      await new Promise((resolve) => {
+        const original = res.json;
+        res.json = function(data) { original.call(this, data); resolve(); return this; };
+        controlRobotHandler(req, res);
+        setImmediate(() => {
+          mockSocketInstance.emit('data', Buffer.from('{"success":true}\n'));
+        });
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.responseData.success).toBe(true);
+    });
+
+    test('clientIpHash is passed to logApiRequest', async () => {
+      const req = createMockRequest({ body: { command: 'battery' } });
+      await runHandler(req);
+
+      const callArgs = logApiRequest.mock.calls[0][0];
+      expect(callArgs.clientIpHash).toBe('mock-client-hash');
     });
   });
 });

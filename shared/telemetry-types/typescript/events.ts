@@ -119,6 +119,8 @@ export interface ApiRequestPayload {
   endpoint: string;
   method?: HttpMethod;
   command?: string | null;
+  /** Sanitized command parameters — sensitive values (e.g. speak text) replaced with placeholders. */
+  sanitized_params?: Record<string, unknown> | null;
   status_code: number;
   latency_ms: number;
   robot_response_time_ms?: number | null;

@@ -40,6 +40,10 @@
       "type": ["string", "null"],
       "description": "SHA-256 hash of the caller IP address (no raw PII stored)"
     },
+    "sanitized_params": {
+      "type": ["object", "null"],
+      "description": "Sanitized request parameters for the robot command (sensitive values replaced with placeholders)"
+    },
     "error_message": {
       "type": ["string", "null"],
       "description": "Error detail when status_code >= 400"

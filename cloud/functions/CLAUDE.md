@@ -17,7 +17,8 @@ Client App → Cloud Function (HTTP/POST) → EV3 Robot (TCP/JSON)
 The Cloud Function receives HTTP POST requests with commands, validates authentication, enforces safety limits, forwards commands to the EV3 robot over TCP, and returns responses to the client.
 
 ### Key Components
-- **index.js**: Robot control Cloud Function (`controlRobot`) - processes HTTP requests, validates commands, manages TCP connection to robot. Also requires `telemetry.js` so both functions are registered.
+- **index.js**: Robot control Cloud Function (`controlRobot`) - processes HTTP requests, validates commands, manages TCP connection to robot, emits `api_request` telemetry events. Also requires `telemetry.js` so both functions are registered.
+- **api-telemetry.js**: Fire-and-forget telemetry helper used by `controlRobot`. Builds `api_request` events and inserts them to BigQuery via `setImmediate` (non-blocking). Errors are swallowed so they cannot affect command execution.
 - **telemetry.js**: Telemetry ingestion Cloud Function (`telemetryIngestion`) - accepts batched events, validates schema, batch-inserts into BigQuery `wrack_telemetry.events`.
 - **bigquery-client.js**: Reusable BigQuery wrapper — lazy singleton init, `insertEvent`, `insertEvents` batch, exponential-backoff retry for 429/5xx/UNAVAILABLE errors, `PartialFailureError` handling. Opt-in/fail-safe: omitting `BIGQUERY_PROJECT_ID` silently disables all inserts.
 - **index.test.js**: Jest unit tests for `controlRobot` (authentication, command validation, dispatching, error handling).
