@@ -37,5 +37,48 @@ class TestCreateLock(unittest.TestCase):
                 self.assertIsInstance(lock, threading_compat._NoOpLock)
 
 
+class TestWaitForWorkers(unittest.TestCase):
+    class FakeWorker:
+        def __init__(self, stopped=False, running=None):
+            self.stopped = stopped
+            if running is not None:
+                self.running = running
+
+        def is_running(self):
+            return self.running
+
+    def test_worker_is_running_uses_stopped_flag(self):
+        worker = self.FakeWorker(stopped=False)
+        self.assertTrue(threading_compat.worker_is_running(worker))
+        worker.stopped = True
+        self.assertFalse(threading_compat.worker_is_running(worker))
+
+    def test_worker_is_running_uses_is_running_method(self):
+        worker = type("WakeWordWorker", (), {
+            "running": True,
+            "is_running": lambda self: self.running,
+        })()
+        self.assertTrue(threading_compat.worker_is_running(worker))
+        worker.running = False
+        self.assertFalse(threading_compat.worker_is_running(worker))
+
+    def test_wait_for_workers_returns_when_all_workers_stopped(self):
+        workers = [self.FakeWorker(stopped=True), self.FakeWorker(stopped=True)]
+        with patch("time.sleep") as mock_sleep:
+            threading_compat.wait_for_workers(workers, poll_interval=0.1)
+        mock_sleep.assert_not_called()
+
+    def test_wait_for_workers_polls_until_workers_stop(self):
+        workers = [self.FakeWorker(stopped=False)]
+
+        def stop_after_poll(*args, **kwargs):
+            workers[0].stopped = True
+
+        with patch("time.sleep", side_effect=stop_after_poll):
+            threading_compat.wait_for_workers(workers, poll_interval=0.1)
+
+        self.assertTrue(workers[0].stopped)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -28,6 +28,7 @@ Usage:
 
 from pybricks.hubs import EV3Brick
 from robot_controllers import MIN_JOYSTICK_MOVE, PS4Controller
+from threading_compat import wait_for_workers
 from pixy_camera import Pixy2Camera
 from ev3_devices import DeviceManager
 from robot_controllers import RemoteController
@@ -86,6 +87,10 @@ device_manager = DeviceManager(ev3)
 
 # Global state to avoid redundant stop calls
 robot_is_stopped = False
+
+# Worker thread handles assigned in main() so shutdown callbacks can stop all services
+_runtime_controller = None
+_runtime_remote_controller = None
 
 # Initialize devices with graceful error handling
 drive_L_motor = device_manager.try_init_device(Motor, Port.A, "drive_L_motor")
@@ -288,14 +293,14 @@ def cancel_terrain_scan(value):
         print("TerrainScanner not available")
 
 def quit(value):
+    global terrain_scanner, wake_word_detector
+    global _runtime_controller, _runtime_remote_controller
     # Stop terrain scanner
-    global terrain_scanner
     if terrain_scanner:
         print("Shutting down TerrainScanner...")
         terrain_scanner.cleanup()
     
     # Stop wake word detector
-    global wake_word_detector
     if wake_word_detector:
         print("Shutting down WakeWordDetector...")
         wake_word_detector.stop()
@@ -307,16 +312,19 @@ def quit(value):
     # Stop tank drive system
     tank_drive_system.stop()
     
-    # Stop remote controller if it exists
-    if 'remote_controller' in globals():
+    # Stop network remote controller
+    if _runtime_remote_controller is not None:
         print("Shutting down Network Remote Controller...")
-        remote_controller.stop()
+        _runtime_remote_controller.stop()
     
     # Cleanup devices
     device_manager.cleanup()
     
-    # Stop the PlayStation controller
-    value.stop()
+    # Stop the PlayStation controller thread
+    if _runtime_controller is not None:
+        _runtime_controller.stop()
+    elif value is not None and hasattr(value, "stop"):
+        value.stop()
 
 
 def driftLeft(value):
@@ -494,9 +502,13 @@ def blockDetected(value):
 """
 
 def main():
+    global _runtime_controller, _runtime_remote_controller
+
     # Initialize both PS4 and Network Remote controllers
     controller = PS4Controller()
     remote_controller = RemoteController()
+    _runtime_controller = controller
+    _runtime_remote_controller = remote_controller
     # Attach device manager so status can include battery/cpu/ip
     remote_controller.device_manager = device_manager
     
@@ -1101,9 +1113,17 @@ def main():
     ev3.speaker.beep(frequency=800, duration=300)  # High beep (longer)
     print("Robot is ready for operation!")
     
-    #Wait for controller thread to finish
-    #controller.join()
-    #pixy_camera.join();
+    # Block until worker threads exit. If main() returns, MicroPython terminates
+    # the process and kills background threads immediately.
+    worker_threads = [controller, remote_controller]
+    if wake_word_detector:
+        worker_threads.append(wake_word_detector)
+    if device_manager.is_device_available("pixy_camera"):
+        worker_threads.append(pixy_camera)
+
+    wait_for_workers(worker_threads)
+
+    print("Robot controller stopped.")
 
 
 main()

@@ -262,9 +262,16 @@ def prepare_deployment_package(
 def create_launcher_script(mode: str) -> str:
     """Create a shell script to launch the robot controller."""
     # Guard snippet shared by both modes: abort with a clear message if the
-    # Pybricks MicroPython interpreter is not present on the EV3.
-    interpreter_guard = '''\
+    # Pybricks runtime tools are not present on the EV3.
+    runtime_guard = '''\
+BRICKRUN="brickrun"
 INTERPRETER="pybricks-micropython"
+if ! command -v "$BRICKRUN" >/dev/null 2>&1; then
+    echo "ERROR: '$BRICKRUN' not found on this system." >&2
+    echo "Install ev3dev with Brickman / pybricks support, or ensure brickrun" >&2
+    echo "is available on PATH." >&2
+    exit 1
+fi
 if ! command -v "$INTERPRETER" >/dev/null 2>&1; then
     echo "ERROR: '$INTERPRETER' not found on this system." >&2
     echo "Make sure the EV3 is running ev3dev with the pybricks package" >&2
@@ -286,12 +293,13 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-{interpreter_guard}
+{runtime_guard}
 echo "Starting EV3 Robot Controller (RELEASE MODE)..."
 echo "Optimization: ENABLED (__debug__ = False)"
 
+# brickrun is required for EV3 display/graphics initialization on ev3dev.
 # -O removes assert statements and sets __debug__=False
-exec "$INTERPRETER" -O main.py "$@"
+exec "$BRICKRUN" -r -- "$INTERPRETER" -O main.py "$@"
 '''
     else:
         # Debug mode: run without optimization flags.
@@ -303,12 +311,12 @@ exec "$INTERPRETER" -O main.py "$@"
 SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-{interpreter_guard}
+{runtime_guard}
 echo "Starting EV3 Robot Controller (DEBUG MODE)..."
 echo "Optimization: DISABLED (__debug__ = True)"
 
-# Run without optimization flags for full debugging
-exec "$INTERPRETER" main.py "$@"
+# brickrun is required for EV3 display/graphics initialization on ev3dev.
+exec "$BRICKRUN" -r -- "$INTERPRETER" main.py "$@"
 '''
 
 

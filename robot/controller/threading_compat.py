@@ -41,3 +41,43 @@ class _NoOpLock:
 
     def locked(self):
         return False
+
+
+def worker_is_running(worker):
+    """Return True if a worker thread is still active."""
+    if worker is None:
+        return False
+
+    if hasattr(worker, "stopped"):
+        return not worker.stopped
+
+    is_running = getattr(worker, "is_running", None)
+    if callable(is_running):
+        return bool(is_running())
+
+    running = getattr(worker, "running", None)
+    if running is not None:
+        return running
+
+    is_alive = getattr(worker, "is_alive", None)
+    if callable(is_alive):
+        try:
+            return is_alive()
+        except Exception:
+            pass
+
+    return False
+
+
+def wait_for_workers(workers, poll_interval=0.5):
+    """Block until every worker thread has stopped.
+
+    Pybricks MicroPython provides threading.Thread but not join(), so callers
+    must poll worker state instead of calling thread.join().
+    """
+    from time import sleep
+
+    while True:
+        if not any(worker_is_running(worker) for worker in workers):
+            break
+        sleep(poll_interval)

@@ -187,9 +187,15 @@ class TestCreateLauncherScript(unittest.TestCase):
         """Test that release mode launcher passes -O to the interpreter."""
         script = create_launcher_script("release")
         # The script stores the interpreter in $INTERPRETER and invokes it
-        # with -O; both tokens must be present in the script.
+        # with -O via brickrun; both tokens must be present in the script.
         self.assertIn("-O", script)
-        self.assertIn('"$INTERPRETER" -O', script)
+        self.assertIn('"$BRICKRUN" -r -- "$INTERPRETER" -O', script)
+
+    def test_release_mode_uses_brickrun(self):
+        """Test that release mode launcher wraps pybricks-micropython with brickrun."""
+        script = create_launcher_script("release")
+        self.assertIn("brickrun", script)
+        self.assertIn('"$BRICKRUN" -r --', script)
 
     def test_debug_mode_uses_pybricks_interpreter(self):
         """Test that debug mode launcher uses pybricks-micropython."""
@@ -202,12 +208,21 @@ class TestCreateLauncherScript(unittest.TestCase):
         """Test that debug mode launcher does not pass -O to the interpreter."""
         script = create_launcher_script("debug")
         self.assertNotIn('"$INTERPRETER" -O', script)
+        self.assertIn('"$BRICKRUN" -r -- "$INTERPRETER" main.py', script)
+
+    def test_debug_mode_uses_brickrun(self):
+        """Test that debug mode launcher wraps pybricks-micropython with brickrun."""
+        script = create_launcher_script("debug")
+        self.assertIn("brickrun", script)
+        self.assertIn('"$BRICKRUN" -r --', script)
 
     def test_launcher_has_interpreter_guard(self):
-        """Test that both launchers abort when pybricks-micropython is absent."""
+        """Test that both launchers abort when brickrun or pybricks-micropython is absent."""
         for mode in ["release", "debug"]:
             script = create_launcher_script(mode)
             self.assertIn("command -v", script)
+            self.assertIn('BRICKRUN="brickrun"', script)
+            self.assertIn('INTERPRETER="pybricks-micropython"', script)
             self.assertIn("exit 1", script)
 
     def test_launcher_is_executable_script(self):
@@ -229,6 +244,7 @@ class TestCreateLauncherScript(unittest.TestCase):
             # 'python3' must NOT appear as a bare invocation; the correct
             # interpreter is pybricks-micropython stored in $INTERPRETER.
             self.assertNotIn("exec python3", script)
+            self.assertNotIn('exec "$INTERPRETER"', script)
 
 
 class TestPrepareDeploymentPackage(unittest.TestCase):
@@ -283,13 +299,13 @@ class TestPrepareDeploymentPackage(unittest.TestCase):
             shutil.rmtree(temp_dir)
     
     def test_release_mode_launcher_content(self):
-        """Test that release mode creates correct launcher with pybricks-micropython -O."""
+        """Test that release mode creates correct launcher with brickrun and -O."""
         temp_dir, files = prepare_deployment_package(self.source_dir, "release")
         try:
             with open(os.path.join(temp_dir, "run.sh")) as f:
                 content = f.read()
             self.assertIn("pybricks-micropython", content)
-            self.assertIn('"$INTERPRETER" -O', content)
+            self.assertIn('"$BRICKRUN" -r -- "$INTERPRETER" -O', content)
         finally:
             shutil.rmtree(temp_dir)
     
@@ -300,6 +316,7 @@ class TestPrepareDeploymentPackage(unittest.TestCase):
             with open(os.path.join(temp_dir, "run.sh")) as f:
                 content = f.read()
             self.assertIn("pybricks-micropython", content)
+            self.assertIn('"$BRICKRUN" -r -- "$INTERPRETER" main.py', content)
             self.assertNotIn('"$INTERPRETER" -O', content)
         finally:
             shutil.rmtree(temp_dir)

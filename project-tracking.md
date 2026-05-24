@@ -3,3 +3,4 @@
 - Vision Intelligence
 - Mobile Controller
 - Cat Recognizer
+- Wrack Telemetry

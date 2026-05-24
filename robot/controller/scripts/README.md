@@ -19,14 +19,17 @@ This directory contains scripts for deploying the robot controller to an EV3 bri
 ## Release vs Debug Mode
 
 Both modes use `pybricks-micropython` as the interpreter, which is the correct
-runtime for code written against the Pybricks API.  The EV3 must have
-`pybricks-micropython` available on its `$PATH` (this is the case when the
-brick runs ev3dev with the pybricks package installed, or a Pybricks firmware
-image that provides the interpreter).
+runtime for code written against the Pybricks API.  Programs are launched via
+`brickrun -r -- pybricks-micropython`, which is required on ev3dev to
+initialize the EV3 display/graphics stack used by `EV3Brick()`.
+
+The EV3 must have `brickrun` and `pybricks-micropython` available on its
+`$PATH` (this is the case when the brick runs ev3dev with the pybricks package
+installed, or a Pybricks firmware image that provides the interpreter).
 
 ### Release Mode (`--mode release`)
 
-- **Pybricks MicroPython optimization enabled** (`pybricks-micropython -O`)
+- **Pybricks MicroPython optimization enabled** (`brickrun -r -- pybricks-micropython -O`)
 - `__debug__` is `False`
 - `assert` statements are removed
 - Debug-only code blocks are skipped
@@ -35,7 +38,7 @@ image that provides the interpreter).
 
 ### Debug Mode (`--mode debug`)
 
-- **No optimization** (`pybricks-micropython`)
+- **No optimization** (`brickrun -r -- pybricks-micropython`)
 - `__debug__` is `True`
 - `assert` statements are active
 - All debug code blocks execute
@@ -118,12 +121,19 @@ cd /home/robot/ev3PS4Controlled
 
 The `run.sh` script automatically uses the correct Python flags based on the deployment mode.
 
+`./run.sh` runs in the **foreground** and keeps the SSH session busy while the
+robot is active. You should **not** get your shell prompt back until the program
+is stopped (PlayStation Options button, or network `quit` command). If the
+prompt returns immediately after "Robot is ready for operation!", the process
+exited — redeploy the latest code and check that `main.py` waits on its worker
+threads.
+
 ## Requirements
 
 - Python 3.6+ on the **deployment machine** (to run `deploy_ev3.py`)
 - `rsync` installed on the deployment machine
 - SSH access to the EV3 brick
-- EV3 running ev3dev with `pybricks-micropython` available on `$PATH`
+- EV3 running ev3dev with `brickrun` and `pybricks-micropython` available on `$PATH`
   (provided by the `python3-pybricks` apt package or a Pybricks firmware image)
 
 ## Troubleshooting
@@ -164,6 +174,35 @@ Re-deploy after fixing the environment so that a fresh `run.sh` is generated:
 
 ```bash
 ./scripts/deploy_release.sh <EV3_IP>
+```
+
+
+### `Could not initialize graphics. Be sure to run using brickrun -r -- pybricks-micropython`
+
+This means the program was started without the `brickrun` wrapper.  On ev3dev,
+Pybricks needs `brickrun` to access the EV3 display before `EV3Brick()` can be
+created.
+
+Always start the controller with the generated launcher:
+
+```bash
+cd /home/robot/ev3PS4Controlled
+./run.sh
+```
+
+Do **not** run `pybricks-micropython main.py` directly over SSH.
+
+Verify both tools are available on the EV3:
+
+```bash
+ssh robot@<EV3_IP> which brickrun pybricks-micropython
+```
+
+If `run.sh` still calls `pybricks-micropython` directly, re-deploy so a fresh
+launcher is generated:
+
+```bash
+make deploy-ev3 EV3_HOST=<EV3_IP>
 ```
 
 ### Debug Mode Not Working
