@@ -8,6 +8,7 @@ A comprehensive device management and drive system library for LEGO MINDSTORMS E
 - **Safe Operations**: Robust device access with automatic error recovery
 - **Drive Systems**: Multiple drive implementations (tank, car-style)
 - **Turret Control**: Camera/weapon turret management
+- **Hot-Plug Support**: Background port monitor detects disconnects and reconnects within 1-2 s; subsystems self-heal automatically
 - **Mock Support**: Testing support with mock devices
 - **EV3 MicroPython**: Optimized for EV3 hardware constraints
 
@@ -117,6 +118,36 @@ turret.move_to_angle(90)         # Move to 90 degrees
 turret.center()                  # Return to center position
 ```
 
+## Hot-Plug Support
+
+The `PortMonitor` background thread polls all registered devices every second
+(configurable) and fires callbacks on disconnect or reconnect.  `main.py`
+enables this automatically on startup.
+
+```python
+# Enable background monitoring (1 s check interval)
+device_manager.enable_port_monitoring(check_interval=1.0)
+
+# Register application-level callbacks (can be done before or after enable)
+def on_reconnect(device_name, status):
+    print("{} reconnected on {}".format(device_name, status["port"]))
+    if device_name == "turret_motor":
+        turret.refresh_motor()          # Refresh cached motor reference
+    if device_name in ("drive_L_motor", "drive_R_motor"):
+        tank_drive_system.initialize()  # Re-evaluate initialisation state
+
+def on_disconnect(device_name, status):
+    print("{} disconnected".format(device_name))
+
+device_manager.register_reconnect_callback(on_reconnect)
+device_manager.register_disconnect_callback(on_disconnect)
+```
+
+Devices that are **missing at boot** are also registered, so plugging them in
+later starts them within 1-2 s without restarting the program.
+
+---
+
 ## API Reference
 
 ### DeviceManager
@@ -130,7 +161,11 @@ turret.center()                  # Return to center position
 - `safe_device_operation(device_name, operation_name, func, *args)` - Safe complex operation
 - `get_device_summary()` - Get device availability summary
 - `print_device_status()` - Print device status report
-- `cleanup()` - Clean up all devices
+- `enable_port_monitoring(check_interval=1.0)` - Start background hot-plug monitor
+- `disable_port_monitoring()` - Stop background monitor
+- `register_reconnect_callback(callback)` - Register callback fired on device reconnect
+- `register_disconnect_callback(callback)` - Register callback fired on device disconnect
+- `cleanup()` - Clean up all devices and stop monitoring
 
 ### DriveSystem (Base Class)
 
@@ -174,6 +209,7 @@ turret.center()                  # Return to center position
 - `move_to_angle(angle)` - Move to specific angle
 - `center()` - Return to center position
 - `stop()` - Stop rotation
+- `refresh_motor()` - Refresh the cached motor reference from DeviceManager after a hot-plug reconnect event; re-homes the turret automatically
 
 ## Device Configuration
 

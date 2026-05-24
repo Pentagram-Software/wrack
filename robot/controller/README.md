@@ -11,6 +11,7 @@ A comprehensive LEGO Mindstorms EV3 robot control system with PS4 controller sup
 - **Cloud Integration**: Google Cloud Functions API for remote robot control
 - **Comprehensive Status API**: Real-time sensor readings, motor positions, battery, CPU, and network info
 - **Graceful Device Management**: Automatic detection and handling of missing/failed devices
+- **Hot-Plug Support**: Background port monitor detects disconnected or newly connected devices within 1-2 s; subsystems self-heal without restarting the program
 - **Audio Feedback**: Text-to-speech and programmable beep signals
 
 ## 📋 Table of Contents

@@ -83,7 +83,11 @@ class DeviceManager:
         
         # Track disconnected devices that should ignore commands
         self._disconnected_devices = set()
-        
+
+        # Application-level callbacks queued before enable_port_monitoring() is called
+        self._pending_reconnect_callbacks = []
+        self._pending_disconnect_callbacks = []
+
     def try_init_device(self, device_type, port, device_name):
         """
         Try to initialize a device on a specific port.
@@ -631,49 +635,118 @@ class DeviceManager:
         
         return system_info
     
+
+    def register_reconnect_callback(self, callback):
+        """
+        Register a callback to be called when any device reconnects.
+
+        If port monitoring is already enabled the callback is registered
+        immediately.  If it has not been enabled yet, the callback is queued
+        and will be registered automatically when ``enable_port_monitoring()``
+        is called.
+
+        Args:
+            callback: Function with signature ``(device_name, status_dict)``
+
+        Thread-safety note: either the callback is added to the pending queue
+        (when ``_port_monitor`` is None) *or* registered directly (when it is
+        not None) — never both.  ``enable_port_monitoring()`` exposes
+        ``_port_monitor`` only after the pending queue has been drained and
+        cleared, so the two paths are mutually exclusive and no callback can
+        be registered twice.
+        """
+        with self._device_lock:
+            port_monitor = self._port_monitor
+            if port_monitor is None:
+                self._pending_reconnect_callbacks.append(callback)
+
+        if port_monitor is not None:
+            port_monitor.on_reconnect(callback)
+
+    def register_disconnect_callback(self, callback):
+        """
+        Register a callback to be called when any device disconnects.
+
+        Behaves the same as ``register_reconnect_callback`` but for
+        disconnection events.
+
+        Args:
+            callback: Function with signature ``(device_name, status_dict)``
+        """
+        with self._device_lock:
+            port_monitor = self._port_monitor
+            if port_monitor is None:
+                self._pending_disconnect_callbacks.append(callback)
+
+        if port_monitor is not None:
+            port_monitor.on_disconnect(callback)
+
     def enable_port_monitoring(self, check_interval=1.0):
         """
         Enable port monitoring for device disconnect/reconnect detection.
-        
+
         Args:
             check_interval: Time in seconds between connectivity checks (default: 1.0)
-            
-        Note: Device registration is done outside of _device_lock to prevent
-        lock-order inversion with PortMonitor._lock.
+
+        Thread-safety note: ``self._port_monitor`` is exposed (set) only *after*
+        the pending callback queues have been drained and cleared, all inside
+        ``_device_lock``.  This eliminates the race where a concurrent
+        ``register_reconnect_callback()`` call could see a non-None
+        ``_port_monitor``, add itself to the pending queue *and* register
+        directly, causing the callback to be invoked twice per event.
+
+        Device registration is still done outside ``_device_lock`` to prevent
+        lock-order inversion (PortMonitor callbacks re-acquire ``_device_lock``).
         """
         # Import here to avoid circular imports
         from .port_monitor import PortMonitor
-        
+
         if self._port_monitor is not None:
             if __debug__:
                 print("Port monitoring already enabled")
             return
-        
-        self._port_monitor = PortMonitor(self, check_interval)
-        
+
+        new_monitor = PortMonitor(self, check_interval)
+
         # Collect device info under lock, but register outside of lock
         # to prevent lock-order inversion (PortMonitor callbacks acquire _device_lock)
         devices_to_register = []
         with self._device_lock:
             # Combine available and missing devices
             all_known_devices = set(self.available_devices) | set(self.missing_devices)
-            
+
             for device_name in all_known_devices:
                 if device_name in self.device_types and device_name in self._raw_ports:
                     device_type = self.device_types[device_name]
                     port = self._raw_ports[device_name]  # Use actual port object
                     devices_to_register.append((device_name, device_type, port))
-        
+
         # Register devices OUTSIDE of _device_lock
         for device_name, device_type, port in devices_to_register:
-            self._port_monitor.register_device(device_name, device_type, port)
-        
-        # Set up callbacks for disconnect/reconnect events
-        self._port_monitor.on_disconnect(self._on_device_disconnect)
-        self._port_monitor.on_reconnect(self._on_device_reconnect)
-        
+            new_monitor.register_device(device_name, device_type, port)
+
+        # Set up internal callbacks for disconnect/reconnect events
+        new_monitor.on_disconnect(self._on_device_disconnect)
+        new_monitor.on_reconnect(self._on_device_reconnect)
+
+        # Atomically: drain & clear pending queues, then expose the monitor.
+        # Any register_*_callback() that runs after this critical section sees
+        # _port_monitor is not None and registers directly (without touching the
+        # pending queues), so no callback can end up registered twice.
+        with self._device_lock:
+            pending_reconnect = list(self._pending_reconnect_callbacks)
+            pending_disconnect = list(self._pending_disconnect_callbacks)
+            self._pending_reconnect_callbacks.clear()
+            self._pending_disconnect_callbacks.clear()
+            self._port_monitor = new_monitor  # Expose only after queues are cleared
+
+        for cb in pending_reconnect:
+            new_monitor.on_reconnect(cb)
+        for cb in pending_disconnect:
+            new_monitor.on_disconnect(cb)
+
         # Start the monitoring thread
-        self._port_monitor.start()
+        new_monitor.start()
         
         if __debug__:
             print("Port monitoring enabled with {}s check interval".format(check_interval))

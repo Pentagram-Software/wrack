@@ -152,6 +152,22 @@ class Turret(DriveSystem):
             except Exception as e:
                 report_device_error("turret_motor", "stop", e, "stop(Stop.HOLD)")
     
+    def refresh_motor(self):
+        """
+        Refresh the cached turret motor reference from the device manager.
+
+        Call this after a hot-plug reconnect event so the turret uses the
+        newly reinitialized motor object instead of the stale disconnected one.
+        If the motor is now available the turret is automatically re-homed.
+        """
+        if self.device_manager and self.device_manager.is_device_available("turret_motor"):
+            self.turret_motor = self.device_manager.get_device("turret_motor")
+            print("Turret motor reference refreshed after reconnect")
+            self.home_turret()
+        else:
+            self.turret_motor = None
+            print("Turret motor reference cleared (device unavailable)")
+
     def set_angle_limits(self, min_angle, max_angle):
         """Set the movement limits for the turret"""
         self.min_angle = min_angle
