@@ -1,121 +1,181 @@
 'use strict';
 
 /**
- * BigQuery client wrapper for Wrack telemetry.
+ * Reusable BigQuery client wrapper for Wrack telemetry.
  *
- * Provides fire-and-forget telemetry ingestion via BigQuery streaming inserts.
- * All public functions return result objects and never throw — callers are
- * responsible for deciding whether to log or ignore failures.
- *
- * Environment variables:
- *   BIGQUERY_PROJECT_ID  - GCP project ID (required to enable; omit to disable)
- *   BIGQUERY_DATASET     - BigQuery dataset ID (default: 'wrack_telemetry')
- *   BIGQUERY_TABLE       - BigQuery table ID   (default: 'events')
+ * Design principles:
+ *  - Opt-in / fail-safe: omitting BIGQUERY_PROJECT_ID silently disables the
+ *    client so robot-control functions are never blocked by telemetry.
+ *  - Never throws: both insertEvent and insertEvents always return a result
+ *    object so callers can log/ignore failures without try/catch boilerplate.
+ *  - Lazy singleton: the BigQuery client is created on first use.
+ *  - Retry: exponential back-off for transient 429 / 5xx / UNAVAILABLE errors
+ *    (up to MAX_RETRIES attempts).
+ *  - PartialFailureError handling: per-row error reasons are inspected.
+ *    Rows with retryable reasons (backendError, rateLimitExceeded, etc.) are
+ *    retried separately; rows with non-retryable reasons (invalid schema, etc.)
+ *    are reported immediately without retrying.
+ *  - Idempotent retries: each row is sent with its event_id as the BigQuery
+ *    streaming-insert deduplication key (insertId), so retrying after a
+ *    transient failure cannot produce duplicate rows within BigQuery's ~1-min
+ *    dedup window.
  */
 
 const { BigQuery } = require('@google-cloud/bigquery');
 
 const MAX_RETRIES = 3;
-const INITIAL_RETRY_DELAY_MS = 200;
+const BASE_DELAY_MS = 1000;
 
-// HTTP status codes that warrant a retry
-const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+// Lazily-created singleton BigQuery client.
+let _client = null;
 
-// Module-level singletons (lazy-initialised)
-let _bigquery = null;
-let _table = null;
+// Read env vars dynamically so unit tests can set them in beforeEach without
+// needing to re-require the module.
+function _projectId() {
+  return process.env.BIGQUERY_PROJECT_ID;
+}
+function _datasetId() {
+  return process.env.BIGQUERY_DATASET || 'wrack_telemetry';
+}
+function _tableId() {
+  return process.env.BIGQUERY_TABLE || 'events';
+}
 
-// ---------------------------------------------------------------------------
-// Public helpers
-// ---------------------------------------------------------------------------
+// Overridable sleep function — replaced with a no-op in unit tests so retries
+// complete instantly without actually waiting.
+let _sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// ─── Exported helpers (also used by tests) ──────────────────────────────────
 
 /**
- * Returns true when all required BigQuery environment variables are present.
- * Inserts are silently skipped when this returns false.
+ * Returns true when the required BIGQUERY_PROJECT_ID env var is set.
+ * When false, all insert operations are silently skipped.
  */
 function isEnabled() {
-  return Boolean(process.env.BIGQUERY_PROJECT_ID);
-}
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-function _getTable() {
-  if (!_table) {
-    const projectId = process.env.BIGQUERY_PROJECT_ID;
-    const datasetId = process.env.BIGQUERY_DATASET || 'wrack_telemetry';
-    const tableId = process.env.BIGQUERY_TABLE || 'events';
-
-    _bigquery = new BigQuery({ projectId });
-    _table = _bigquery.dataset(datasetId).table(tableId);
-  }
-  return _table;
+  return Boolean(_projectId());
 }
 
 /**
- * Converts a telemetry event envelope into a BigQuery row object.
- * Adds server-side `ingested_at` timestamp and serialises `payload` to JSON.
+ * Format a telemetry event object into a BigQuery streaming-insert row.
+ * Stamps ingested_at and serialises payload to a JSON string (required by the
+ * BigQuery JSON column type when using the streaming insert API).
+ *
+ * The returned object is the row data. Before calling table.insert() the row
+ * is wrapped as {insertId: row.event_id, json: row} for deduplication.
+ *
+ * @param {object} event  Validated telemetry event envelope.
+ * @returns {object}  Row data (not yet wrapped with insertId).
  */
 function _formatRow(event) {
   return {
     event_id: event.event_id,
     event_type: event.event_type,
     source: event.source,
-    device_id: event.device_id ?? null,
-    session_id: event.session_id ?? null,
-    timestamp: event.timestamp,
+    device_id: event.device_id || null,
+    session_id: event.session_id || null,
+    timestamp: new Date(event.timestamp).toISOString(),
     ingested_at: new Date().toISOString(),
-    payload: typeof event.payload === 'string'
-      ? event.payload
-      : JSON.stringify(event.payload),
-    version: event.version ?? null,
-    tags: Array.isArray(event.tags) ? event.tags : null,
-    user_id: event.user_id ?? null,
-    correlation_id: event.correlation_id ?? null,
+    payload: JSON.stringify(event.payload),
+    version: event.version || null,
+    tags: event.tags || null,
+    user_id: event.user_id || null,
+    correlation_id: event.correlation_id || null,
   };
 }
 
 /**
- * Returns true for errors that may be resolved by retrying (rate limits,
- * transient server-side failures).
+ * Returns true for errors that are worth retrying (transient infra problems).
+ * Returns false for data/auth errors that will not improve with retries.
+ *
+ * @param {Error} error
+ * @returns {boolean}
  */
-function _isRetryableError(err) {
-  if (!err) return false;
+function _isRetryableError(error) {
+  if (!error) return false;
 
-  if (typeof err.code === 'number' && RETRYABLE_STATUS_CODES.has(err.code)) {
-    return true;
-  }
+  const status = error.code || error.statusCode || error.status;
+  if (status === 429) return true;
+  if (typeof status === 'number' && status >= 500 && status < 600) return true;
 
-  // gRPC / message-based detection
-  if (typeof err.message === 'string') {
-    const msg = err.message.toLowerCase();
-    return (
-      msg.includes('unavailable') ||
-      msg.includes('rate limit') ||
-      msg.includes('quota exceeded') ||
-      msg.includes('backend error')
-    );
+  const message = (error.message || '').toLowerCase();
+  if (message.includes('unavailable')) return true;
+  if (message.includes('rate limit') || message.includes('ratelimitexceeded')) return true;
+  if (message.includes('quota exceeded') || message.includes('quotaexceeded')) return true;
+  if (message.includes('backenderror') || message.includes('internal error')) return true;
+
+  // Check per-row error reasons returned by the BigQuery API.
+  if (error.errors && Array.isArray(error.errors)) {
+    return error.errors.some((e) => {
+      const reason = (e.reason || '').toLowerCase();
+      return (
+        reason === 'backenderror' ||
+        reason === 'ratelimitexceeded' ||
+        reason === 'internalerror' ||
+        reason === 'unavailable'
+      );
+    });
   }
 
   return false;
 }
 
-function _sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+/**
+ * Returns true for BigQuery per-row error reasons that are transient and worth
+ * retrying.
+ *
+ * @param {string} reason  Per-row reason string from BigQuery PartialFailureError.
+ * @returns {boolean}
+ */
+function _isRetryableReason(reason) {
+  if (!reason) return false;
+  const r = reason.toLowerCase();
+  return (
+    r === 'backenderror' ||
+    r === 'ratelimitexceeded' ||
+    r === 'internalerror' ||
+    r === 'unavailable'
+  );
+}
+
+// ─── Private helpers ─────────────────────────────────────────────────────────
+
+function _getClient() {
+  if (!_client) {
+    _client = new BigQuery({ projectId: _projectId() });
+  }
+  return _client;
 }
 
 /**
- * Wraps `table.insert(rows)` with exponential-backoff retry for transient
- * errors.  PartialFailureErrors (schema/data issues on individual rows) are
- * not retried and are re-thrown immediately.
+ * Extract the row data from a PartialFailureError entry.
+ * When rows are sent as {insertId, json}, e.row is the wrapper object;
+ * when mocked in tests as plain objects, e.row is the data directly.
  *
- * Each row is sent using the {insertId, json} streaming-insert format so that
- * retries are idempotent (BigQuery deduplicates within ~1 minute by insertId).
+ * @param {object} e  One entry from PartialFailureError.errors.
+ * @returns {object}  The underlying row data object.
  */
-async function _insertWithRetry(rows) {
-  const table = _getTable();
-  let lastError;
+function _rowDataFromError(e) {
+  return e.row && e.row.json ? e.row.json : (e.row || {});
+}
+
+/**
+ * Insert rows into BigQuery with exponential-backoff retry for transient
+ * errors.
+ *
+ * Rows are sent using the {insertId, json} streaming-insert format so that
+ * retries are idempotent (BigQuery deduplicates within ~1 minute by insertId).
+ *
+ * For PartialFailureError: per-row reasons are inspected.  Rows with retryable
+ * reasons are retried; rows with non-retryable reasons are surfaced
+ * immediately without further attempts.
+ *
+ * @param {object[]} rows     Pre-formatted BigQuery row data objects.
+ * @param {number}   attempt  Current attempt index (0-based).
+ * @returns {Promise<{success: boolean, partialFailure?: boolean, error?: Error}>}
+ */
+async function _insertWithRetry(rows, attempt = 0) {
+  const client = _getClient();
+  const table = client.dataset(_datasetId()).table(_tableId());
 
   // Wrap rows with insertId for idempotent retries.
   // event_id is the stable per-event dedupe key; fall back to a timestamp-
@@ -125,121 +185,187 @@ async function _insertWithRetry(rows) {
     json: row,
   }));
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      await table.insert(rowsWithId);
-      return;
-    } catch (err) {
-      lastError = err;
-
-      // PartialFailureError means the HTTP call succeeded but some rows were
-      // rejected by BigQuery.  Retrying won't help.
-      if (err.name === 'PartialFailureError') {
-        throw err;
-      }
-
-      if (attempt < MAX_RETRIES && _isRetryableError(err)) {
-        await _sleep(INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt));
-        continue;
-      }
-
-      throw err;
-    }
-  }
-
-  throw lastError;
-}
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
-/**
- * Inserts a batch of telemetry event envelopes into BigQuery.
- *
- * Never throws. Returns a result object:
- *   { success: true,  inserted: N, failed: 0 }
- *   { success: false, inserted: N, failed: M, error: string, errors?: [] }
- *
- * @param {object[]} events - Array of telemetry event envelopes.
- * @returns {Promise<{success: boolean, inserted: number, failed: number, error?: string, errors?: any[]}>}
- */
-async function insertEvents(events) {
-  if (!Array.isArray(events) || events.length === 0) {
-    return { success: true, inserted: 0, failed: 0 };
-  }
-
-  if (!isEnabled()) {
-    console.warn('[bigquery-client] BIGQUERY_PROJECT_ID not set — telemetry disabled');
-    return {
-      success: false,
-      inserted: 0,
-      failed: events.length,
-      error: 'BigQuery not configured: BIGQUERY_PROJECT_ID is not set',
-    };
-  }
-
-  const rows = events.map(_formatRow);
-
   try {
-    await _insertWithRetry(rows);
-    return { success: true, inserted: events.length, failed: 0 };
-  } catch (err) {
-    if (err.name === 'PartialFailureError') {
-      const failedRows = err.errors || [];
-      const failedCount = failedRows.length;
-      const insertedCount = events.length - failedCount;
-      console.error('[bigquery-client] Partial insert failure:', JSON.stringify(failedRows));
-      return {
-        success: false,
-        inserted: insertedCount,
-        failed: failedCount,
-        error: err.message,
-        errors: failedRows,
-      };
+    await table.insert(rowsWithId);
+    return { success: true };
+  } catch (error) {
+    if (error.name === 'PartialFailureError') {
+      const rowErrors = error.errors || [];
+
+      // Separate failed rows into retryable (transient) and non-retryable (bad data).
+      const retryableRowErrors = rowErrors.filter((e) =>
+        (e.errors || []).some((re) => _isRetryableReason(re.reason))
+      );
+      const permanentRowErrors = rowErrors.filter(
+        (e) => !(e.errors || []).some((re) => _isRetryableReason(re.reason))
+      );
+
+      if (retryableRowErrors.length > 0 && attempt < MAX_RETRIES) {
+        const retryableIds = new Set(
+          retryableRowErrors.map((e) => _rowDataFromError(e).event_id).filter(Boolean)
+        );
+        const retryRows = rows.filter((r) => retryableIds.has(r.event_id));
+
+        const delayMs = BASE_DELAY_MS * Math.pow(2, attempt);
+        await _sleepFn(delayMs);
+        const retryResult = await _insertWithRetry(retryRows, attempt + 1);
+
+        if (permanentRowErrors.length > 0) {
+          const permanentError = new Error('Some rows failed permanently');
+          permanentError.name = 'PartialFailureError';
+          permanentError.errors = permanentRowErrors;
+          return { success: false, partialFailure: true, error: permanentError };
+        }
+        return retryResult;
+      }
+
+      return { success: false, partialFailure: true, error };
     }
 
-    console.error('[bigquery-client] Insert failed after retries:', err.message);
-    return { success: false, inserted: 0, failed: events.length, error: err.message };
+    if (_isRetryableError(error) && attempt < MAX_RETRIES) {
+      const delayMs = BASE_DELAY_MS * Math.pow(2, attempt);
+      await _sleepFn(delayMs);
+      return _insertWithRetry(rows, attempt + 1);
+    }
+
+    return { success: false, partialFailure: false, error };
   }
 }
 
+/** Parse BigQuery PartialFailureError into a structured errors array. */
+function _parsePartialFailure(bqError) {
+  return (bqError.errors || []).map((e) => {
+    const rowData = _rowDataFromError(e);
+    return {
+      event_id: rowData.event_id || null,
+      errors: (e.errors || []).map((err) => err.message || err.reason || 'BigQuery insert error'),
+    };
+  });
+}
+
+// ─── Public API ──────────────────────────────────────────────────────────────
+
 /**
- * Inserts a single telemetry event envelope into BigQuery.
+ * Insert a single telemetry event into BigQuery.
  *
- * Never throws. Returns the same result shape as `insertEvents`.
+ * Never throws — all errors are returned in the result object so callers can
+ * log and continue without try/catch.
  *
- * @param {object} event - A telemetry event envelope.
- * @returns {Promise<{success: boolean, inserted: number, failed: number, error?: string}>}
+ * @param {object} event  Telemetry event envelope (must have event_id,
+ *   event_type, source, timestamp, payload).
+ * @returns {Promise<{
+ *   success: boolean,
+ *   skipped?: boolean,
+ *   reason?: string,
+ *   partialFailure?: boolean,
+ *   errors?: object[],
+ *   error?: string
+ * }>}
  */
 async function insertEvent(event) {
-  if (!event || typeof event !== 'object' || Array.isArray(event)) {
+  if (!isEnabled()) {
     return {
       success: false,
-      inserted: 0,
-      failed: 1,
-      error: 'Invalid event: must be a non-null object',
+      skipped: true,
+      reason: 'BigQuery telemetry not configured (BIGQUERY_PROJECT_ID not set)',
     };
   }
-  return insertEvents([event]);
+
+  try {
+    const row = _formatRow(event);
+    const result = await _insertWithRetry([row]);
+
+    if (!result.success) {
+      if (result.partialFailure) {
+        const errors = _parsePartialFailure(result.error);
+        console.error('[bigquery-client] insertEvent PartialFailureError:', JSON.stringify(errors));
+        return { success: false, partialFailure: true, errors };
+      }
+      console.error('[bigquery-client] insertEvent failed:', result.error.message);
+      return { success: false, error: result.error.message };
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error('[bigquery-client] insertEvent unexpected error:', error.message);
+    return { success: false, error: error.message };
+  }
 }
 
-// ---------------------------------------------------------------------------
-// Test helpers (not part of the public API)
-// ---------------------------------------------------------------------------
+/**
+ * Batch-insert multiple telemetry events into BigQuery in a single API call.
+ *
+ * Never throws — all errors are returned in the result object.
+ *
+ * @param {object[]} events  Array of telemetry event envelopes.
+ * @returns {Promise<{
+ *   success: boolean,
+ *   inserted?: number,
+ *   skipped?: boolean,
+ *   reason?: string,
+ *   partialFailure?: boolean,
+ *   errors?: object[],
+ *   error?: string
+ * }>}
+ */
+async function insertEvents(events) {
+  if (!isEnabled()) {
+    return {
+      success: false,
+      skipped: true,
+      reason: 'BigQuery telemetry not configured (BIGQUERY_PROJECT_ID not set)',
+    };
+  }
 
-/** Resets module-level BigQuery singletons (for use in tests only). */
-function _reset() {
-  _bigquery = null;
-  _table = null;
+  if (!Array.isArray(events) || events.length === 0) {
+    return { success: false, error: 'events must be a non-empty array' };
+  }
+
+  try {
+    const rows = events.map(_formatRow);
+    const result = await _insertWithRetry(rows);
+
+    if (!result.success) {
+      if (result.partialFailure) {
+        const errors = _parsePartialFailure(result.error);
+        console.error('[bigquery-client] insertEvents PartialFailureError:', JSON.stringify(errors));
+        return { success: false, partialFailure: true, errors };
+      }
+      console.error('[bigquery-client] insertEvents failed:', result.error.message);
+      return { success: false, error: result.error.message };
+    }
+
+    return { success: true, inserted: events.length };
+  } catch (error) {
+    console.error('[bigquery-client] insertEvents unexpected error:', error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+// ─── Test injection hooks ─────────────────────────────────────────────────────
+
+/** Reset the cached BigQuery client singleton (for unit-test isolation). */
+function _resetClient() {
+  _client = null;
+}
+
+/**
+ * Replace the internal sleep function (for unit tests so retry delays complete
+ * instantly without actual wall-clock time).
+ *
+ * @param {function(number): Promise<void>} fn
+ */
+function _setSleepFn(fn) {
+  _sleepFn = fn;
 }
 
 module.exports = {
   isEnabled,
   insertEvent,
   insertEvents,
-  // Exported for testing
   _formatRow,
   _isRetryableError,
-  _reset,
+  _isRetryableReason,
+  _resetClient,
+  _setSleepFn,
 };
