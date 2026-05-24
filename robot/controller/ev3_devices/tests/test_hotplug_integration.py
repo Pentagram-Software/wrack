@@ -154,6 +154,86 @@ class TestRegisterCallbackAPI:
 
         dm.cleanup()
 
+    def test_no_duplicate_registration_concurrent_with_startup(self):
+        """
+        Regression test for the race where a callback registered concurrently
+        with enable_port_monitoring() was registered twice (once via the
+        pending-queue replay and once via the direct port_monitor path).
+
+        The test uses a threading.Barrier to force a concurrent
+        register_reconnect_callback() call into the exact window between
+        PortMonitor construction and the critical section that drains the
+        pending queue and exposes _port_monitor.  After startup, the callback
+        must appear exactly once in _on_reconnect_callbacks.
+        """
+        import threading
+        from unittest.mock import patch
+        from ev3_devices import DeviceManager
+        from ev3_devices.port_monitor import PortMonitor
+
+        dm = DeviceManager()
+        cb = Mock()
+
+        # Barrier: 2 parties — the startup thread and the concurrent register
+        barrier = threading.Barrier(2)
+        concurrent_register_done = threading.Event()
+
+        original_init = PortMonitor.__init__
+
+        def patched_init(self, device_manager, check_interval):
+            original_init(self, device_manager, check_interval)
+            # Signal that PortMonitor exists; wait for the concurrent register
+            barrier.wait(timeout=5)
+            concurrent_register_done.wait(timeout=5)
+
+        errors = []
+
+        def run_startup():
+            try:
+                with patch.object(PortMonitor, "__init__", patched_init):
+                    dm.enable_port_monitoring(check_interval=0.05)
+            except Exception as exc:
+                errors.append(exc)
+
+        startup_thread = threading.Thread(target=run_startup)
+        startup_thread.start()
+
+        # Wait until PortMonitor.__init__ has finished (i.e., _port_monitor is
+        # not yet set — the fix ensures it is set only later under _device_lock)
+        barrier.wait(timeout=5)
+
+        # This is the "concurrent" register call that triggered the race
+        dm.register_reconnect_callback(cb)
+        concurrent_register_done.set()
+
+        startup_thread.join(timeout=5)
+        assert not errors, errors
+
+        # cb must appear exactly once regardless of which path was taken
+        count = dm._port_monitor._on_reconnect_callbacks.count(cb)
+        assert count == 1, (
+            "Expected callback to be registered exactly once, got {}".format(count)
+        )
+
+        dm.cleanup()
+
+    def test_pending_queue_cleared_after_monitoring_starts(self):
+        """Pending callback queues are emptied once enable_port_monitoring() runs."""
+        from ev3_devices import DeviceManager
+
+        dm = DeviceManager()
+        cb = Mock()
+        dm.register_reconnect_callback(cb)
+        assert len(dm._pending_reconnect_callbacks) == 1
+
+        dm.enable_port_monitoring(check_interval=0.05)
+
+        assert dm._pending_reconnect_callbacks == [], (
+            "Pending queue should be cleared after monitoring starts"
+        )
+
+        dm.cleanup()
+
 
 # ---------------------------------------------------------------------------
 # Tests: Turret hot-plug subsystem refresh
