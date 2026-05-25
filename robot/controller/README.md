@@ -157,6 +157,68 @@ python3 main.py
 printf '{"action":"battery"}\n' | nc <EV3_IP> 27700
 ```
 
+## 📡 Telemetry
+
+The `telemetry/` module provides buffered, thread-safe event collection for the EV3 controller.
+
+### TelemetryCollector
+
+`TelemetryCollector` builds standard event envelopes and stores them in a bounded in-memory
+FIFO queue (max 500 events by default). When the buffer is full, the oldest event is dropped
+first (FIFO drop). An optional disk spill path can be configured so dropped events are written
+to a `.jsonl` file instead of being lost.
+
+```python
+from telemetry.collector import TelemetryCollector
+
+collector = TelemetryCollector(
+    source="ev3",
+    session_id="session-abc",   # optional — injected into every event envelope
+    device_id="ev3-unit-1",     # optional — injected into every event envelope
+    max_buffer=500,              # max events held in memory (FIFO drop on overflow)
+    disk_spill_path="/tmp/telemetry_overflow.jsonl",  # optional overflow file
+)
+
+# Collect a battery status event
+collector.collect("battery_status", voltage_mv=7200, percentage=85.0)
+
+# Collect a command event
+collector.collect("command_received", command="forward", controller_type="ps4")
+
+# Drain and send the buffer (e.g. to telemetryIngestion cloud function)
+events = collector.flush()  # returns list[dict], clears buffer
+
+# Non-destructive snapshot
+snapshot = collector.get_events(limit=10)
+
+# Stats
+print(collector.size())          # current buffer size
+print(collector.dropped_count)   # total events dropped due to overflow
+print(collector.invalid_count)   # total events rejected by validation
+```
+
+Each collected event envelope includes:
+
+| Field | Description |
+|---|---|
+| `event_id` | UUID v4, auto-generated |
+| `event_type` | As passed to `collect()` |
+| `source` | Configured source (default `"ev3"`) |
+| `timestamp` | ISO 8601 UTC with milliseconds, e.g. `2026-01-01T12:00:00.000Z` |
+| `payload` | Dict of `**data` kwargs passed to `collect()` |
+| `session_id` | Injected if configured |
+| `device_id` | Injected if configured |
+
+Events are validated against the shared telemetry schemas before buffering. Invalid events are
+silently discarded and counted in `invalid_count`. Pass `validate=False` to skip validation.
+
+### Running telemetry tests
+
+```bash
+cd robot/controller
+python -m pytest telemetry/tests/ -v
+```
+
 ## 🧪 Development
 
 ```bash
