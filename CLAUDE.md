@@ -32,6 +32,8 @@ make test
 
 # Web tests only (Vitest)
 cd clients/web && npm test
+# Video protocol TypeScript tests (Node built-in test runner)
+cd shared/video-protocol/ts && npm test
 
 # Web – single test file
 cd clients/web && npx vitest run src/path/to/file.test.ts

@@ -253,3 +253,45 @@ npm run dev
 
 *Version: 0.1.0 - Functional Prototype*
 *Last Updated: 2025-10-04*
+
+---
+
+## Video Streaming (HLS Playback)
+
+### Architecture
+
+Browser video playback uses HLS.js via the `useVideoStream` hook:
+
+```
+Pi camera → H.264 encoder → UDP chunks → WebSocket bridge (future) → HLS → useVideoStream → <video>
+```
+
+Currently the bridge is not deployed; the web component awaits a `streamUrl` prop.
+
+### Key files
+
+| File | Role |
+|------|------|
+| `src/lib/useVideoStream.ts` | HLS.js lifecycle hook — idle/loading/ready/error states |
+| `src/components/CameraView.tsx` | Camera panel UI, uses `useVideoStream` |
+| `src/lib/useVideoStream.test.ts` | 16 unit tests (state machine, cleanup, native HLS fallback) |
+| `src/components/CameraView.test.tsx` | 23 unit tests (rendering, status, toggle, content states) |
+
+### useVideoStream API
+
+```typescript
+import { useVideoStream } from '@/lib/useVideoStream';
+
+const { status, error } = useVideoStream({
+  url: 'http://host/stream.m3u8',  // null to stop/reset
+  videoRef,                         // RefObject<HTMLVideoElement>
+});
+// status: 'idle' | 'loading' | 'ready' | 'error'
+```
+
+### Running video tests
+
+```bash
+cd clients/web
+npx vitest run --project unit  # runs all 59 unit tests including video
+```
