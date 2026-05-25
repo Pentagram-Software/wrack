@@ -1,0 +1,9 @@
+# Runtime dependencies for the EV3 robot controller.
+#
+# On the EV3 brick itself (Pybricks MicroPython) these packages are not
+# installed via pip; this file documents the expected runtime environment
+# for desktop/Raspberry Pi deployments and CI.
+
+# HTTP client used by telemetry/sender.py to POST events to Cloud Functions.
+# On Pybricks MicroPython the built-in `urequests` module is used instead.
+requests>=2.28.0
