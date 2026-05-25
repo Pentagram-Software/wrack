@@ -6,6 +6,9 @@ pytest-xdist>=3.0.0
 # JSON Schema validation (used by telemetry/schemas.py when available)
 jsonschema>=4.0.0
 
+# HTTP client used by TelemetrySender to POST events to Cloud Functions
+requests>=2.28.0
+
 # Wake word detection (Mycroft Precise)
 # Note: These may require additional system dependencies
 # Install precise-engine binary separately if not available via pip

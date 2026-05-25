@@ -23,6 +23,19 @@
 - To target a subset: `pytest tests/test_<area>.py -k "<pattern>"`.
 - If hardware is unavailable, mock device classes to avoid import/runtime errors.
 - Keep coverage healthy; add/adjust tests when touching controllers, device manager, or safety logic.
+- Telemetry-specific tests: `pytest telemetry/tests/ event_handler/tests/ -q`
+
+## Telemetry module (`telemetry/`)
+
+| File | Role |
+|------|------|
+| `schemas.py` | Pure-Python + optional jsonschema validation for all event types |
+| `collector.py` | Thread-safe in-memory event buffer (`TelemetryCollector`) |
+| `sender.py` | HTTP delivery to Cloud Function endpoint (`TelemetrySender`) |
+| `status_collector.py` | Periodic battery/motor events + immediate device-change events (`StatusCollector` — PEN-124) |
+
+**StatusCollector intervals:** battery every 60 s, motor every 10 s (both configurable).
+Device connect/disconnect events are collected **immediately** via `DeviceManager` callbacks.
 
 ## Code style
 - Follow PEP 8; prefer descriptive names and small functions.
