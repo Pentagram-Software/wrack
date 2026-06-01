@@ -65,6 +65,48 @@ brew install ffmpeg
    - Uses config values unless CLI flags override them
    - Falls back to interactive prompts when required values are missing
 
+## LAN Validation
+
+`lan_validate.py` connects to a running UDP streamer and validates LAN playback
+quality against PRD targets:
+
+| Metric      | Target             |
+|-------------|--------------------|
+| E2E latency | < 100 ms           |
+| FPS         | within ±20% target |
+| Frame loss  | < 5%               |
+| Jitter      | < 20 ms (stddev)   |
+
+### Basic usage
+
+```bash
+# Run against a Pi streamer on the local network (10 s sample)
+python3 lan_validate.py --server-ip 192.168.1.50
+
+# Longer sample, non-default fps target
+python3 lan_validate.py --server-ip 192.168.1.50 --duration 30 --target-fps 25
+```
+
+Exit codes: **0** = all targets met (PASS), **1** = target(s) missed (FAIL), **2** = connection error.
+
+### Timestamp-aware E2E latency (requires NTP sync)
+
+Start the streamer with `--embed-timestamps` to get true end-to-end latency
+(capture time on Pi → frame complete on receiver), which requires both machines
+to have NTP-synchronised clocks (typical LAN accuracy: 1–5 ms):
+
+```bash
+# On the Raspberry Pi:
+python3 streamer.py --embed-timestamps
+
+# On the laptop:
+python3 lan_validate.py --server-ip 192.168.1.50
+```
+
+Without `--embed-timestamps` the tool falls back to measuring in-process
+assembly latency (first UDP chunk → frame complete), which is a lower bound on
+true E2E latency but is still useful for network quality characterisation.
+
 ## Configuration File
 
 Default config path:
@@ -173,16 +215,24 @@ The client implements UDP Video Streaming Protocol v1.1:
 
 ```
 udp-video-receiver/
-├── main.py                           # Main UDP client application
-├── simple_display.py                 # Enhanced video display module
-├── video_display.py                  # Advanced threading display module
-├── enhanced_client.py                # Feature-rich client implementation
-├── display_example.py                # Display module usage examples
-├── upnp_helper.py                    # UPnP port forwarding helper
-├── UDP_Frame_Format_Documentation.md # Protocol specification
-├── README_Display.md                 # Display module documentation
-├── requirements.txt                  # Python dependencies
-└── README.md                         # This file
+├── main.py                   # CLI entry-point (calls receiver/main.py)
+├── lan_validate.py           # CLI entry-point for LAN validation
+├── receiver/
+│   ├── __init__.py
+│   ├── main.py               # UDPVideoClient, H264FrameDecoder, config logic
+│   └── lan_validate.py       # LanValidator, compute_report, ValidationReport
+├── simple_display.py         # Enhanced video display module
+├── video_display.py          # Advanced threading display module
+├── enhanced_client.py        # Feature-rich client implementation
+├── display_example.py        # Display module usage examples
+├── upnp_helper.py            # UPnP port forwarding helper
+├── tests/
+│   ├── conftest.py
+│   ├── test_main.py          # Receiver config + decode routing tests
+│   └── test_lan_validate.py  # LAN validation unit + loopback tests
+├── README_Display.md         # Display module documentation
+├── requirements.txt          # Python dependencies
+└── README.md                 # This file
 ```
 
 ## Advanced Usage

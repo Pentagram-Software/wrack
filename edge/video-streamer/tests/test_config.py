@@ -79,3 +79,13 @@ def test_invalid_values_raise(args):
 def test_invalid_profile_raises():
     with pytest.raises(ValueError):
         parse_stream_config(["--profile", "unsupported"])
+
+
+def test_embed_timestamps_defaults_to_false(tmp_path):
+    config = parse_stream_config(["--config", str(tmp_path / "missing.json")])
+    assert config.embed_timestamps is False
+
+
+def test_embed_timestamps_flag_sets_true():
+    config = parse_stream_config(["--embed-timestamps"])
+    assert config.embed_timestamps is True
