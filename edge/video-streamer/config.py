@@ -12,6 +12,7 @@ class StreamConfig:
     bitrate: int
     gop: int
     profile: str
+    embed_timestamps: bool = False
 
     @property
     def resolution(self) -> tuple[int, int]:
@@ -36,6 +37,16 @@ def parse_stream_config(argv: list[str] | None = None) -> StreamConfig:
         type=str,
         default=None,
         help="H.264 profile (baseline, main, high)",
+    )
+    parser.add_argument(
+        "--embed-timestamps",
+        action="store_true",
+        default=False,
+        help=(
+            "Append an 8-byte capture timestamp (µs since epoch, uint64 LE) to "
+            "each FRAME_START packet. Enables end-to-end latency measurement in "
+            "lan_validate.py. Off by default."
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -72,6 +83,8 @@ def parse_stream_config(argv: list[str] | None = None) -> StreamConfig:
     if args.profile is not None:
         profile = args.profile
 
+    embed_timestamps = args.embed_timestamps
+
     if width <= 0 or height <= 0 or fps <= 0 or bitrate <= 0 or gop <= 0:
         raise ValueError("width, height, fps, bitrate, and gop must be positive integers")
 
@@ -86,4 +99,5 @@ def parse_stream_config(argv: list[str] | None = None) -> StreamConfig:
         bitrate=bitrate,
         gop=gop,
         profile=profile,
+        embed_timestamps=embed_timestamps,
     )
