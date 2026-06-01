@@ -19,21 +19,10 @@ import io
 import socketserver
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from config import parse_stream_config
+from health import StreamStats, HealthServer, configure_logging
 
 LOGGER = logging.getLogger("streamer")
 
-
-def configure_logging(log_path: str = "logs/streamer.log") -> None:
-    if LOGGER.handlers:
-        return
-    log_dir = os.path.dirname(log_path)
-    if log_dir:
-        os.makedirs(log_dir, exist_ok=True)
-    handler = logging.FileHandler(log_path)
-    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-    handler.setFormatter(formatter)
-    LOGGER.addHandler(handler)
-    LOGGER.setLevel(logging.INFO)
 
 class VideoStreamer:
     def __init__(
@@ -43,7 +32,10 @@ class VideoStreamer:
         bitrate=2_000_000,
         gop=30,
         profile="baseline",
+        stats: StreamStats | None = None,
     ):
+        self.stats = stats or StreamStats()
+
         # Initialize camera
         self.picam2 = Picamera2()
         config = self.picam2.create_video_configuration(
@@ -51,6 +43,7 @@ class VideoStreamer:
         )
         self.picam2.configure(config)
         self.picam2.start()
+        self.stats.camera_ready = True
 
         # Configure H.264 encoder (for future H.264-based pipelines)
         self.h264_encoder = H264Encoder(
@@ -64,24 +57,26 @@ class VideoStreamer:
             gop,
             profile,
         )
-        
+
         self.resolution = resolution
         self.framerate = framerate
         self.bitrate = bitrate
         self.gop = gop
         self.profile = profile
         self.running = False
-        
+
     def capture_frame(self):
         """Capture a single frame from camera"""
         frame = self.picam2.capture_array()
         return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
+
 class UDPVideoStreamer(VideoStreamer):
     """Stream video over UDP (fast but no reliability guarantee)"""
-    
+
     def __init__(self, host='0.0.0.0', port=9999, **kwargs):
         super().__init__(**kwargs)
+        self.stats.transport = "udp"
         self.host = host
         self.port = port
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -90,56 +85,60 @@ class UDPVideoStreamer(VideoStreamer):
         self.max_packet_size = 65507  # Max UDP packet size
         self.clients = {}  # Dictionary to store client addresses and last seen time
         self.client_timeout = 30  # Timeout in seconds for inactive clients
-        self.frames_sent = 0  # Counter for total frames sent
         self.last_status_time = time.time()  # Time of last status message
         self.status_interval = 10  # Status update every 10 seconds
         self.fixed_client_port = 9999  # Use same port for frames as registration
         self.chunk_payload_size = 1200  # Bytes per UDP chunk payload to avoid IP fragmentation
         self.next_frame_id = 0  # Monotonically increasing frame identifier (uint32 wraparound)
-        
+
     def start_streaming(self):
         """Start UDP video server - wait for clients and then stream"""
         self.running = True
-        print(f"Starting UDP video server on {self.host}:{self.port}")
-        print("Frames will be sent back to exact client source address (NAT-friendly)")
-        print("Waiting for client connections...")
-        
+        self.stats.streaming_active = True
+        LOGGER.info("Starting UDP video server on %s:%s", self.host, self.port)
+        LOGGER.info("Frames will be sent back to exact client source address (NAT-friendly)")
+        LOGGER.info("Waiting for client connections...")
+
         # Start client listener thread
         listener_thread = threading.Thread(target=self.listen_for_clients)
         listener_thread.daemon = True
         listener_thread.start()
-        
+
         # Start streaming thread (will only stream when clients are connected)
         streaming_thread = threading.Thread(target=self.stream_to_clients)
         streaming_thread.daemon = True
         streaming_thread.start()
-        
+
         # Start client cleanup thread
         cleanup_thread = threading.Thread(target=self.cleanup_inactive_clients)
         cleanup_thread.daemon = True
         cleanup_thread.start()
-        
+
         # Keep main thread alive
         try:
             while self.running:
                 time.sleep(1)
         except KeyboardInterrupt:
             self.stop()
-    
+
     def listen_for_clients(self):
         """Listen for client registration messages"""
         while self.running:
             try:
                 self.socket.settimeout(1.0)  # Non-blocking with timeout
                 data, addr = self.socket.recvfrom(1024)
-                
+
                 # Check for client registration message
                 if data.startswith(b"REGISTER_CLIENT"):
                     # Use exact source address for frame transmissions (NAT-friendly)
                     client_addr = addr  # Use source IP:port as-is for NAT traversal
-                    
+
                     self.clients[client_addr] = time.time()
-                    print(f"Client registered: {client_addr} - frames will be sent to this exact address")
+                    self.stats.clients_connected = len(self.clients)
+                    LOGGER.info(
+                        "Client registered: %s — frames will be sent to this exact address",
+                        client_addr,
+                    )
                     # Send acknowledgment
                     self.socket.sendto(b"REGISTERED", addr)
                 elif data == b"KEEPALIVE":
@@ -160,15 +159,16 @@ class UDPVideoStreamer(VideoStreamer):
                             break
                     if client_addr:
                         del self.clients[client_addr]
-                        print(f"Client disconnected: {client_addr}")
-                        
+                        self.stats.clients_connected = len(self.clients)
+                        LOGGER.info("Client disconnected: %s", client_addr)
+
             except socket.timeout:
                 continue
             except Exception as e:
                 if self.running:
-                    print(f"Client listener error: {e}")
+                    LOGGER.error("Client listener error: %s", e)
                 break
-    
+
     def stream_to_clients(self):
         """Stream video frames to registered clients"""
         while self.running:
@@ -177,13 +177,13 @@ class UDPVideoStreamer(VideoStreamer):
                     # No clients connected, wait
                     time.sleep(0.1)
                     continue
-                
+
                 frame = self.capture_frame()
-                
+
                 # Encode frame as JPEG
                 _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
                 data = pickle.dumps(buffer)
-                
+
                 # Prepare frame id and send to all registered clients
                 frame_id = self.next_frame_id
                 disconnected_clients = []
@@ -191,31 +191,38 @@ class UDPVideoStreamer(VideoStreamer):
                     try:
                         self.send_frame_to_client(data, client_addr, frame_id)
                     except Exception as e:
-                        print(f"Error sending to client {client_addr}: {e}")
+                        LOGGER.warning("Error sending to client %s: %s", client_addr, e)
                         disconnected_clients.append(client_addr)
-                
+                        self.stats.errors += 1
+
                 # Remove clients that failed to receive
                 for client_addr in disconnected_clients:
                     if client_addr in self.clients:
                         del self.clients[client_addr]
-                        print(f"Removed unresponsive client: {client_addr}")
-                
-                # Increment frame counter and show periodic status
+                        self.stats.clients_connected = len(self.clients)
+                        LOGGER.warning("Removed unresponsive client: %s", client_addr)
+
+                # Increment frame counter and log periodic status
                 self.next_frame_id = (self.next_frame_id + 1) & 0xFFFFFFFF
-                self.frames_sent += 1
+                self.stats.record_frame()
                 current_time = time.time()
                 if current_time - self.last_status_time >= self.status_interval:
                     client_count = len(self.clients)
-                    fps = self.frames_sent / (current_time - (self.last_status_time - self.status_interval))
-                    print(f"Status: {self.frames_sent} frames sent to {client_count} client(s) | FPS: {fps:.1f}")
+                    LOGGER.info(
+                        "Status: %s frames sent to %s client(s) | FPS: %.1f",
+                        self.stats.frames_sent,
+                        client_count,
+                        self.stats.fps,
+                    )
                     self.last_status_time = current_time
-                    
-                time.sleep(1/self.framerate)
-                
+
+                time.sleep(1 / self.framerate)
+
             except Exception as e:
-                print(f"UDP streaming error: {e}")
+                LOGGER.error("UDP streaming error: %s", e)
+                self.stats.errors += 1
                 break
-    
+
     def send_frame_to_client(self, data, client_addr, frame_id):
         """Send a frame to a specific client using small UDP chunks to avoid fragmentation.
 
@@ -242,86 +249,94 @@ class UDPVideoStreamer(VideoStreamer):
             chunk_header = struct.pack("LL", frame_id, chunk_index)
             self.socket.sendto(b"CHUNK" + chunk_header + chunk, client_addr)
             chunk_index += 1
-    
+
     def cleanup_inactive_clients(self):
         """Remove clients that haven't sent keepalive messages"""
         while self.running:
             try:
                 current_time = time.time()
                 inactive_clients = []
-                
+
                 for client_addr, last_seen in self.clients.items():
                     if current_time - last_seen > self.client_timeout:
                         inactive_clients.append(client_addr)
-                
+
                 for client_addr in inactive_clients:
                     del self.clients[client_addr]
-                    print(f"Removed inactive client: {client_addr}")
-                
+                    self.stats.clients_connected = len(self.clients)
+                    LOGGER.info("Removed inactive client: %s", client_addr)
+
                 time.sleep(5)  # Check every 5 seconds
-                
+
             except Exception as e:
                 if self.running:
-                    print(f"Client cleanup error: {e}")
+                    LOGGER.error("Client cleanup error: %s", e)
                 break
-                
+
     def stop(self):
         self.running = False
+        self.stats.streaming_active = False
         self.socket.close()
         self.picam2.stop()
+        LOGGER.info("UDP streamer stopped")
+
 
 class TCPVideoStreamer(VideoStreamer):
     """Stream video over TCP (reliable but slower)"""
-    
+
     def __init__(self, host='0.0.0.0', port=8888, **kwargs):
         super().__init__(**kwargs)
+        self.stats.transport = "tcp"
         self.host = host
         self.port = port
         self.clients = []
-        
+
     def start_server(self):
         """Start TCP server for video streaming"""
         self.running = True
+        self.stats.streaming_active = True
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server_socket.bind((self.host, self.port))
         server_socket.listen(5)
-        
-        print(f"TCP video server started on {self.host}:{self.port}")
-        
+
+        LOGGER.info("TCP video server started on %s:%s", self.host, self.port)
+
         # Start frame capture thread
         capture_thread = threading.Thread(target=self.capture_and_broadcast)
         capture_thread.daemon = True
         capture_thread.start()
-        
+
         # Accept client connections
         while self.running:
             try:
                 client_socket, addr = server_socket.accept()
-                print(f"Client connected: {addr}")
+                LOGGER.info("Client connected: %s", addr)
                 self.clients.append(client_socket)
-                
+                self.stats.clients_connected = len(self.clients)
+
                 # Handle client in separate thread
                 client_thread = threading.Thread(target=self.handle_client, args=(client_socket,))
                 client_thread.daemon = True
                 client_thread.start()
-                
+
             except Exception as e:
-                print(f"Server error: {e}")
+                LOGGER.error("TCP server error: %s", e)
+                self.stats.errors += 1
                 break
-                
+
         server_socket.close()
-        
+
     def capture_and_broadcast(self):
         """Capture frames and broadcast to all clients"""
         while self.running:
             try:
                 frame = self.capture_frame()
-                
+
                 # Encode frame
                 _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
                 data = pickle.dumps(buffer)
-                
+
                 # Send to all connected clients
                 disconnected_clients = []
                 for client in self.clients:
@@ -331,55 +346,65 @@ class TCPVideoStreamer(VideoStreamer):
                         client.sendall(size)
                         # Send frame data
                         client.sendall(data)
-                    except:
+                    except Exception:
                         disconnected_clients.append(client)
-                
+
                 # Remove disconnected clients
                 for client in disconnected_clients:
                     self.clients.remove(client)
                     client.close()
-                    
-                time.sleep(1/self.framerate)
-                
+                    self.stats.clients_connected = len(self.clients)
+
+                self.stats.record_frame()
+                time.sleep(1 / self.framerate)
+
             except Exception as e:
-                print(f"Capture error: {e}")
+                LOGGER.error("TCP capture error: %s", e)
+                self.stats.errors += 1
                 break
-                
+
     def handle_client(self, client_socket):
         """Handle individual client connection"""
         try:
             while self.running:
                 time.sleep(0.1)  # Keep connection alive
-        except:
+        except Exception:
             pass
         finally:
             if client_socket in self.clients:
                 self.clients.remove(client_socket)
+                self.stats.clients_connected = len(self.clients)
             client_socket.close()
-            
+
     def stop(self):
         self.running = False
+        self.stats.streaming_active = False
         for client in self.clients:
             client.close()
         self.picam2.stop()
+        LOGGER.info("TCP streamer stopped")
+
 
 class HTTPVideoStreamer(VideoStreamer):
     """Stream video over HTTP (MJPEG streaming)"""
-    
+
     def __init__(self, host='0.0.0.0', port=8080, **kwargs):
         super().__init__(**kwargs)
+        self.stats.transport = "http"
         self.host = host
         self.port = port
         self.latest_frame = None
         self.frame_lock = threading.Lock()
-        
+        self._active_streams = 0
+        self._stream_lock = threading.Lock()
+
     class StreamingHandler(BaseHTTPRequestHandler):
         def __init__(self, streamer_instance):
             self.streamer = streamer_instance
-            
+
         def __call__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            
+
         def do_GET(self):
             if self.path == '/stream.mjpg':
                 self.send_response(200)
@@ -387,32 +412,56 @@ class HTTPVideoStreamer(VideoStreamer):
                 self.send_header('Cache-Control', 'no-cache')
                 self.send_header('Pragma', 'no-cache')
                 self.end_headers()
-                
-                while True:
-                    try:
-                        with self.server.streamer.frame_lock:
-                            if self.server.streamer.latest_frame is not None:
-                                frame = self.server.streamer.latest_frame.copy()
-                            else:
-                                continue
-                                
-                        # Encode frame as JPEG
-                        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                        
-                        # Send MJPEG frame
-                        self.wfile.write(b'--jpgboundary\r\n')
-                        self.send_header('Content-Type', 'image/jpeg')
-                        self.send_header('Content-Length', str(len(buffer)))
-                        self.end_headers()
-                        self.wfile.write(buffer.tobytes())
-                        self.wfile.write(b'\r\n')
-                        
-                        time.sleep(1/self.server.streamer.framerate)
-                        
-                    except Exception as e:
-                        print(f"HTTP streaming error: {e}")
-                        break
-                        
+
+                with self.server.streamer._stream_lock:
+                    self.server.streamer._active_streams += 1
+                    self.server.streamer.stats.clients_connected = (
+                        self.server.streamer._active_streams
+                    )
+
+                try:
+                    while True:
+                        try:
+                            with self.server.streamer.frame_lock:
+                                if self.server.streamer.latest_frame is not None:
+                                    frame = self.server.streamer.latest_frame.copy()
+                                else:
+                                    continue
+
+                            # Encode frame as JPEG
+                            _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+
+                            # Send MJPEG frame
+                            self.wfile.write(b'--jpgboundary\r\n')
+                            self.send_header('Content-Type', 'image/jpeg')
+                            self.send_header('Content-Length', str(len(buffer)))
+                            self.end_headers()
+                            self.wfile.write(buffer.tobytes())
+                            self.wfile.write(b'\r\n')
+
+                            self.server.streamer.stats.record_frame()
+                            time.sleep(1 / self.server.streamer.framerate)
+
+                        except Exception as e:
+                            LOGGER.warning("HTTP streaming error: %s", e)
+                            break
+                finally:
+                    with self.server.streamer._stream_lock:
+                        self.server.streamer._active_streams -= 1
+                        self.server.streamer.stats.clients_connected = (
+                            self.server.streamer._active_streams
+                        )
+
+            elif self.path == '/health':
+                body = self.server.streamer.stats.to_dict()
+                import json as _json
+                body_bytes = _json.dumps(body).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body_bytes)))
+                self.end_headers()
+                self.wfile.write(body_bytes)
+
             else:
                 # Serve simple HTML page
                 self.send_response(200)
@@ -428,25 +477,29 @@ class HTTPVideoStreamer(VideoStreamer):
                 </html>
                 '''
                 self.wfile.write(html.encode())
-                
+
+        def log_message(self, fmt, *args):
+            LOGGER.debug("http %s - %s", self.address_string(), fmt % args)
+
     def start_server(self):
         """Start HTTP server for MJPEG streaming"""
         self.running = True
-        
+        self.stats.streaming_active = True
+
         # Create custom handler with streamer reference
         handler = lambda *args, **kwargs: self.StreamingHandler(self)(*args, **kwargs)
-        
+
         httpd = HTTPServer((self.host, self.port), handler)
         httpd.streamer = self  # Add reference to streamer
-        
-        print(f"HTTP video server started on http://{self.host}:{self.port}")
-        print(f"View stream at: http://{self.host}:{self.port}/stream.mjpg")
-        
+
+        LOGGER.info("HTTP video server started on http://%s:%s", self.host, self.port)
+        LOGGER.info("View stream at: http://%s:%s/stream.mjpg", self.host, self.port)
+
         # Start frame capture thread
         capture_thread = threading.Thread(target=self.capture_frames)
         capture_thread.daemon = True
         capture_thread.start()
-        
+
         # Start HTTP server
         try:
             httpd.serve_forever()
@@ -454,7 +507,7 @@ class HTTPVideoStreamer(VideoStreamer):
             pass
         finally:
             httpd.shutdown()
-            
+
     def capture_frames(self):
         """Continuously capture frames"""
         while self.running:
@@ -462,14 +515,18 @@ class HTTPVideoStreamer(VideoStreamer):
                 frame = self.capture_frame()
                 with self.frame_lock:
                     self.latest_frame = frame
-                time.sleep(1/self.framerate)
+                time.sleep(1 / self.framerate)
             except Exception as e:
-                print(f"Frame capture error: {e}")
+                LOGGER.error("Frame capture error: %s", e)
+                self.stats.errors += 1
                 break
-                
+
     def stop(self):
         self.running = False
+        self.stats.streaming_active = False
         self.picam2.stop()
+        LOGGER.info("HTTP streamer stopped")
+
 
 # Example usage
 if __name__ == "__main__":
@@ -480,10 +537,14 @@ if __name__ == "__main__":
     print("1. UDP Streaming (fast, unreliable)")
     print("2. TCP Streaming (reliable, slower)")
     print("3. HTTP/MJPEG Streaming (web browser compatible)")
-    
+
     choice = input("Enter choice (1-3): ").strip()
-    
+
     try:
+        stats = StreamStats()
+        health = HealthServer(stats, port=config.health_port)
+        health.start()
+
         if choice == "1":
             streamer = UDPVideoStreamer(
                 host='0.0.0.0',
@@ -493,6 +554,7 @@ if __name__ == "__main__":
                 bitrate=config.bitrate,
                 gop=config.gop,
                 profile=config.profile,
+                stats=stats,
             )
             streamer.start_streaming()
         elif choice == "2":
@@ -504,6 +566,7 @@ if __name__ == "__main__":
                 bitrate=config.bitrate,
                 gop=config.gop,
                 profile=config.profile,
+                stats=stats,
             )
             streamer.start_server()
         elif choice == "3":
@@ -515,14 +578,16 @@ if __name__ == "__main__":
                 bitrate=config.bitrate,
                 gop=config.gop,
                 profile=config.profile,
+                stats=stats,
             )
             streamer.start_server()
         else:
             print("Invalid choice")
-            
+
     except KeyboardInterrupt:
         print("\nStopping stream...")
         if 'streamer' in locals():
             streamer.stop()
+        health.stop()
     except Exception as e:
-        print(f"Error: {e}")
+        LOGGER.exception("Fatal error: %s", e)

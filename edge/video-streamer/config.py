@@ -12,6 +12,7 @@ class StreamConfig:
     bitrate: int
     gop: int
     profile: str
+    health_port: int = 9000
 
     @property
     def resolution(self) -> tuple[int, int]:
@@ -37,6 +38,12 @@ def parse_stream_config(argv: list[str] | None = None) -> StreamConfig:
         default=None,
         help="H.264 profile (baseline, main, high)",
     )
+    parser.add_argument(
+        "--health-port",
+        type=int,
+        default=None,
+        help="Port for the health HTTP server (default: 9000)",
+    )
     args = parser.parse_args(argv)
 
     # Start with defaults
@@ -46,6 +53,7 @@ def parse_stream_config(argv: list[str] | None = None) -> StreamConfig:
     bitrate = 2_000_000
     gop = 30
     profile = "baseline"
+    health_port = 9000
 
     # Override with JSON config if provided and exists
     if args.config and os.path.exists(args.config):
@@ -57,6 +65,7 @@ def parse_stream_config(argv: list[str] | None = None) -> StreamConfig:
         bitrate = int(config_data.get("bitrate", bitrate))
         gop = int(config_data.get("gop", gop))
         profile = str(config_data.get("profile", profile))
+        health_port = int(config_data.get("health_port", health_port))
 
     # Override with CLI args if explicitly provided (highest priority)
     if args.width is not None:
@@ -71,6 +80,8 @@ def parse_stream_config(argv: list[str] | None = None) -> StreamConfig:
         gop = args.gop
     if args.profile is not None:
         profile = args.profile
+    if args.health_port is not None:
+        health_port = args.health_port
 
     if width <= 0 or height <= 0 or fps <= 0 or bitrate <= 0 or gop <= 0:
         raise ValueError("width, height, fps, bitrate, and gop must be positive integers")
@@ -79,6 +90,9 @@ def parse_stream_config(argv: list[str] | None = None) -> StreamConfig:
     if profile not in allowed_profiles:
         raise ValueError("profile must be one of: baseline, main, high")
 
+    if health_port <= 0 or health_port > 65535:
+        raise ValueError("health_port must be between 1 and 65535")
+
     return StreamConfig(
         width=width,
         height=height,
@@ -86,4 +100,5 @@ def parse_stream_config(argv: list[str] | None = None) -> StreamConfig:
         bitrate=bitrate,
         gop=gop,
         profile=profile,
+        health_port=health_port,
     )

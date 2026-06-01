@@ -78,7 +78,8 @@ Edit `config/config.json`:
   "fps": 30,
   "bitrate": 2000000,
   "gop": 30,
-  "profile": "baseline"
+  "profile": "baseline",
+  "health_port": 9000
 }
 ```
 
@@ -104,6 +105,7 @@ python3 streamer.py --width 1920 --height 1080 --fps 25 --bitrate 3000000 --gop 
 - `--bitrate`: H.264 target bitrate in bits/sec (default: 2_000_000)
 - `--gop`: H.264 GOP / keyframe interval in frames (default: 30)
 - `--profile`: H.264 profile (`baseline`, `main`, `high`) (default: `baseline`)
+- `--health-port`: Port for the health HTTP server (default: 9000)
 
 ### Client Examples
 
@@ -194,8 +196,44 @@ Adjust compression quality (1-100):
 cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
 ```
 
+### Health Endpoint
+
+A lightweight HTTP health server runs on port 9000 by default (all transport modes).
+Query it to check streaming status:
+
+```bash
+curl http://raspberry_pi_ip:9000/health
+```
+
+Example response:
+
+```json
+{
+  "status": "ok",
+  "camera_ready": true,
+  "streaming_active": true,
+  "transport": "udp",
+  "uptime_seconds": 42.3,
+  "clients_connected": 2,
+  "fps": 29.8,
+  "frames_sent": 1254,
+  "errors": 0
+}
+```
+
+Configure the port via `--health-port` or the `health_port` key in `config.json`.
+When using HTTP/MJPEG mode, `/health` is also available on the stream port (8080).
+
 ### Logs
-Encoder settings are written to `logs/streamer.log` with timestamps at startup.
+Runtime events (server start, client connect/disconnect, periodic FPS stats, errors)
+are written to `logs/streamer.log` **and** printed to the console.  The log format is:
+
+```
+2026-01-15 10:23:45,123 INFO     streamer Starting UDP video server on 0.0.0.0:9999
+```
+
+To change the log level or disable console output, call `configure_logging()` directly
+from `health.py` before starting the streamer.
 
 ### UDP Chunk Size
 Modify chunk payload size:

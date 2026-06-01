@@ -4,5 +4,6 @@
   "fps": 30,
   "bitrate": 2000000,
   "gop": 30,
-  "profile": "baseline"
+  "profile": "baseline",
+  "health_port": 9000
 }
