@@ -207,6 +207,17 @@ self.chunk_payload_size = 1200  # bytes
 
 See [`UDP_Frame_Format_Documentation.md`](UDP_Frame_Format_Documentation.md) for detailed protocol specifications.
 
+## HLS Streaming (LL-HLS — M2 milestone)
+
+The planned production streaming path is Low-Latency HLS (fMP4 segments served via Nginx).
+See the architecture docs for details:
+
+| Document | Purpose |
+|----------|---------|
+| [`docs/architecture/HLS.md`](../../docs/architecture/HLS.md) | LL-HLS design, encoding guidance, latency targets |
+| [`docs/architecture/HLS_INTEGRATION_CHECKLIST.md`](../../docs/architecture/HLS_INTEGRATION_CHECKLIST.md) | End-to-end integration test checklist (M2-6) |
+| [`docs/architecture/HLS_RUNBOOK.md`](../../docs/architecture/HLS_RUNBOOK.md) | Operating procedures: start, stop, health checks, troubleshooting |
+
 ## 🐛 Troubleshooting
 
 ### UDP Frames Not Received Over Internet
