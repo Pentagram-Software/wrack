@@ -7,7 +7,13 @@ A high-performance video streaming server for Raspberry Pi 5 with multiple strea
 - **Multiple Streaming Protocols**:
   - **UDP Streaming**: Low-latency, NAT-friendly chunked transmission
   - **TCP Streaming**: Reliable connection-based streaming
-  - **HTTP/MJPEG**: Web browser compatible streaming
+  - **HTTP/MJPEG**: Web browser compatible streaming (plain HTTP or HTTPS/TLS)
+
+- **Security**:
+  - HTTPS/TLS for the HTTP/MJPEG server (`--tls-cert` / `--tls-key`)
+  - Configurable minimum TLS version (TLSv1.2 or TLSv1.3)
+  - `WebRTCSecurityConfig` dataclass with DTLS role and SRTP profile selection (ready for WebRTC pipeline integration)
+  - Nginx HTTPS config template for LL-HLS delivery (`nginx/nginx-hls-https.conf`)
 
 - **Internet-Ready UDP Protocol**:
   - Always-chunked transmission (1200-byte payloads) to avoid IP fragmentation
@@ -104,6 +110,9 @@ python3 streamer.py --width 1920 --height 1080 --fps 25 --bitrate 3000000 --gop 
 - `--bitrate`: H.264 target bitrate in bits/sec (default: 2_000_000)
 - `--gop`: H.264 GOP / keyframe interval in frames (default: 30)
 - `--profile`: H.264 profile (`baseline`, `main`, `high`) (default: `baseline`)
+- `--tls-cert PATH`: Path to PEM certificate for HTTPS (requires `--tls-key`)
+- `--tls-key PATH`: Path to PEM private key for HTTPS (requires `--tls-cert`)
+- `--tls-min-version VERSION`: Minimum TLS version (`TLSv1.2` or `TLSv1.3`, default: `TLSv1.2`)
 
 ### Client Examples
 
@@ -159,6 +168,60 @@ cv2.destroyAllWindows()
 
 #### Web Browser (HTTP)
 Simply navigate to: `http://raspberry_pi_ip:8080`
+
+#### Web Browser (HTTPS)
+Generate a self-signed certificate (development only) and start with TLS:
+```bash
+openssl req -x509 -newkey rsa:4096 -sha256 -days 365 -nodes \
+  -keyout server.key -out server.crt -subj "/CN=raspberrypi.local"
+
+python3 streamer.py --tls-cert server.crt --tls-key server.key
+# Choose option 3 — the stream is served at https://raspberry_pi_ip:8080
+```
+
+For production, use a certificate from a trusted CA (e.g. Let's Encrypt / Certbot).
+
+## 🔒 Security
+
+### HTTPS/TLS for HTTP streaming
+
+The HTTP/MJPEG server (`HTTPVideoStreamer`) supports TLS via Python's built-in
+`ssl` module.  Pass `--tls-cert` and `--tls-key` at launch to enable HTTPS.
+
+Minimum TLS version is TLSv1.2 by default; use `--tls-min-version TLSv1.3` to
+restrict to TLSv1.3 only.  The underlying cipher suite selection is delegated
+to the platform's OpenSSL defaults (secure on any modern build).
+
+Security is implemented in `security.py`:
+
+| Symbol | Purpose |
+|--------|---------|
+| `TLSConfig` | Holds cert/key paths, minimum TLS version, and optional cipher string |
+| `build_ssl_context()` | Creates `ssl.SSLContext` ready to wrap a server socket |
+| `WebRTCSecurityConfig` | DTLS role + SRTP profile config for future WebRTC pipeline |
+| `get_webrtc_srtp_profiles()` | Returns SRTP profiles to offer during DTLS-SRTP negotiation |
+
+### Nginx HTTPS for LL-HLS
+
+See `nginx/nginx-hls-https.conf` for a production-ready Nginx configuration that:
+- Redirects all HTTP traffic to HTTPS
+- Enforces TLSv1.2 / TLSv1.3 with strong AEAD cipher suites
+- Sets `Strict-Transport-Security`, `X-Content-Type-Options`, and `X-Frame-Options`
+- Serves `.m3u8` playlists with `Cache-Control: no-cache` and `.m4s` segments with a short TTL
+- Adds CORS headers for cross-origin browser and iOS access
+
+### WebRTC DTLS-SRTP
+
+`WebRTCSecurityConfig` declares the DTLS endpoint role (`auto`, `client`,
+`server`) and the ordered list of SRTP protection profiles to advertise during
+the DTLS-SRTP handshake.  This configuration is ready to plug into the WebRTC
+media pipeline when it is implemented.
+
+Supported SRTP profiles:
+- `SRTP_AES128_CM_SHA1_80` (default, widest compatibility)
+- `SRTP_AES128_CM_SHA1_32`
+- `SRTP_AEAD_AES_128_GCM`
+- `SRTP_AEAD_AES_256_GCM`
 
 ## 🌐 Network Configuration
 

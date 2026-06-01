@@ -8,6 +8,7 @@ import cv2
 import logging
 import os
 import socket
+import ssl
 import struct
 import pickle
 import threading
@@ -19,6 +20,7 @@ import io
 import socketserver
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from config import parse_stream_config
+from security import TLSConfig, build_ssl_context
 
 LOGGER = logging.getLogger("streamer")
 
@@ -364,12 +366,19 @@ class TCPVideoStreamer(VideoStreamer):
         self.picam2.stop()
 
 class HTTPVideoStreamer(VideoStreamer):
-    """Stream video over HTTP (MJPEG streaming)"""
-    
-    def __init__(self, host='0.0.0.0', port=8080, **kwargs):
+    """Stream video over HTTP or HTTPS (MJPEG streaming)."""
+
+    def __init__(
+        self,
+        host: str = "0.0.0.0",
+        port: int = 8080,
+        tls: TLSConfig | None = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.host = host
         self.port = port
+        self.tls = tls
         self.latest_frame = None
         self.frame_lock = threading.Lock()
         
@@ -430,24 +439,34 @@ class HTTPVideoStreamer(VideoStreamer):
                 self.wfile.write(html.encode())
                 
     def start_server(self):
-        """Start HTTP server for MJPEG streaming"""
+        """Start HTTP(S) server for MJPEG streaming.
+
+        When a :class:`~security.TLSConfig` was supplied at construction time
+        the server socket is wrapped with TLS so the stream is served over
+        HTTPS.  Otherwise plain HTTP is used.
+        """
         self.running = True
-        
-        # Create custom handler with streamer reference
+
         handler = lambda *args, **kwargs: self.StreamingHandler(self)(*args, **kwargs)
-        
         httpd = HTTPServer((self.host, self.port), handler)
-        httpd.streamer = self  # Add reference to streamer
-        
-        print(f"HTTP video server started on http://{self.host}:{self.port}")
-        print(f"View stream at: http://{self.host}:{self.port}/stream.mjpg")
-        
-        # Start frame capture thread
+        httpd.streamer = self
+
+        if self.tls is not None:
+            ssl_context = build_ssl_context(self.tls)
+            httpd.socket = ssl_context.wrap_socket(httpd.socket, server_side=True)
+            scheme = "https"
+            LOGGER.info("TLS enabled — certificate: %s", self.tls.cert_path)
+        else:
+            scheme = "http"
+            LOGGER.info("TLS not configured — serving plain HTTP")
+
+        print(f"HTTP video server started on {scheme}://{self.host}:{self.port}")
+        print(f"View stream at: {scheme}://{self.host}:{self.port}/stream.mjpg")
+
         capture_thread = threading.Thread(target=self.capture_frames)
         capture_thread.daemon = True
         capture_thread.start()
-        
-        # Start HTTP server
+
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
@@ -510,6 +529,7 @@ if __name__ == "__main__":
             streamer = HTTPVideoStreamer(
                 host='0.0.0.0',
                 port=8080,
+                tls=config.tls,
                 resolution=config.resolution,
                 framerate=config.fps,
                 bitrate=config.bitrate,
