@@ -32,3 +32,20 @@
 
 - Video protocol: [`shared/video-protocol/UDP_Frame_Format_Documentation.md`](shared/video-protocol/UDP_Frame_Format_Documentation.md)
 - Video streaming architecture: [`docs/architecture/ARC42.md`](docs/architecture/ARC42.md)
+- CatRecognizer IAM setup: [`docs/cat-recognizer/setup-iam.md`](docs/cat-recognizer/setup-iam.md)
+
+## CatRecognizer ML Infrastructure
+
+```
+Edge (Raspberry Pi)
+  cat-recognizer-data SA ──objectAdmin──► GCS training-data bucket
+                                                    │
+                                              (read-only)
+                                                    ▼
+  cat-recognizer-trainer SA ──────────────► Training (workstation / CI)
+    ──objectAdmin──► GCS models bucket
+    ──AR writer───► Artifact Registry (cat-recognizer repo, europe-west3)
+```
+
+Setup: `GCP_PROJECT_ID=wrack-control bash cloud/cat-recognizer/setup-iam.sh`  
+Smoke test: `bash cloud/cat-recognizer/smoke-test.sh --mode=data`
