@@ -18,12 +18,12 @@ from picamera2.outputs import FileOutput
 import io
 import socketserver
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from config import parse_stream_config
+from config import get_log_level_constant, parse_stream_config
 
 LOGGER = logging.getLogger("streamer")
 
 
-def configure_logging(log_path: str = "logs/streamer.log") -> None:
+def configure_logging(log_path: str = "logs/streamer.log", log_level: str = "info") -> None:
     if LOGGER.handlers:
         return
     log_dir = os.path.dirname(log_path)
@@ -33,7 +33,7 @@ def configure_logging(log_path: str = "logs/streamer.log") -> None:
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
     handler.setFormatter(formatter)
     LOGGER.addHandler(handler)
-    LOGGER.setLevel(logging.INFO)
+    LOGGER.setLevel(get_log_level_constant(log_level))
 
 class VideoStreamer:
     def __init__(
@@ -471,58 +471,49 @@ class HTTPVideoStreamer(VideoStreamer):
         self.running = False
         self.picam2.stop()
 
-# Example usage
-if __name__ == "__main__":
-    configure_logging()
-    config = parse_stream_config()
+def _build_streamer(config):
+    """Instantiate and return the correct streamer based on ``config.transport``."""
+    common = dict(
+        resolution=config.resolution,
+        framerate=config.fps,
+        bitrate=config.bitrate,
+        gop=config.gop,
+        profile=config.profile,
+    )
+    if config.transport == "udp":
+        return UDPVideoStreamer(host=config.host, port=config.udp_port, **common)
+    if config.transport == "tcp":
+        return TCPVideoStreamer(host=config.host, port=config.tcp_port, **common)
+    if config.transport == "http":
+        return HTTPVideoStreamer(host=config.host, port=config.http_port, **common)
+    raise ValueError(f"Unknown transport: {config.transport!r}")
 
-    print("Choose streaming method:")
-    print("1. UDP Streaming (fast, unreliable)")
-    print("2. TCP Streaming (reliable, slower)")
-    print("3. HTTP/MJPEG Streaming (web browser compatible)")
-    
-    choice = input("Enter choice (1-3): ").strip()
-    
+
+if __name__ == "__main__":
+    config = parse_stream_config()
+    configure_logging(log_path=config.log_path, log_level=config.log_level)
+
+    LOGGER.info(
+        "Starting %s streamer | %dx%d @ %d fps | bitrate=%d gop=%d profile=%s",
+        config.transport.upper(),
+        config.width,
+        config.height,
+        config.fps,
+        config.bitrate,
+        config.gop,
+        config.profile,
+    )
+
     try:
-        if choice == "1":
-            streamer = UDPVideoStreamer(
-                host='0.0.0.0',
-                port=9999,
-                resolution=config.resolution,
-                framerate=config.fps,
-                bitrate=config.bitrate,
-                gop=config.gop,
-                profile=config.profile,
-            )
+        streamer = _build_streamer(config)
+        if config.transport == "udp":
             streamer.start_streaming()
-        elif choice == "2":
-            streamer = TCPVideoStreamer(
-                host='0.0.0.0',
-                port=8888,
-                resolution=config.resolution,
-                framerate=config.fps,
-                bitrate=config.bitrate,
-                gop=config.gop,
-                profile=config.profile,
-            )
-            streamer.start_server()
-        elif choice == "3":
-            streamer = HTTPVideoStreamer(
-                host='0.0.0.0',
-                port=8080,
-                resolution=config.resolution,
-                framerate=config.fps,
-                bitrate=config.bitrate,
-                gop=config.gop,
-                profile=config.profile,
-            )
-            streamer.start_server()
         else:
-            print("Invalid choice")
-            
+            streamer.start_server()
     except KeyboardInterrupt:
         print("\nStopping stream...")
-        if 'streamer' in locals():
+        if "streamer" in locals():
             streamer.stop()
     except Exception as e:
-        print(f"Error: {e}")
+        LOGGER.exception("Fatal streamer error: %s", e)
+        raise

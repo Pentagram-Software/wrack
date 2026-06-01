@@ -4,5 +4,12 @@
   "fps": 30,
   "bitrate": 2000000,
   "gop": 30,
-  "profile": "baseline"
+  "profile": "baseline",
+  "transport": "udp",
+  "host": "0.0.0.0",
+  "udp_port": 9999,
+  "tcp_port": 8888,
+  "http_port": 8080,
+  "log_level": "info",
+  "log_path": "logs/streamer.log"
 }

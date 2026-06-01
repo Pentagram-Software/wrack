@@ -2,6 +2,25 @@
 
 All notable changes to the Raspberry Pi Camera Streaming Server will be documented in this file.
 
+## [1.2.0] - 2026-06-01
+
+### Added
+- **Unified config**: single JSON file covers camera, encoder, transport, and logging settings
+- **Transport selection via config/CLI**: `--transport udp|tcp|http` flag replaces interactive menu
+- **Host flag**: `--host` controls the server bind address
+- **Per-protocol port flags**: `--udp-port`, `--tcp-port`, `--http-port`
+- **Logging flags**: `--log-level` (debug/info/warning/error/critical) and `--log-path`
+- `StreamConfig.port` convenience property returns the port for the active transport
+- `get_log_level_constant()` helper converts log-level string to `logging` int constant
+- Expanded `config/config.json` to include all new transport and logging defaults
+- 50 new unit tests covering all new config fields, CLI overrides, validation, and properties
+
+### Changed
+- `StreamConfig` dataclass extended with `transport`, `host`, `udp_port`, `tcp_port`, `http_port`, `log_level`, `log_path` fields
+- `configure_logging()` accepts `log_level` parameter instead of always defaulting to INFO
+- `streamer.py` `__main__` dispatches to the correct streamer class directly from config; no more `input()` prompt
+- `_build_streamer()` factory encapsulates streamer instantiation
+
 ## [1.1.0] - 2025-01-XX
 
 ### Added
