@@ -13,6 +13,7 @@ payload modes:
 - ✅ **Chunked Frame Support**: Handles large frames split into 1200-byte chunks to avoid IP fragmentation
 - ✅ **NAT-Friendly**: Single-socket architecture works through home routers
 - ✅ **Frame Reassembly**: Robust frame reconstruction with duplicate detection
+- ✅ **Automatic Reconnect**: Exponential-backoff reconnect when the server becomes unreachable
 - ✅ **Real-time Statistics**: FPS monitoring and frame counting
 - ✅ **Cross-Platform**: Works on macOS, Linux, and Windows
 - ✅ **OpenCV Integration**: Direct video display with frame overlays
@@ -64,6 +65,20 @@ brew install ffmpeg
    - Reads `config/config.json` if present
    - Uses config values unless CLI flags override them
    - Falls back to interactive prompts when required values are missing
+
+## Automatic Reconnect
+
+The client automatically retries the connection when the server is unreachable. Reconnect behaviour is controlled via the `ReconnectConfig` dataclass in `main.py`:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `max_attempts` | `10` | Maximum reconnect attempts before giving up (set to `0` to disable) |
+| `initial_delay_seconds` | `1.0` | Delay before the first retry |
+| `max_delay_seconds` | `30.0` | Upper bound on the computed inter-attempt delay |
+| `backoff_factor` | `2.0` | Multiplier applied after each failed attempt |
+| `registration_timeout_seconds` | `10.0` | How long to wait for a `REGISTERED` acknowledgement |
+
+Delays use exponential backoff: `delay = min(initial × factor^attempt, max_delay)`.
 
 ## Configuration File
 
