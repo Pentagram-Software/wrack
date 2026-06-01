@@ -15,6 +15,12 @@ A high-performance video streaming server for Raspberry Pi 5 with multiple strea
   - Frame IDs for robust reassembly
   - Automatic client timeout and cleanup
 
+- **Health Monitoring** (UDP streamer):
+  - Rolling FPS measurement over a configurable window
+  - Status levels: `healthy` / `degraded` / `unhealthy` based on actual vs. target FPS
+  - HTTP `/health` endpoint on port 8090 (JSON response)
+  - Tracks uptime, frames sent, connected clients, and send errors
+
 - **Camera Features**:
   - Raspberry Pi Camera v2.1 support via Picamera2
   - 640x480 @ 30 FPS (configurable)
@@ -202,6 +208,36 @@ Modify chunk payload size:
 ```python
 self.chunk_payload_size = 1200  # bytes
 ```
+
+## 🩺 Health Endpoint
+
+When using UDP streaming, a lightweight HTTP server is started automatically on port 8090 (configurable via `health_port`). Query it to check stream health:
+
+```bash
+curl http://raspberrypi.local:8090/health
+```
+
+Example response:
+```json
+{
+  "status": "healthy",
+  "uptime_seconds": 42.1,
+  "connected_clients": 1,
+  "frames_sent": 1260,
+  "current_fps": 29.95,
+  "error_count": 0,
+  "last_frame_age_seconds": 0.0
+}
+```
+
+**Status values:**
+| Value | Meaning |
+|-------|---------|
+| `healthy` | FPS ≥ 50% of target |
+| `degraded` | FPS > 0 but < 50% of target |
+| `unhealthy` | No frames being sent |
+
+Pass `health_port=None` to the `UDPVideoStreamer` constructor to disable the health server.
 
 ## 📖 Protocol Documentation
 
