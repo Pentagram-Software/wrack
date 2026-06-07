@@ -510,7 +510,7 @@ class TestSendEvents207Partial:
             s.send_events([event])
         success_cb.assert_not_called()
 
-    def test_207_error_message_mentions_207(self):
+    def test_validation_failure_error_is_informative(self):
         errors_received = []
         s = _make_sender(max_retries=0, on_error=lambda e: errors_received.append(e))
         event = _make_event()
@@ -518,7 +518,7 @@ class TestSendEvents207Partial:
             mock_http.post.return_value = self._validation_207([0])
             s.send_events([event])
         assert errors_received
-        assert "207" in str(errors_received[0])
+        assert "reject" in str(errors_received[0]).lower()
 
     def test_partial_failure_error_is_subclass_of_ioerror(self):
         """PartialFailureError must be an IOError for API compatibility."""
@@ -602,6 +602,110 @@ class TestSendEvents207Partial:
         assert ok is False
         assert len(unsent) == 1
         assert unsent[0]["event_id"] == failing["event_id"]
+
+
+# ---------------------------------------------------------------------------
+# HTTP 400 — all events rejected (deterministic validation failure)
+# ---------------------------------------------------------------------------
+
+class TestSendEvents400Validation:
+    """A 400 means every event failed validation — permanent, never retried."""
+
+    def _all_invalid_400(self, count):
+        resp = MagicMock()
+        resp.status_code = 400
+        resp.text = json.dumps({
+            "success": False,
+            "inserted": 0,
+            "failed": count,
+            "errors": [
+                {"index": i, "event_id": None, "errors": ["event_type is required"]}
+                for i in range(count)
+            ],
+        })
+        return resp
+
+    def _structural_400(self):
+        resp = MagicMock()
+        resp.status_code = 400
+        resp.text = json.dumps({"error": "events array must not be empty"})
+        return resp
+
+    def test_400_is_not_retried(self):
+        s = _make_sender(max_retries=3, on_error=MagicMock())
+        events = [_make_event(), _make_event()]
+        with patch("telemetry.sender._http") as mock_http, \
+             patch("telemetry.sender._time"):
+            mock_http.post.return_value = self._all_invalid_400(2)
+            result = s.send_events(events)
+        assert result is False
+        assert mock_http.post.call_count == 1
+        err = s.on_error.call_args[0][0]
+        assert isinstance(err, NonRetryablePartialFailureError)
+
+    def test_400_events_are_dropped_not_rebuffered(self):
+        s = _make_sender(max_retries=0)
+        events = [_make_event(), _make_event()]
+        with patch("telemetry.sender._http") as mock_http:
+            mock_http.post.return_value = self._all_invalid_400(2)
+            ok, unsent = s._send_events_with_unsent(events)
+        assert ok is False
+        assert unsent == []  # permanent failures are not re-buffered
+
+    def test_400_does_not_clog_collector(self):
+        s = _make_sender(max_retries=0)
+        c = TelemetryCollector()
+        c.collect_battery_status(7000, 80.0)
+        with patch("telemetry.sender._http") as mock_http:
+            mock_http.post.return_value = self._all_invalid_400(1)
+            result = s.flush_and_send(c)
+        assert result is False
+        assert c.buffer_size == 0  # invalid event dropped, not restored
+
+    def test_structural_400_is_dropped(self):
+        s = _make_sender(max_retries=2)
+        events = [_make_event()]
+        with patch("telemetry.sender._http") as mock_http, \
+             patch("telemetry.sender._time"):
+            mock_http.post.return_value = self._structural_400()
+            ok, unsent = s._send_events_with_unsent(events)
+        assert ok is False
+        assert unsent == []
+        assert mock_http.post.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Response lifecycle — urequests sockets must be closed
+# ---------------------------------------------------------------------------
+
+class TestResponseLifecycle:
+    def test_response_closed_after_successful_post(self):
+        s = _make_sender()
+        resp = MagicMock()
+        resp.status_code = 200
+        with patch("telemetry.sender._http") as mock_http:
+            mock_http.post.return_value = resp
+            s.send_events([_make_event()])
+        resp.close.assert_called_once()
+
+    def test_response_closed_on_error_status(self):
+        s = _make_sender(max_retries=0)
+        resp = MagicMock()
+        resp.status_code = 500
+        resp.text = "boom"
+        with patch("telemetry.sender._http") as mock_http:
+            mock_http.post.return_value = resp
+            s.send_events([_make_event()])
+        resp.close.assert_called_once()
+
+    def test_missing_close_method_does_not_crash(self):
+        s = _make_sender()
+        resp = MagicMock(spec=["status_code", "text"])
+        resp.status_code = 200
+        with patch("telemetry.sender._http") as mock_http:
+            mock_http.post.return_value = resp
+            result = s.send_events([_make_event()])
+        assert result is True
 
 
 # ---------------------------------------------------------------------------

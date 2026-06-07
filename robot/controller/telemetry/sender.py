@@ -252,9 +252,9 @@ class TelemetrySender:
                 had_permanent = True
                 self._fire_error(
                     NonRetryablePartialFailureError(
-                        f"HTTP 207 validation failure: {len(permanent)} "
-                        f"event(s) permanently rejected by the telemetry "
-                        f"endpoint"
+                        f"telemetry endpoint permanently rejected "
+                        f"{len(permanent)} event(s) (validation failure, "
+                        f"not retried)"
                     )
                 )
 
@@ -327,15 +327,24 @@ class TelemetrySender:
     ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
         """Execute a single HTTP POST for *batch*.
 
-        Returns a ``(accepted, permanent, retryable)`` tuple of event lists.
-        A 2xx response yields all events as accepted.  A 207 is classified by
-        :meth:`_classify_207`.  Any other status (or a transport error) raises
-        so the caller can apply transient-failure retry/back-off.
+        Returns a ``(accepted, permanent, retryable)`` tuple of event lists:
+
+        * **2xx** — every event accepted.
+        * **207** — classified per-event by :meth:`_classify_207`.
+        * **400** — a deterministic client/validation error; every event is
+          permanent (dropped + reported), since re-sending the same payload
+          would fail identically.
+        * anything else (5xx, transport errors) raises so the caller applies
+          transient-failure retry/back-off.
+
+        The response is always closed in a ``finally`` block — on Pybricks the
+        ``urequests`` response owns the underlying socket, so failing to close
+        it leaks sockets/RAM across repeated telemetry flushes.
 
         Raises
         ------
         IOError
-            Any non-2xx, non-207 HTTP status.
+            Any non-2xx, non-207, non-400 HTTP status.
         Exception
             Transport errors from the underlying HTTP library.
         """
@@ -352,10 +361,20 @@ class TelemetrySender:
             timeout=self.timeout,
         )
 
-        status = getattr(response, "status_code", None)
-        if status is None:
-            # urequests uses .status_code too, but guard anyway
-            status = getattr(response, "status", None)
+        # Read everything we need from the response, then always close it.
+        try:
+            status = getattr(response, "status_code", None)
+            if status is None:
+                # urequests uses .status_code too, but guard anyway
+                status = getattr(response, "status", None)
+            body_text = getattr(response, "text", "") or ""
+        finally:
+            close = getattr(response, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:  # noqa: BLE001 — close must never crash a send
+                    pass
 
         if status is None:
             # Cannot determine status — assume the batch was accepted.
@@ -364,15 +383,19 @@ class TelemetrySender:
         status_int = int(status)
 
         if status_int == 207:
-            body_text = getattr(response, "text", "") or ""
             return self._classify_207(batch, body_text)
 
         if 200 <= status_int < 300:
             return list(batch), [], []
 
+        if status_int == 400:
+            # Deterministic client/validation error — never retry.  The
+            # all-invalid path returns per-event errors; structural request
+            # errors have none.  Either way no event can succeed on retry.
+            return [], list(batch), []
+
         raise IOError(
-            f"HTTP {status} from telemetry endpoint: "
-            f"{getattr(response, 'text', '')[:200]}"
+            f"HTTP {status} from telemetry endpoint: {str(body_text)[:200]}"
         )
 
     def _async_worker(
