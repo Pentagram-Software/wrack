@@ -1,6 +1,8 @@
 """Unit tests for telemetry/sender.py."""
 
 import json
+import os
+import tempfile
 import threading
 import time
 import uuid
@@ -443,6 +445,59 @@ class TestFlushAndSend:
 
         assert result is False
         assert c.buffer_size == 1
+
+    def test_flush_and_send_drains_overflow_file(self):
+        """Persisted overflow events are sent alongside the in-memory buffer."""
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            os.remove(path)
+            c = TelemetryCollector(max_buffer_size=2, overflow_path=path)
+            for i in range(4):  # 2 stay buffered, 2 spill to overflow file
+                c.collect_battery_status(7000 + i, float(i))
+            assert len(c.load_overflow()) == 2
+
+            sent_ids = []
+            ok_response = MagicMock()
+            ok_response.status_code = 200
+            s = _make_sender(batch_size=100)
+            with patch("telemetry.sender._http") as mock_http:
+                mock_http.post.return_value = ok_response
+                result = s.flush_and_send(c)
+                for cargs in mock_http.post.call_args_list:
+                    body = json.loads(cargs[1]["data"])
+                    sent_ids.extend(ev["event_id"] for ev in body["events"])
+
+            assert result is True
+            assert len(sent_ids) == 4  # overflow (2) + buffer (2)
+            assert c.buffer_size == 0
+            assert c.load_overflow() == []  # overflow file drained
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_flush_and_send_failure_preserves_overflow_events(self):
+        """A failed drain re-buffers/re-persists events instead of losing them."""
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            os.remove(path)
+            c = TelemetryCollector(max_buffer_size=2, overflow_path=path)
+            for i in range(4):
+                c.collect_battery_status(7000 + i, float(i))
+            assert len(c.load_overflow()) == 2
+
+            s = _make_sender(max_retries=0)
+            with patch("telemetry.sender._http") as mock_http:
+                mock_http.post.side_effect = ConnectionError("down")
+                result = s.flush_and_send(c)
+
+            assert result is False
+            # All four events preserved across buffer + overflow, none lost.
+            assert c.buffer_size + len(c.load_overflow()) == 4
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
 
     def test_async_flush_restores_unsent_events_on_failure(self):
         """Async flush should also re-buffer events when send ultimately fails."""

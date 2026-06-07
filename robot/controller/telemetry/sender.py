@@ -503,7 +503,14 @@ class TelemetrySender:
     # ------------------------------------------------------------------
 
     def flush_and_send(self, collector: Any, *, async_send: bool = False) -> Optional[bool]:
-        """Flush *collector*'s buffer and send all collected events.
+        """Flush *collector* and send all collected events.
+
+        This drains both the on-disk overflow file (oldest events, persisted
+        when the in-memory buffer overflowed) and the in-memory buffer, sending
+        the overflow events first to preserve ordering.  The overflow file is
+        cleared once its events have been taken into memory; any event that
+        ultimately fails to send is restored to the collector (and re-persisted
+        on overflow), so nothing is silently lost or sent twice.
 
         Parameters
         ----------
@@ -515,10 +522,11 @@ class TelemetrySender:
         Returns
         -------
         bool or None
-            ``True``/``False`` result of :meth:`send_events`, or ``None``
-            when *async_send* is ``True``.
+            ``True``/``False`` result of the send, or ``None`` when
+            *async_send* is ``True``.
         """
-        events = collector.flush()
+        overflow_events = self._drain_overflow(collector)
+        events = overflow_events + collector.flush()
         if not events:
             return True
         if async_send:
@@ -528,6 +536,31 @@ class TelemetrySender:
         if not ok:
             self._restore_events_to_collector(collector, unsent)
         return ok
+
+    def _drain_overflow(self, collector: Any) -> List[Dict[str, Any]]:
+        """Load persisted overflow events and clear the overflow file.
+
+        Best-effort: the events are taken into memory so they can be sent
+        alongside the in-memory buffer.  Clearing the file up front means a
+        send failure re-persists only the events that still need retrying
+        (via :meth:`_restore_events_to_collector`), avoiding duplicate sends.
+        Returns ``[]`` if the collector has no overflow support.
+        """
+        load = getattr(collector, "load_overflow", None)
+        if not callable(load):
+            return []
+        try:
+            events = load() or []
+        except Exception:  # noqa: BLE001 — overflow drain must never crash a send
+            return []
+        if events:
+            clear = getattr(collector, "clear_overflow", None)
+            if callable(clear):
+                try:
+                    clear()
+                except Exception:  # noqa: BLE001
+                    pass
+        return list(events)
 
     def _restore_events_to_collector(
         self,
