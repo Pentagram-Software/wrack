@@ -32,7 +32,14 @@ from __future__ import annotations
 
 import json
 import threading
-from typing import Any, Callable, Dict, List, Optional
+
+# ``typing`` is unavailable on Pybricks/MicroPython.  Annotations are strings
+# (``from __future__ import annotations``) so the names are never evaluated at
+# runtime; the fallback simply lets the module import on the EV3.
+try:
+    from typing import Any, Callable, Dict, List, Optional
+except ImportError:  # pragma: no cover - MicroPython runtime path
+    Any = Callable = Dict = List = Optional = None  # type: ignore[assignment,misc]
 
 # ---------------------------------------------------------------------------
 # Optional imports
@@ -72,26 +79,28 @@ DEFAULT_RETRY_BASE_S = 1.0  # first retry wait; doubles each attempt
 
 
 class PartialFailureError(IOError):
-    """HTTP 207 Multi-Status — partial batch accepted by the Cloud Function.
+    """HTTP 207 Multi-Status — some events in the batch were not stored.
 
-    Raised by :meth:`TelemetrySender._post_batch` when the Cloud Function
-    returns 207.  The endpoint (``telemetry.js``) inserts rows with
-    ``insertId`` set to ``event_id``, so BigQuery deduplicates any row that
-    was already accepted within its streaming buffer (~1-minute window).
-    Full-batch retries are therefore safe: already-inserted rows are silently
-    de-duplicated rather than written twice.
+    Surfaced via the ``on_error`` callback when, after all retries, one or
+    more events from a 207 response are still failing.  Only the events that
+    keep failing are reported / re-buffered; events the endpoint accepted are
+    never re-sent.
 
-    This exception is retried like any transient failure.  It is kept as a
-    distinct type so callers can observe partial-failure events separately
-    from complete network failures via the ``on_error`` callback.
+    Retryable 207 failures (e.g. transient BigQuery streaming errors) are
+    re-sent with only the failing subset.  Because ``telemetry.js`` passes
+    each row's ``event_id`` as the BigQuery ``insertId``, any row that was
+    already accepted within the streaming buffer (~1-minute window) is
+    de-duplicated rather than written twice, so resending is safe.
     """
 
 
 class NonRetryablePartialFailureError(PartialFailureError):
-    """HTTP 207 partial failure that should not be retried.
+    """HTTP 207 failure for events that will never succeed on retry.
 
-    Used when the response body indicates permanent validation failures.
-    Re-sending the same batch would fail again and only add extra delay.
+    Raised for permanent validation failures (the endpoint reports these
+    with an ``index`` field referencing the rejected event's position in the
+    batch).  These events are dropped rather than re-buffered, since
+    re-sending the same payload would fail identically.
     """
 
 
@@ -204,53 +213,82 @@ class TelemetrySender:
 
     def _send_batch_with_retry(
         self, batch: List[Dict[str, Any]]
-    ) -> bool:
-        """Attempt to send *batch* with exponential back-off retries.
+    ) -> tuple[bool, List[Dict[str, Any]]]:
+        """Send *batch* with retries, returning ``(fully_ok, unsent_events)``.
 
-        Returns ``True`` on success, ``False`` after all retries are
-        exhausted.  A :exc:`PartialFailureError` (HTTP 207) is retried like
-        any other transient failure because the Cloud Function uses
-        ``insertId`` (set to ``event_id``) for BigQuery deduplication, so
-        resending the full batch is safe — already-accepted rows are silently
-        de-duplicated by BigQuery rather than written twice.
+        ``fully_ok`` is ``True`` only when every event in *batch* was stored
+        (no permanent rejections and nothing left failing).  ``unsent_events``
+        contains just the events that should be re-buffered and retried later;
+        events the endpoint accepted, and permanently-rejected (validation)
+        events, are never included.
+
+        On an HTTP 207 the response body is parsed per-event: validation
+        failures (which carry an ``index``) are dropped as permanent, while
+        transient BigQuery failures (which carry an ``event_id``) are resent
+        with only the failing subset.  Resending is safe because the endpoint
+        sets each row's ``insertId`` to its ``event_id``, so BigQuery
+        de-duplicates any already-accepted row.
         """
-        last_exc: Optional[Exception] = None
+        current = list(batch)
         wait = DEFAULT_RETRY_BASE_S
+        had_permanent = False
 
         for attempt in range(self.max_retries + 1):
             try:
-                self._post_batch(batch)
-                if self.on_success:
-                    self.on_success(len(batch))
-                return True
-            except NonRetryablePartialFailureError as exc:
-                last_exc = exc
-                break
-            except Exception as exc:  # noqa: BLE001
-                last_exc = exc
+                accepted, permanent, retryable = self._post_batch(current)
+            except Exception as exc:  # noqa: BLE001 — network / non-2xx HTTP
                 if attempt < self.max_retries:
                     if _HAS_TIME:
                         _time.sleep(wait)
                     wait *= 2
+                    continue
+                self._fire_error(exc)
+                return False, list(current)
 
-        if self.on_error and last_exc is not None:
-            self.on_error(last_exc)
-        else:
-            print(
-                f"[TelemetrySender] ERROR: Failed to send batch of "
-                f"{len(batch)} events after {self.max_retries} retries: "
-                f"{last_exc}"
+            if accepted and self.on_success:
+                self.on_success(len(accepted))
+
+            if permanent:
+                had_permanent = True
+                self._fire_error(
+                    NonRetryablePartialFailureError(
+                        f"HTTP 207 validation failure: {len(permanent)} "
+                        f"event(s) permanently rejected by the telemetry "
+                        f"endpoint"
+                    )
+                )
+
+            if not retryable:
+                return (not had_permanent), []
+
+            if attempt < self.max_retries:
+                current = retryable
+                if _HAS_TIME:
+                    _time.sleep(wait)
+                wait *= 2
+                continue
+
+            self._fire_error(
+                PartialFailureError(
+                    f"HTTP 207 partial failure: {len(retryable)} event(s) "
+                    f"still failing after {self.max_retries} retries"
+                )
             )
-        return False
+            return False, list(retryable)
+
+        return False, list(current)
 
     def _send_events_with_unsent(
         self,
         events: List[Dict[str, Any]],
     ) -> tuple[bool, List[Dict[str, Any]]]:
-        """Send events and return (success, unsent_suffix).
+        """Send *events* in batches, returning ``(all_ok, unsent_events)``.
 
-        The unsent suffix starts from the first batch that failed and includes
-        all later batches that were never attempted.
+        ``unsent_events`` holds only the events that still need to be retried
+        later (accepted and permanently-rejected events are excluded).  If a
+        batch fails in its entirety (e.g. the endpoint is unreachable), the
+        remaining un-attempted events are treated as unsent and the loop stops
+        early to avoid hammering a down endpoint.
         """
         if not events:
             return True, []
@@ -262,26 +300,44 @@ class TelemetrySender:
             )
             return False, list(events)
 
-        for batch_start in range(0, len(events), self.batch_size):
+        all_ok = True
+        unsent: List[Dict[str, Any]] = []
+        batch_start = 0
+        total = len(events)
+
+        while batch_start < total:
             batch = events[batch_start : batch_start + self.batch_size]
-            ok = self._send_batch_with_retry(batch)
-            if not ok:
-                return False, list(events[batch_start:])
+            fully_ok, batch_unsent = self._send_batch_with_retry(batch)
+            if not fully_ok:
+                all_ok = False
+            unsent.extend(batch_unsent)
 
-        return True, []
+            # Whole batch unsent → likely a transient/endpoint-wide failure.
+            # Stop sending and treat the remainder as unsent.
+            if batch_unsent and len(batch_unsent) == len(batch):
+                unsent.extend(events[batch_start + self.batch_size :])
+                return False, unsent
 
-    def _post_batch(self, batch: List[Dict[str, Any]]) -> None:
+            batch_start += self.batch_size
+
+        return all_ok, unsent
+
+    def _post_batch(
+        self, batch: List[Dict[str, Any]]
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
         """Execute a single HTTP POST for *batch*.
+
+        Returns a ``(accepted, permanent, retryable)`` tuple of event lists.
+        A 2xx response yields all events as accepted.  A 207 is classified by
+        :meth:`_classify_207`.  Any other status (or a transport error) raises
+        so the caller can apply transient-failure retry/back-off.
 
         Raises
         ------
-        PartialFailureError
-            HTTP 207 Multi-Status: the Cloud Function accepted some events
-            but rejected others.  Full-batch retries are safe because
-            ``telemetry.js`` passes each row's ``event_id`` as the BigQuery
-            ``insertId``, enabling streaming-insert deduplication.
         IOError
-            Any other network or non-2xx HTTP error (caller handles retries).
+            Any non-2xx, non-207 HTTP status.
+        Exception
+            Transport errors from the underlying HTTP library.
         """
         headers = {
             "Content-Type": "application/json",
@@ -301,30 +357,23 @@ class TelemetrySender:
             # urequests uses .status_code too, but guard anyway
             status = getattr(response, "status", None)
 
-        if status is not None:
-            status_int = int(status)
+        if status is None:
+            # Cannot determine status — assume the batch was accepted.
+            return list(batch), [], []
 
-            if status_int == 207:
-                # Partial failure: some events were accepted, some were not.
-                # Retrying the full batch is safe: telemetry.js passes each
-                # row's event_id as insertId, so BigQuery deduplicates already-
-                # accepted rows within its streaming buffer (~1-minute window).
-                body_text = getattr(response, "text", "") or ""
-                if self._is_permanent_207_validation_failure(body_text):
-                    raise NonRetryablePartialFailureError(
-                        f"HTTP 207 validation partial failure from telemetry endpoint "
-                        f"(non-retryable): {body_text[:300]}"
-                    )
-                raise PartialFailureError(
-                    f"HTTP 207 partial failure from telemetry endpoint "
-                    f"(some events rejected): {body_text[:300]}"
-                )
+        status_int = int(status)
 
-            if not (200 <= status_int < 300):
-                raise IOError(
-                    f"HTTP {status} from telemetry endpoint: "
-                    f"{getattr(response, 'text', '')[:200]}"
-                )
+        if status_int == 207:
+            body_text = getattr(response, "text", "") or ""
+            return self._classify_207(batch, body_text)
+
+        if 200 <= status_int < 300:
+            return list(batch), [], []
+
+        raise IOError(
+            f"HTTP {status} from telemetry endpoint: "
+            f"{getattr(response, 'text', '')[:200]}"
+        )
 
     def _async_worker(
         self,
@@ -336,25 +385,74 @@ class TelemetrySender:
         if not ok and collector is not None:
             self._restore_events_to_collector(collector, unsent)
 
-    def _is_permanent_207_validation_failure(self, response_text: str) -> bool:
-        """Return True if a 207 body indicates validation-only failures.
+    def _fire_error(self, exc: Exception) -> None:
+        """Invoke the ``on_error`` callback, or log if none is registered."""
+        if self.on_error:
+            self.on_error(exc)
+        else:
+            print(f"[TelemetrySender] ERROR: {exc}")
 
-        telemetry.js reports validation failures with an ``index`` field.
-        BigQuery partial failures include ``event_id`` and error messages but
-        no ``index``.  We treat "all errors have index" as non-retryable.
+    def _classify_207(
+        self, batch: List[Dict[str, Any]], response_text: str
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Split a 207 batch into ``(accepted, permanent, retryable)``.
+
+        The Cloud Function (``telemetry.js``) reports each failed event in an
+        ``errors`` list.  Validation failures carry an ``index`` (the event's
+        position in the batch) and are permanent.  BigQuery streaming failures
+        carry the ``event_id`` and are retryable.  Anything not reported as a
+        failure was accepted.
+
+        If the body cannot be parsed, or reports more failures than we can map
+        to events, we conservatively treat the unmapped events as retryable
+        (re-sending is safe thanks to ``insertId`` de-duplication).
         """
         if not response_text:
-            return False
+            return [], [], list(batch)
         try:
             payload = json.loads(response_text)
         except (TypeError, ValueError):
-            return False
+            return [], [], list(batch)
 
-        errors = payload.get("errors")
+        errors = payload.get("errors") if isinstance(payload, dict) else None
         if not isinstance(errors, list) or not errors:
-            return False
+            return [], [], list(batch)
 
-        return all(isinstance(err, dict) and "index" in err for err in errors)
+        permanent_indices = set()
+        retryable_ids = set()
+        for err in errors:
+            if not isinstance(err, dict):
+                continue
+            idx = err.get("index")
+            if isinstance(idx, int) and 0 <= idx < len(batch):
+                permanent_indices.add(idx)
+                continue
+            event_id = err.get("event_id")
+            if event_id:
+                retryable_ids.add(event_id)
+
+        accepted: List[Dict[str, Any]] = []
+        permanent: List[Dict[str, Any]] = []
+        retryable: List[Dict[str, Any]] = []
+        for i, event in enumerate(batch):
+            if i in permanent_indices:
+                permanent.append(event)
+            elif event.get("event_id") in retryable_ids:
+                retryable.append(event)
+            else:
+                accepted.append(event)
+
+        # Defensive: if the endpoint reported more failures than we could map,
+        # retry the accepted remainder too rather than silently dropping them.
+        reported_failed = payload.get("failed")
+        if (
+            isinstance(reported_failed, int)
+            and reported_failed > len(permanent) + len(retryable)
+        ):
+            retryable = retryable + accepted
+            accepted = []
+
+        return accepted, permanent, retryable
 
     # ------------------------------------------------------------------
     # Convenience: flush collector and send

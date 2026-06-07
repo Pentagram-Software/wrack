@@ -425,42 +425,45 @@ class TestFlushAndSend:
 # ---------------------------------------------------------------------------
 
 class TestSendEvents207Partial:
-    """HTTP 207 from the Cloud Function signals a partial failure that IS retried.
+    """HTTP 207 from the Cloud Function signals a partial batch failure.
 
-    The Cloud Function (telemetry.js) returns 207 with ``success: false``
-    when at least one event fails schema validation or BigQuery insert.
-    ``telemetry.js`` passes each row's ``event_id`` as the BigQuery
-    ``insertId``, so retrying the full batch is safe — already-accepted rows
-    are deduplicated by BigQuery's streaming buffer (~1-minute window).
+    The Cloud Function (telemetry.js) returns 207 with ``success: false`` when
+    at least one event fails.  The response body is parsed per-event:
 
-    Correct behaviour: raise ``PartialFailureError`` and retry with
-    exponential back-off, just like any other transient failure.  After all
-    retries are exhausted, surface the error via ``on_error`` and return
-    ``False``.
+    * Validation failures carry an ``index`` (batch position) and are
+      *permanent* — re-sending the same payload would fail identically, so the
+      event is dropped and never re-buffered.
+    * BigQuery streaming failures carry an ``event_id`` and are *retryable* —
+      only the failing subset is re-sent.  ``telemetry.js`` passes each row's
+      ``event_id`` as the BigQuery ``insertId``, so already-accepted rows are
+      de-duplicated by the streaming buffer (~1-minute window).
     """
 
-    def _207_response(self, inserted: int = 1, failed: int = 1):
+    def _validation_207(self, indices, inserted=0, failed=None):
+        """A 207 where the given batch *indices* failed schema validation."""
         resp = MagicMock()
         resp.status_code = 207
         resp.text = json.dumps({
             "success": False,
             "inserted": inserted,
-            "failed": failed,
+            "failed": failed if failed is not None else len(indices),
             "errors": [
-                {"index": 1, "event_id": "bad-id", "errors": ["event_type is required"]}
+                {"index": i, "event_id": None, "errors": ["event_type is required"]}
+                for i in indices
             ],
         })
         return resp
 
-    def _207_bigquery_partial_response(self):
+    def _bigquery_207(self, event_ids, inserted=0, failed=None):
+        """A 207 where the given *event_ids* hit transient BigQuery errors."""
         resp = MagicMock()
         resp.status_code = 207
         resp.text = json.dumps({
             "success": False,
-            "inserted": 1,
-            "failed": 1,
+            "inserted": inserted,
+            "failed": failed if failed is not None else len(event_ids),
             "errors": [
-                {"event_id": "evt-bq", "errors": ["backendError"]}
+                {"event_id": eid, "errors": ["backendError"]} for eid in event_ids
             ],
         })
         return resp
@@ -469,52 +472,51 @@ class TestSendEvents207Partial:
         s = _make_sender(max_retries=0)
         events = [_make_event(), _make_event()]
         with patch("telemetry.sender._http") as mock_http:
-            mock_http.post.return_value = self._207_response()
+            mock_http.post.return_value = self._validation_207([1], inserted=1)
             result = s.send_events(events)
         assert result is False
 
-    def test_on_error_callback_called_on_207(self):
+    def test_on_error_callback_called_on_retryable_207(self):
         error_cb = MagicMock()
         s = _make_sender(max_retries=0, on_error=error_cb)
-        events = [_make_event()]
+        event = _make_event()
         with patch("telemetry.sender._http") as mock_http:
-            mock_http.post.return_value = self._207_response()
-            s.send_events(events)
+            mock_http.post.return_value = self._bigquery_207([event["event_id"]])
+            s.send_events([event])
         error_cb.assert_called_once()
         exc = error_cb.call_args[0][0]
         assert isinstance(exc, PartialFailureError)
         assert isinstance(exc, IOError)  # PartialFailureError is a subclass of IOError
         assert "207" in str(exc)
 
-    def test_207_is_retried_up_to_max_retries(self):
-        """207 must be retried — insertId makes full-batch retries safe."""
+    def test_retryable_207_is_retried_up_to_max_retries(self):
+        """A transient (BigQuery) 207 is retried with the failing subset."""
         s = _make_sender(max_retries=2)
-        events = [_make_event()]
+        event = _make_event()
         with patch("telemetry.sender._http") as mock_http, \
              patch("telemetry.sender._time"):
-            mock_http.post.return_value = self._207_bigquery_partial_response()
-            result = s.send_events(events)
+            mock_http.post.return_value = self._bigquery_207([event["event_id"]])
+            result = s.send_events([event])
         assert result is False
         assert mock_http.post.call_count == 3  # initial attempt + 2 retries
 
-    def test_207_is_not_treated_as_success(self):
-        """Ensure on_success callback is NOT called for a 207 response."""
+    def test_207_does_not_call_success_for_failed_events(self):
+        """on_success must not count permanently-rejected events."""
         success_cb = MagicMock()
         s = _make_sender(max_retries=0, on_success=success_cb)
-        events = [_make_event()]
+        event = _make_event()
         with patch("telemetry.sender._http") as mock_http:
-            mock_http.post.return_value = self._207_response()
-            s.send_events(events)
+            mock_http.post.return_value = self._validation_207([0])
+            s.send_events([event])
         success_cb.assert_not_called()
 
-    def test_207_error_message_contains_response_body(self):
-        """Error surfaced to on_error should include partial-failure details."""
+    def test_207_error_message_mentions_207(self):
         errors_received = []
         s = _make_sender(max_retries=0, on_error=lambda e: errors_received.append(e))
-        events = [_make_event()]
+        event = _make_event()
         with patch("telemetry.sender._http") as mock_http:
-            mock_http.post.return_value = self._207_response(inserted=3, failed=2)
-            s.send_events(events)
+            mock_http.post.return_value = self._validation_207([0])
+            s.send_events([event])
         assert errors_received
         assert "207" in str(errors_received[0])
 
@@ -522,31 +524,84 @@ class TestSendEvents207Partial:
         """PartialFailureError must be an IOError for API compatibility."""
         assert issubclass(PartialFailureError, IOError)
 
-    def test_207_recovers_on_subsequent_success(self):
-        """If a retry after 207 returns 200, the batch is reported as sent."""
+    def test_retryable_207_recovers_on_subsequent_success(self):
+        """If a retry after a transient 207 returns 200, the batch is sent."""
         s = _make_sender(max_retries=2)
-        events = [_make_event()]
+        event = _make_event()
         ok_response = MagicMock()
         ok_response.status_code = 200
         with patch("telemetry.sender._http") as mock_http, \
              patch("telemetry.sender._time"):
-            mock_http.post.side_effect = [self._207_bigquery_partial_response(), ok_response]
-            result = s.send_events(events)
+            mock_http.post.side_effect = [
+                self._bigquery_207([event["event_id"]]),
+                ok_response,
+            ]
+            result = s.send_events([event])
         assert result is True
         assert mock_http.post.call_count == 2
 
-    def test_207_validation_failure_is_not_retried(self):
-        """Validation-only 207 should fail fast without retry loop."""
+    def test_validation_207_is_not_retried(self):
+        """Validation-only 207 fails fast without entering the retry loop."""
         s = _make_sender(max_retries=3, on_error=MagicMock())
-        events = [_make_event()]
+        event = _make_event()
         with patch("telemetry.sender._http") as mock_http, \
              patch("telemetry.sender._time"):
-            mock_http.post.return_value = self._207_response()
-            result = s.send_events(events)
+            mock_http.post.return_value = self._validation_207([0])
+            result = s.send_events([event])
         assert result is False
         assert mock_http.post.call_count == 1
         err = s.on_error.call_args[0][0]
         assert isinstance(err, NonRetryablePartialFailureError)
+
+    def test_mixed_207_accepts_some_and_drops_validation_failures(self):
+        """Accepted events count toward on_success; validation failures drop."""
+        success_cb = MagicMock()
+        error_cb = MagicMock()
+        s = _make_sender(max_retries=0, on_success=success_cb, on_error=error_cb)
+        events = [_make_event(), _make_event(), _make_event()]
+        with patch("telemetry.sender._http") as mock_http:
+            mock_http.post.return_value = self._validation_207([1], inserted=2)
+            ok, unsent = s._send_events_with_unsent(events)
+        assert ok is False  # an event was permanently rejected
+        assert unsent == []  # nothing to re-buffer
+        success_cb.assert_called_once_with(2)  # the two accepted events
+        err = error_cb.call_args[0][0]
+        assert isinstance(err, NonRetryablePartialFailureError)
+
+    def test_mixed_207_retries_only_failing_subset(self):
+        """A transient 207 re-sends only the failing event, not accepted ones."""
+        s = _make_sender(max_retries=1)
+        events = [_make_event(), _make_event(), _make_event()]
+        failing = events[1]
+        ok_response = MagicMock()
+        ok_response.status_code = 200
+        with patch("telemetry.sender._http") as mock_http, \
+             patch("telemetry.sender._time"):
+            mock_http.post.side_effect = [
+                self._bigquery_207([failing["event_id"]], inserted=2),
+                ok_response,
+            ]
+            result = s.send_events(events)
+        assert result is True
+        assert mock_http.post.call_count == 2
+        # Second POST must contain only the failing event.
+        retry_body = json.loads(mock_http.post.call_args_list[1][1]["data"])
+        assert len(retry_body["events"]) == 1
+        assert retry_body["events"][0]["event_id"] == failing["event_id"]
+
+    def test_207_rebuffers_only_retryable_not_accepted(self):
+        """Unsent list contains only the still-failing event after retries."""
+        s = _make_sender(max_retries=0)
+        events = [_make_event(), _make_event(), _make_event()]
+        failing = events[2]
+        with patch("telemetry.sender._http") as mock_http:
+            mock_http.post.return_value = self._bigquery_207(
+                [failing["event_id"]], inserted=2
+            )
+            ok, unsent = s._send_events_with_unsent(events)
+        assert ok is False
+        assert len(unsent) == 1
+        assert unsent[0]["event_id"] == failing["event_id"]
 
 
 # ---------------------------------------------------------------------------

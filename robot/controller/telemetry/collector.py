@@ -24,7 +24,14 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Optional
+
+# ``typing`` is unavailable on Pybricks/MicroPython.  Annotations are strings
+# (``from __future__ import annotations``) so the names are never evaluated at
+# runtime; the fallback simply lets the module import on the EV3.
+try:
+    from typing import Any, Dict, List, Optional
+except ImportError:  # pragma: no cover - MicroPython runtime path
+    Any = Dict = List = Optional = None  # type: ignore[assignment,misc]
 
 # ---------------------------------------------------------------------------
 # Optional standard-library imports (not available on MicroPython)
