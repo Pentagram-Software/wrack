@@ -166,18 +166,24 @@ functions.http('telemetryIngestion', (req, res) => {
       // streaming buffer (~1-minute window).  This makes full-batch retries
       // safe: already-inserted rows are silently de-duplicated by BigQuery
       // rather than written twice.
-      await table.insert(validRows.map((r) => ({ insertId: r.row.event_id, json: r.row })));
+      await table.insert(
+        validRows.map((r) => ({ insertId: r.row.event_id, json: r.row })),
+        { raw: true }
+      );
     } catch (bqError) {
       if (bqError.name === 'PartialFailureError') {
         // bqError.errors: Array<{ row, errors: [{reason, message, location}] }>
         const rowErrors = bqError.errors || [];
 
-        bqFailures = rowErrors.map((e) => ({
-          // When rows are passed as { insertId, json } the BigQuery client
-          // surfaces the row under e.row (the json value).
-          event_id: e.row ? e.row.event_id : null,
-          errors: (e.errors || []).map((err) => err.message || err.reason || 'BigQuery insert error'),
-        }));
+        bqFailures = rowErrors.map((e) => {
+          // PartialFailureError row shape can be either raw data row or
+          // { insertId, json } wrapper depending on BigQuery client internals.
+          const rowData = e.row && e.row.json ? e.row.json : e.row;
+          return {
+            event_id: rowData ? rowData.event_id : null,
+            errors: (e.errors || []).map((err) => err.message || err.reason || 'BigQuery insert error'),
+          };
+        });
 
         const failedEventIds = new Set(bqFailures.map((f) => f.event_id).filter(Boolean));
         insertedCount = validRows.filter((r) => !failedEventIds.has(r.row.event_id)).length;

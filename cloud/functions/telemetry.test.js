@@ -416,6 +416,15 @@ describe('telemetryIngestion handler — successful ingestion', () => {
     expect(rows[0].json).toBeDefined();
   });
 
+  test('BigQuery insert uses raw mode for wrapped rows', async () => {
+    const req = makeReq({ body: { events: [validEvent] } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(mockInsert).toHaveBeenCalledTimes(1);
+    expect(mockInsert.mock.calls[0][1]).toEqual({ raw: true });
+  });
+
   test('BigQuery row includes ingested_at', async () => {
     const req = makeReq({ body: { events: [validEvent] } });
     const res = makeRes();
@@ -564,7 +573,10 @@ describe('telemetryIngestion handler — BigQuery errors', () => {
     partialError.name = 'PartialFailureError';
     partialError.errors = [
       {
-        row: { event_id: 'evt-bq', event_type: 'command_executed' },
+        row: {
+          insertId: 'evt-bq',
+          json: { event_id: 'evt-bq', event_type: 'command_executed' },
+        },
         errors: [{ reason: 'invalid', message: 'Required field missing', location: 'payload' }],
       },
     ];
