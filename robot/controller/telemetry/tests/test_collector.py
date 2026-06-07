@@ -518,6 +518,18 @@ class TestDiskSpill:
         c.collect("battery_status", **_battery_data())
         assert c.dropped_count == 1
 
+    def test_spill_typeerror_does_not_raise(self, spill_file):
+        """Non-JSON-serializable payload in a buffered event must not crash collect()."""
+        c = TelemetryCollector(max_buffer=1, disk_spill_path=spill_file, validate=False)
+        # Buffer an event whose payload contains a non-serializable value
+        c.collect("motor_status", obj=object())
+        # Overflowing must drop the previous event; json.dumps raises TypeError but
+        # _spill_to_disk is best-effort and must swallow it, returning normally.
+        result = c.collect("battery_status", **_battery_data())
+        assert result is not None, "New event should still be buffered after spill TypeError"
+        assert c.dropped_count == 1
+        assert c.size() == 1
+
 
 # ---------------------------------------------------------------------------
 # Thread safety

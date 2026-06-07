@@ -32,7 +32,7 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from telemetry.schemas import ValidationError, validate_event
+from .schemas import ValidationError, validate_event
 
 # ---------------------------------------------------------------------------
 # Optional: UUID generation (uuid module; MicroPython has a minimal version)
@@ -293,5 +293,5 @@ class TelemetryCollector:
             os.makedirs(os.path.dirname(os.path.abspath(self._disk_spill_path)), exist_ok=True)
             with open(self._disk_spill_path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(event) + "\n")
-        except OSError:
-            pass  # Best-effort — never raise from spill path
+        except (OSError, TypeError, ValueError):
+            pass  # Best-effort — never raise from spill path (includes json serialization errors)
