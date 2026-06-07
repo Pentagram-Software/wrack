@@ -67,6 +67,24 @@ DEFAULT_TIMEOUT_S = 10
 DEFAULT_RETRY_BASE_S = 1.0  # first retry wait; doubles each attempt
 
 # ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+
+class PartialFailureError(IOError):
+    """HTTP 207 Multi-Status — partial batch accepted, do NOT retry.
+
+    Raised by :meth:`TelemetrySender._post_batch` when the Cloud Function
+    returns 207.  The endpoint (``telemetry.js``) inserts rows via
+    ``table.insert(rows)`` *without* ``insertId``, so retrying the whole
+    batch would duplicate the rows that were already accepted.  The failed
+    events are either schema-invalid (permanently un-insertable) or hit a
+    transient BigQuery error for that specific row; either way, resending
+    the full batch is unsafe and is not retried.
+    """
+
+
+# ---------------------------------------------------------------------------
 # TelemetrySender
 # ---------------------------------------------------------------------------
 
@@ -189,7 +207,9 @@ class TelemetrySender:
         """Attempt to send *batch* with exponential back-off retries.
 
         Returns ``True`` on success, ``False`` after all retries are
-        exhausted.
+        exhausted.  A :exc:`PartialFailureError` (HTTP 207) is never
+        retried because the Cloud Function does not use ``insertId`` and
+        retrying would duplicate already-accepted rows.
         """
         last_exc: Optional[Exception] = None
         wait = DEFAULT_RETRY_BASE_S
@@ -200,6 +220,9 @@ class TelemetrySender:
                 if self.on_success:
                     self.on_success(len(batch))
                 return True
+            except PartialFailureError as exc:
+                last_exc = exc
+                break  # do not retry — would duplicate already-inserted rows
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 if attempt < self.max_retries:
@@ -222,12 +245,13 @@ class TelemetrySender:
 
         Raises
         ------
+        PartialFailureError
+            HTTP 207 Multi-Status: the Cloud Function accepted some events
+            but rejected others.  The caller must NOT retry — ``telemetry.js``
+            inserts rows without ``insertId``, so resending the whole batch
+            would duplicate the already-accepted rows.
         IOError
-            Any network or HTTP-level error (caller handles retries).
-            Also raised for HTTP 207 Multi-Status, which the Cloud Function
-            uses to signal partial batch failure (some events were rejected by
-            validation or BigQuery).  Retrying is safe because the Cloud
-            Function inserts rows with ``insertId`` for idempotent deduplication.
+            Any other network or non-2xx HTTP error (caller handles retries).
         """
         headers = {
             "Content-Type": "application/json",
@@ -250,22 +274,20 @@ class TelemetrySender:
         if status is not None:
             status_int = int(status)
 
+            if status_int == 207:
+                # Partial failure: some events were accepted, some were not.
+                # Do NOT retry — the endpoint has no insertId deduplication,
+                # so retrying would create duplicate rows for accepted events.
+                body_text = getattr(response, "text", "") or ""
+                raise PartialFailureError(
+                    f"HTTP 207 partial failure from telemetry endpoint "
+                    f"(some events rejected): {body_text[:300]}"
+                )
+
             if not (200 <= status_int < 300):
                 raise IOError(
                     f"HTTP {status} from telemetry endpoint: "
                     f"{getattr(response, 'text', '')[:200]}"
-                )
-
-            if status_int == 207:
-                # The Cloud Function returns 207 only when at least one event
-                # failed validation or the BigQuery insert was partial
-                # (success: false in the response body).  Raise so the
-                # caller retries the whole batch; insertId deduplicates any
-                # rows that were already inserted successfully.
-                body_text = getattr(response, "text", "") or ""
-                raise IOError(
-                    f"HTTP 207 partial failure from telemetry endpoint "
-                    f"(some events rejected): {body_text[:300]}"
                 )
 
     def _async_worker(self, events: List[Dict[str, Any]]) -> None:

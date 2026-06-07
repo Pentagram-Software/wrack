@@ -26,7 +26,7 @@ Quick start::
 """
 
 from .collector import TelemetryCollector
-from .sender import TelemetrySender
+from .sender import TelemetrySender, PartialFailureError
 from .schemas import (
     validate_event,
     validate_payload,
@@ -41,6 +41,7 @@ __version__ = "1.0.0"
 __all__ = [
     "TelemetryCollector",
     "TelemetrySender",
+    "PartialFailureError",
     "validate_event",
     "validate_payload",
     "is_valid_event",

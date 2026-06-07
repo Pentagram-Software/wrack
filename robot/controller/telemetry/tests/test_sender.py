@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-from telemetry.sender import TelemetrySender, DEFAULT_BATCH_SIZE
+from telemetry.sender import TelemetrySender, PartialFailureError, DEFAULT_BATCH_SIZE
 from telemetry.collector import TelemetryCollector
 
 
@@ -391,12 +391,16 @@ class TestFlushAndSend:
 # ---------------------------------------------------------------------------
 
 class TestSendEvents207Partial:
-    """HTTP 207 from the Cloud Function signals partial batch failure.
+    """HTTP 207 from the Cloud Function signals a non-retriable partial failure.
 
     The Cloud Function (telemetry.js) returns 207 with ``success: false``
     when at least one event fails schema validation or BigQuery insert.
-    A broad 2xx check would silently treat this as success, losing failed
-    events.  The sender must treat 207 as a retriable error.
+    Critically, ``telemetry.js`` inserts rows via ``table.insert(rows)``
+    **without** ``insertId``, so retrying the whole batch would duplicate
+    the rows that were already accepted.
+
+    Correct behaviour: raise ``PartialFailureError`` immediately (no retry),
+    surface the error via ``on_error``, and return ``False``.
     """
 
     def _207_response(self, inserted: int = 1, failed: int = 1):
@@ -429,25 +433,19 @@ class TestSendEvents207Partial:
             s.send_events(events)
         error_cb.assert_called_once()
         exc = error_cb.call_args[0][0]
-        assert isinstance(exc, IOError)
+        assert isinstance(exc, PartialFailureError)
+        assert isinstance(exc, IOError)  # PartialFailureError is a subclass of IOError
         assert "207" in str(exc)
 
-    def test_retries_on_207(self):
-        """Sender should retry the batch when 207 is received."""
-        ok_response = MagicMock()
-        ok_response.status_code = 200
+    def test_207_does_not_retry(self):
+        """207 must NOT be retried — retrying would duplicate already-accepted rows."""
         s = _make_sender(max_retries=2)
         events = [_make_event()]
-        with patch("telemetry.sender._http") as mock_http, \
-             patch("telemetry.sender._time"):
-            mock_http.post.side_effect = [
-                self._207_response(),
-                self._207_response(),
-                ok_response,
-            ]
+        with patch("telemetry.sender._http") as mock_http:
+            mock_http.post.return_value = self._207_response()
             result = s.send_events(events)
-        assert result is True
-        assert mock_http.post.call_count == 3
+        assert result is False
+        assert mock_http.post.call_count == 1  # exactly one attempt, no retries
 
     def test_207_is_not_treated_as_success(self):
         """Ensure on_success callback is NOT called for a 207 response."""
@@ -469,6 +467,20 @@ class TestSendEvents207Partial:
             s.send_events(events)
         assert errors_received
         assert "207" in str(errors_received[0])
+
+    def test_partial_failure_error_is_subclass_of_ioerror(self):
+        """PartialFailureError must be an IOError for API compatibility."""
+        assert issubclass(PartialFailureError, IOError)
+
+    def test_207_with_high_max_retries_still_does_not_retry(self):
+        """Regardless of max_retries setting, 207 is never retried."""
+        s = _make_sender(max_retries=10)
+        events = [_make_event()]
+        with patch("telemetry.sender._http") as mock_http:
+            mock_http.post.return_value = self._207_response()
+            result = s.send_events(events)
+        assert result is False
+        assert mock_http.post.call_count == 1
 
 
 # ---------------------------------------------------------------------------
