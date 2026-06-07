@@ -74,6 +74,18 @@ except Exception as e:
 
 
 
+# Import telemetry module with error handling
+TelemetryCollector = None
+TelemetrySender = None
+try:
+    from telemetry import TelemetryCollector, TelemetrySender
+    print("Telemetry module imported successfully")
+except ImportError as e:
+    print("Telemetry module not available: {} - telemetry collection will be disabled".format(e))
+except Exception as e:
+    print("Error importing telemetry module: {} - telemetry collection will be disabled".format(e))
+
+
 #TODO: Better understand the debug mode
 if __debug__:
     print("Debug ON")
