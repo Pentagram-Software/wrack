@@ -9,7 +9,12 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-from telemetry.sender import TelemetrySender, PartialFailureError, DEFAULT_BATCH_SIZE
+from telemetry.sender import (
+    TelemetrySender,
+    PartialFailureError,
+    NonRetryablePartialFailureError,
+    DEFAULT_BATCH_SIZE,
+)
 from telemetry.collector import TelemetryCollector
 
 
@@ -374,16 +379,15 @@ class TestFlushAndSend:
             result = s.flush_and_send(c, async_send=True)
         assert result is None
 
-    def test_collector_cleared_before_send(self):
-        """Collector buffer must be empty after flush_and_send regardless of send result."""
+    def test_restores_collector_events_after_send_failure(self):
+        """Failed sync send should restore flushed events back to collector."""
         s = _make_sender(max_retries=0)
         c = TelemetryCollector()
         c.collect_battery_status(7000, 80.0)
         with patch("telemetry.sender._http") as mock_http:
             mock_http.post.side_effect = ConnectionError("down")
             s.flush_and_send(c)
-        # flush() already happened so buffer is empty
-        assert c.buffer_size == 0
+        assert c.buffer_size == 1
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +422,19 @@ class TestSendEvents207Partial:
         })
         return resp
 
+    def _207_bigquery_partial_response(self):
+        resp = MagicMock()
+        resp.status_code = 207
+        resp.text = json.dumps({
+            "success": False,
+            "inserted": 1,
+            "failed": 1,
+            "errors": [
+                {"event_id": "evt-bq", "errors": ["backendError"]}
+            ],
+        })
+        return resp
+
     def test_returns_false_on_207(self):
         s = _make_sender(max_retries=0)
         events = [_make_event(), _make_event()]
@@ -445,7 +462,7 @@ class TestSendEvents207Partial:
         events = [_make_event()]
         with patch("telemetry.sender._http") as mock_http, \
              patch("telemetry.sender._time"):
-            mock_http.post.return_value = self._207_response()
+            mock_http.post.return_value = self._207_bigquery_partial_response()
             result = s.send_events(events)
         assert result is False
         assert mock_http.post.call_count == 3  # initial attempt + 2 retries
@@ -483,10 +500,23 @@ class TestSendEvents207Partial:
         ok_response.status_code = 200
         with patch("telemetry.sender._http") as mock_http, \
              patch("telemetry.sender._time"):
-            mock_http.post.side_effect = [self._207_response(), ok_response]
+            mock_http.post.side_effect = [self._207_bigquery_partial_response(), ok_response]
             result = s.send_events(events)
         assert result is True
         assert mock_http.post.call_count == 2
+
+    def test_207_validation_failure_is_not_retried(self):
+        """Validation-only 207 should fail fast without retry loop."""
+        s = _make_sender(max_retries=3, on_error=MagicMock())
+        events = [_make_event()]
+        with patch("telemetry.sender._http") as mock_http, \
+             patch("telemetry.sender._time"):
+            mock_http.post.return_value = self._207_response()
+            result = s.send_events(events)
+        assert result is False
+        assert mock_http.post.call_count == 1
+        err = s.on_error.call_args[0][0]
+        assert isinstance(err, NonRetryablePartialFailureError)
 
 
 # ---------------------------------------------------------------------------

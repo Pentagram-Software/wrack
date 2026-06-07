@@ -87,6 +87,14 @@ class PartialFailureError(IOError):
     """
 
 
+class NonRetryablePartialFailureError(PartialFailureError):
+    """HTTP 207 partial failure that should not be retried.
+
+    Used when the response body indicates permanent validation failures.
+    Re-sending the same batch would fail again and only add extra delay.
+    """
+
+
 # ---------------------------------------------------------------------------
 # TelemetrySender
 # ---------------------------------------------------------------------------
@@ -225,6 +233,9 @@ class TelemetrySender:
                 if self.on_success:
                     self.on_success(len(batch))
                 return True
+            except NonRetryablePartialFailureError as exc:
+                last_exc = exc
+                break
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 if attempt < self.max_retries:
@@ -282,6 +293,11 @@ class TelemetrySender:
                 # row's event_id as insertId, so BigQuery deduplicates already-
                 # accepted rows within its streaming buffer (~1-minute window).
                 body_text = getattr(response, "text", "") or ""
+                if self._is_permanent_207_validation_failure(body_text):
+                    raise NonRetryablePartialFailureError(
+                        f"HTTP 207 validation partial failure from telemetry endpoint "
+                        f"(non-retryable): {body_text[:300]}"
+                    )
                 raise PartialFailureError(
                     f"HTTP 207 partial failure from telemetry endpoint "
                     f"(some events rejected): {body_text[:300]}"
@@ -296,6 +312,26 @@ class TelemetrySender:
     def _async_worker(self, events: List[Dict[str, Any]]) -> None:
         """Thread target for :meth:`send_events_async`."""
         self.send_events(events)
+
+    def _is_permanent_207_validation_failure(self, response_text: str) -> bool:
+        """Return True if a 207 body indicates validation-only failures.
+
+        telemetry.js reports validation failures with an ``index`` field.
+        BigQuery partial failures include ``event_id`` and error messages but
+        no ``index``.  We treat "all errors have index" as non-retryable.
+        """
+        if not response_text:
+            return False
+        try:
+            payload = json.loads(response_text)
+        except (TypeError, ValueError):
+            return False
+
+        errors = payload.get("errors")
+        if not isinstance(errors, list) or not errors:
+            return False
+
+        return all(isinstance(err, dict) and "index" in err for err in errors)
 
     # ------------------------------------------------------------------
     # Convenience: flush collector and send
@@ -323,4 +359,24 @@ class TelemetrySender:
         if async_send:
             self.send_events_async(events)
             return None
-        return self.send_events(events)
+        ok = self.send_events(events)
+        if not ok:
+            self._restore_events_to_collector(collector, events)
+        return ok
+
+    def _restore_events_to_collector(
+        self,
+        collector: Any,
+        events: List[Dict[str, Any]],
+    ) -> None:
+        """Best-effort restore of flushed events after failed send.
+
+        If the collector exposes ``_buffer_event`` we replay through it so
+        existing overflow / eviction behavior is preserved.
+        """
+        if not events:
+            return
+        buffer_event = getattr(collector, "_buffer_event", None)
+        if callable(buffer_event):
+            for event in events:
+                buffer_event(event)
