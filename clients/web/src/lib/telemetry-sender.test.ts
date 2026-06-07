@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { TelemetrySender } from './telemetry-sender';
+import { TelemetrySender, getTelemetrySender } from './telemetry-sender';
 import type { TelemetryEventEnvelope } from './telemetry-sender';
 
 // ---------------------------------------------------------------------------
@@ -449,5 +449,24 @@ describe('TelemetrySender — concurrent flush coalescing', () => {
     // Only one HTTP request despite two concurrent flush() calls
     expect(mockFetch).toHaveBeenCalledTimes(1);
     sender.destroy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getTelemetrySender() — lazy singleton
+// ---------------------------------------------------------------------------
+
+describe('getTelemetrySender() — lazy singleton', () => {
+  it('returns a TelemetrySender instance', () => {
+    const sender = getTelemetrySender();
+    expect(sender).toBeInstanceOf(TelemetrySender);
+    sender.destroy();
+  });
+
+  it('returns the same instance on repeated calls', () => {
+    const a = getTelemetrySender();
+    const b = getTelemetrySender();
+    expect(a).toBe(b);
+    a.destroy();
   });
 });

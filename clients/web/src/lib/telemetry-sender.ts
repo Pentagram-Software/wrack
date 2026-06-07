@@ -207,12 +207,26 @@ export class TelemetrySender {
 }
 
 // ---------------------------------------------------------------------------
-// Singleton — shared instance used by the web app
+// Singleton — shared instance used by the web app (lazy)
+// ---------------------------------------------------------------------------
+// The instance is NOT constructed at module evaluation time.  Eager
+// construction would schedule the recurring background setTimeout as a side
+// effect of any import that only needs the class or types, which leaks a
+// timer in tests and server-side render paths.  Access via
+// `getTelemetrySender()` instead; the instance is created on the first call
+// and reused thereafter.
 // ---------------------------------------------------------------------------
 
-export const telemetrySender = new TelemetrySender({
-  url:
-    process.env.NEXT_PUBLIC_TELEMETRY_FUNCTION_URL ??
-    'https://europe-central2-wrack-control.cloudfunctions.net/telemetryIngestion',
-  apiKey: process.env.NEXT_PUBLIC_API_KEY ?? '',
-});
+let _telemetrySender: TelemetrySender | undefined;
+
+export function getTelemetrySender(): TelemetrySender {
+  if (_telemetrySender === undefined) {
+    _telemetrySender = new TelemetrySender({
+      url:
+        process.env.NEXT_PUBLIC_TELEMETRY_FUNCTION_URL ??
+        'https://europe-central2-wrack-control.cloudfunctions.net/telemetryIngestion',
+      apiKey: process.env.NEXT_PUBLIC_API_KEY ?? '',
+    });
+  }
+  return _telemetrySender;
+}
