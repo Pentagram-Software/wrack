@@ -147,6 +147,22 @@ class TestConstructor:
     def test_initial_invalid_count_zero(self, collector):
         assert collector.invalid_count == 0
 
+    def test_zero_max_buffer_raises_value_error(self):
+        with pytest.raises(ValueError, match="max_buffer"):
+            TelemetryCollector(max_buffer=0)
+
+    def test_negative_max_buffer_raises_value_error(self):
+        with pytest.raises(ValueError, match="max_buffer"):
+            TelemetryCollector(max_buffer=-1)
+
+    def test_negative_large_max_buffer_raises_value_error(self):
+        with pytest.raises(ValueError, match="max_buffer"):
+            TelemetryCollector(max_buffer=-500)
+
+    def test_positive_max_buffer_one_is_valid(self):
+        c = TelemetryCollector(max_buffer=1)
+        assert c.max_buffer == 1
+
 
 # ---------------------------------------------------------------------------
 # collect() — event envelope structure

@@ -131,6 +131,10 @@ class TelemetryCollector:
         disk_spill_path: Optional[str] = None,
         validate: bool = True,
     ) -> None:
+        if max_buffer <= 0:
+            raise ValueError(
+                f"max_buffer must be a positive integer, got {max_buffer!r}"
+            )
         self._source = source
         self._session_id = session_id
         self._device_id = device_id
