@@ -55,6 +55,19 @@ try:
 except ImportError:
     _HAS_TIME = False
 
+# Schema validation is optional so the collector still imports on MicroPython
+# (or any environment where ``telemetry.schemas`` cannot be loaded).  When it
+# is unavailable the generic :meth:`TelemetryCollector.collect` simply skips
+# validation regardless of the ``validate`` flag.
+try:
+    from .schemas import ValidationError, validate_event
+    _HAS_SCHEMAS = True
+except ImportError:  # pragma: no cover - MicroPython / missing-schema path
+    _HAS_SCHEMAS = False
+
+    class ValidationError(Exception):  # type: ignore[no-redef]
+        """Fallback used when ``telemetry.schemas`` is unavailable."""
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -141,6 +154,11 @@ class TelemetryCollector:
     max_disk_bytes:
         Maximum bytes written to the overflow file.  Writing stops once
         this limit is reached.
+    validate:
+        When ``True`` (default), events passed to the generic :meth:`collect`
+        method are validated against ``telemetry.schemas`` before buffering;
+        invalid events are dropped and counted via :attr:`invalid_count`.
+        Has no effect on the typed ``collect_*`` helpers.
     """
 
     def __init__(
@@ -149,14 +167,17 @@ class TelemetryCollector:
         max_buffer_size: int = DEFAULT_MAX_BUFFER_SIZE,
         overflow_path: Optional[str] = DEFAULT_OVERFLOW_PATH,
         max_disk_bytes: int = DEFAULT_MAX_DISK_BYTES,
+        validate: bool = True,
     ) -> None:
         self.source = source
         self.max_buffer_size = max_buffer_size
         self.overflow_path = overflow_path
         self.max_disk_bytes = max_disk_bytes
+        self.validate = validate
 
         self._buffer: List[Dict[str, Any]] = []
         self._dropped_count: int = 0
+        self._invalid_count: int = 0
 
     # ------------------------------------------------------------------
     # Core factory method
@@ -199,6 +220,46 @@ class TelemetryCollector:
             "timestamp": timestamp or _utc_now_iso(),
             "payload": payload,
         }
+
+    # ------------------------------------------------------------------
+    # Generic collect API
+    # ------------------------------------------------------------------
+
+    def collect(self, event_type: str, **payload: Any) -> Optional[Dict[str, Any]]:
+        """Build, validate, and buffer an event from a generic payload.
+
+        This is a schema-agnostic alternative to the typed ``collect_*``
+        helpers: any ``event_type`` and arbitrary payload keyword arguments are
+        accepted.  When the collector was constructed with ``validate=True``
+        (the default) and ``telemetry.schemas`` is importable, the event is
+        validated before buffering; events that fail validation are discarded,
+        :attr:`invalid_count` is incremented, and ``None`` is returned.
+
+        Parameters
+        ----------
+        event_type:
+            One of the recognised event type strings (e.g. ``"battery_status"``).
+        **payload:
+            Event-type-specific payload fields, passed verbatim as the
+            event ``payload`` dict.
+
+        Returns
+        -------
+        dict or None
+            The buffered event dict on success; ``None`` if the event failed
+            validation.
+        """
+        event = self.create_event(event_type, dict(payload))
+
+        if self.validate and _HAS_SCHEMAS:
+            try:
+                validate_event(event)
+            except ValidationError:
+                self._invalid_count += 1
+                return None
+
+        self._buffer_event(event)
+        return event
 
     # ------------------------------------------------------------------
     # collect helpers — one per P0 event type
@@ -416,6 +477,11 @@ class TelemetryCollector:
     def dropped_count(self) -> int:
         """Number of events dropped due to buffer + disk overflow."""
         return self._dropped_count
+
+    @property
+    def invalid_count(self) -> int:
+        """Number of events rejected by :meth:`collect` due to validation failure."""
+        return self._invalid_count
 
     def clear(self) -> None:
         """Discard all buffered events without sending them."""
