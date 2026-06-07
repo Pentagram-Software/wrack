@@ -369,14 +369,21 @@ class TelemetryCollector:
             self._dropped_count += 1
             return
         try:
+            line = json.dumps(event) + "\n"
+            try:
+                line_bytes = len(line.encode("utf-8"))
+            except Exception:  # noqa: BLE001 — fall back to char count
+                line_bytes = len(line)
             current_size = 0
             if os.path.exists(self.overflow_path):
                 current_size = os.path.getsize(self.overflow_path)
-            if current_size >= self.max_disk_bytes:
+            # Reject before writing so a single large event cannot push the
+            # file past the configured cap.
+            if current_size + line_bytes > self.max_disk_bytes:
                 self._dropped_count += 1
                 return
             with _open_text(self.overflow_path, "a") as fh:
-                fh.write(json.dumps(event) + "\n")
+                fh.write(line)
         except Exception:  # noqa: BLE001 — best-effort overflow must never crash collect_*()
             self._dropped_count += 1
 

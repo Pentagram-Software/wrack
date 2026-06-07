@@ -31,7 +31,6 @@ Usage::
 from __future__ import annotations
 
 import json
-import threading
 
 # ``typing`` is unavailable on Pybricks/MicroPython.  Annotations are strings
 # (``from __future__ import annotations``) so the names are never evaluated at
@@ -50,6 +49,16 @@ try:
     _HAS_TIME = True
 except ImportError:
     _HAS_TIME = False
+
+# ``threading`` is unavailable on some Pybricks/MicroPython builds.  Guard it so
+# importing the telemetry package never fails on the EV3; async sends fall back
+# to a synchronous send when threads are not available.
+try:
+    import threading as _threading
+    _HAS_THREADING = True
+except ImportError:
+    _threading = None  # type: ignore[assignment]
+    _HAS_THREADING = False
 
 # HTTP library — prefer ``requests`` (CPython), fall back to ``urequests``
 # (MicroPython/Pybricks), fail gracefully if neither is present.
@@ -145,6 +154,10 @@ class TelemetrySender:
         on_success: Optional[Callable[[int], None]] = None,
         on_error: Optional[Callable[[Exception], None]] = None,
     ) -> None:
+        if batch_size <= 0:
+            raise ValueError("batch_size must be a positive integer")
+        if max_retries < 0:
+            raise ValueError("max_retries must not be negative")
         self.endpoint = endpoint
         self.api_key = api_key
         self.batch_size = batch_size
@@ -190,10 +203,18 @@ class TelemetrySender:
 
         Returns immediately.  Use :attr:`on_success` / :attr:`on_error`
         callbacks to observe the result.
+
+        When ``threading`` is unavailable (some MicroPython builds) the send
+        runs synchronously so events are never silently dropped.
         """
         if not events:
             return
-        t = threading.Thread(
+        if not _HAS_THREADING:
+            # No threads on this runtime — fall back to a blocking send rather
+            # than dropping the events.
+            self._async_worker(list(events), collector)
+            return
+        t = _threading.Thread(
             target=self._async_worker,
             args=(list(events), collector),
             daemon=True,

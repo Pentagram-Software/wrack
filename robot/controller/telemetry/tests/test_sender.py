@@ -84,6 +84,18 @@ class TestTelemetrySenderInit:
         assert s.on_success is None
         assert s.on_error is None
 
+    def test_rejects_zero_batch_size(self):
+        with pytest.raises(ValueError):
+            _make_sender(batch_size=0)
+
+    def test_rejects_negative_batch_size(self):
+        with pytest.raises(ValueError):
+            _make_sender(batch_size=-5)
+
+    def test_rejects_negative_max_retries(self):
+        with pytest.raises(ValueError):
+            _make_sender(max_retries=-1)
+
 
 # ---------------------------------------------------------------------------
 # send_events — empty list
@@ -339,6 +351,33 @@ class TestSendEventsAsync:
             # Wait for background thread to finish
             time.sleep(0.1)
         assert results == [1]
+
+    def test_falls_back_to_sync_send_without_threading(self):
+        """Without threading (some MicroPython builds) async sends run inline."""
+        results = []
+        s = _make_sender(on_success=lambda n: results.append(n))
+        ok_response = MagicMock()
+        ok_response.status_code = 200
+        with patch("telemetry.sender._http") as mock_http, \
+             patch("telemetry.sender._HAS_THREADING", False), \
+             patch("telemetry.sender._threading", None):
+            mock_http.post.return_value = ok_response
+            s.send_events_async([_make_event()])
+            # Ran synchronously — no thread to wait for.
+            assert results == [1]
+
+    def test_sync_fallback_rebuffers_on_failure(self):
+        """Sync async-fallback still restores unsent events to the collector."""
+        s = _make_sender(max_retries=0)
+        c = TelemetryCollector()
+        c.collect_battery_status(7000, 80.0)
+        with patch("telemetry.sender._http") as mock_http, \
+             patch("telemetry.sender._HAS_THREADING", False), \
+             patch("telemetry.sender._threading", None):
+            mock_http.post.side_effect = ConnectionError("down")
+            result = s.flush_and_send(c, async_send=True)
+        assert result is None
+        assert c.buffer_size == 1
 
 
 # ---------------------------------------------------------------------------

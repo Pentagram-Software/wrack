@@ -424,6 +424,26 @@ class TestBufferManagement:
         result = c.load_overflow()
         assert result == []
 
+    def test_large_event_does_not_exceed_disk_cap(self):
+        """A single oversized event must be dropped, not pushed past the cap."""
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            os.remove(path)
+            # Tiny cap so one event already exceeds it.
+            c = TelemetryCollector(
+                max_buffer_size=1, overflow_path=path, max_disk_bytes=50
+            )
+            c.collect_battery_status(7000, 80.0)
+            c.collect_battery_status(7001, 81.0)  # evicts the first -> persist
+            # Event JSON is well over 50 bytes, so it is dropped before writing.
+            assert c.dropped_count == 1
+            file_size = os.path.getsize(path) if os.path.exists(path) else 0
+            assert file_size <= 50
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
     def test_persist_tolerates_open_without_encoding_kwarg(self):
         """MicroPython's open() has no encoding kwarg; persistence must not crash."""
         import builtins
