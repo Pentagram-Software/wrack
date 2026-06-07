@@ -424,6 +424,39 @@ class TestBufferManagement:
         result = c.load_overflow()
         assert result == []
 
+    def test_persist_tolerates_open_without_encoding_kwarg(self):
+        """MicroPython's open() has no encoding kwarg; persistence must not crash."""
+        import builtins
+
+        real_open = builtins.open
+
+        def micropython_open(*args, **kwargs):
+            # Emulate Pybricks/MicroPython: reject the CPython-only encoding kwarg.
+            if "encoding" in kwargs:
+                raise TypeError(
+                    "open() got an unexpected keyword argument 'encoding'"
+                )
+            return real_open(*args, **kwargs)
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            os.remove(path)
+            c = TelemetryCollector(max_buffer_size=1, overflow_path=path)
+            with patch("builtins.open", side_effect=micropython_open):
+                c.collect_battery_status(7000, 80.0)
+                c.collect_battery_status(7001, 81.0)  # triggers overflow write
+            # The evicted event was persisted via the no-encoding fallback,
+            # so nothing was dropped and the file exists.
+            assert c.dropped_count == 0
+            assert os.path.exists(path)
+            with patch("builtins.open", side_effect=micropython_open):
+                overflow = c.load_overflow()
+            assert len(overflow) == 1
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
     def test_multiple_events_in_buffer_order(self):
         c = TelemetryCollector()
         e1 = c.collect_command_received("forward")

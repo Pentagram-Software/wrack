@@ -70,6 +70,19 @@ DEFAULT_OVERFLOW_PATH = "/tmp/wrack_telemetry_overflow.json"
 _counter = 0
 
 
+def _open_text(path: str, mode: str):
+    """Open *path* as a UTF-8 text file, tolerant of MicroPython.
+
+    CPython accepts an ``encoding`` keyword; Pybricks/MicroPython's ``open()``
+    does not and raises ``TypeError``.  Fall back to a plain ``open()`` in that
+    case so the overflow-persistence path works on the EV3.
+    """
+    try:
+        return open(path, mode, encoding="utf-8")
+    except TypeError:  # pragma: no cover - MicroPython runtime path
+        return open(path, mode)
+
+
 def _generate_event_id() -> str:
     """Return a unique event ID string.
 
@@ -362,9 +375,9 @@ class TelemetryCollector:
             if current_size >= self.max_disk_bytes:
                 self._dropped_count += 1
                 return
-            with open(self.overflow_path, "a", encoding="utf-8") as fh:
+            with _open_text(self.overflow_path, "a") as fh:
                 fh.write(json.dumps(event) + "\n")
-        except OSError:
+        except Exception:  # noqa: BLE001 — best-effort overflow must never crash collect_*()
             self._dropped_count += 1
 
     # ------------------------------------------------------------------
@@ -411,7 +424,7 @@ class TelemetryCollector:
             return []
         events: List[Dict[str, Any]] = []
         try:
-            with open(self.overflow_path, "r", encoding="utf-8") as fh:
+            with _open_text(self.overflow_path, "r") as fh:
                 for line in fh:
                     line = line.strip()
                     if line:
