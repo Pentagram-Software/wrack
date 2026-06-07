@@ -72,15 +72,18 @@ DEFAULT_RETRY_BASE_S = 1.0  # first retry wait; doubles each attempt
 
 
 class PartialFailureError(IOError):
-    """HTTP 207 Multi-Status — partial batch accepted, do NOT retry.
+    """HTTP 207 Multi-Status — partial batch accepted by the Cloud Function.
 
     Raised by :meth:`TelemetrySender._post_batch` when the Cloud Function
-    returns 207.  The endpoint (``telemetry.js``) inserts rows via
-    ``table.insert(rows)`` *without* ``insertId``, so retrying the whole
-    batch would duplicate the rows that were already accepted.  The failed
-    events are either schema-invalid (permanently un-insertable) or hit a
-    transient BigQuery error for that specific row; either way, resending
-    the full batch is unsafe and is not retried.
+    returns 207.  The endpoint (``telemetry.js``) inserts rows with
+    ``insertId`` set to ``event_id``, so BigQuery deduplicates any row that
+    was already accepted within its streaming buffer (~1-minute window).
+    Full-batch retries are therefore safe: already-inserted rows are silently
+    de-duplicated rather than written twice.
+
+    This exception is retried like any transient failure.  It is kept as a
+    distinct type so callers can observe partial-failure events separately
+    from complete network failures via the ``on_error`` callback.
     """
 
 
@@ -207,9 +210,11 @@ class TelemetrySender:
         """Attempt to send *batch* with exponential back-off retries.
 
         Returns ``True`` on success, ``False`` after all retries are
-        exhausted.  A :exc:`PartialFailureError` (HTTP 207) is never
-        retried because the Cloud Function does not use ``insertId`` and
-        retrying would duplicate already-accepted rows.
+        exhausted.  A :exc:`PartialFailureError` (HTTP 207) is retried like
+        any other transient failure because the Cloud Function uses
+        ``insertId`` (set to ``event_id``) for BigQuery deduplication, so
+        resending the full batch is safe — already-accepted rows are silently
+        de-duplicated by BigQuery rather than written twice.
         """
         last_exc: Optional[Exception] = None
         wait = DEFAULT_RETRY_BASE_S
@@ -220,9 +225,6 @@ class TelemetrySender:
                 if self.on_success:
                     self.on_success(len(batch))
                 return True
-            except PartialFailureError as exc:
-                last_exc = exc
-                break  # do not retry — would duplicate already-inserted rows
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 if attempt < self.max_retries:
@@ -247,9 +249,9 @@ class TelemetrySender:
         ------
         PartialFailureError
             HTTP 207 Multi-Status: the Cloud Function accepted some events
-            but rejected others.  The caller must NOT retry — ``telemetry.js``
-            inserts rows without ``insertId``, so resending the whole batch
-            would duplicate the already-accepted rows.
+            but rejected others.  Full-batch retries are safe because
+            ``telemetry.js`` passes each row's ``event_id`` as the BigQuery
+            ``insertId``, enabling streaming-insert deduplication.
         IOError
             Any other network or non-2xx HTTP error (caller handles retries).
         """
@@ -276,8 +278,9 @@ class TelemetrySender:
 
             if status_int == 207:
                 # Partial failure: some events were accepted, some were not.
-                # Do NOT retry — the endpoint has no insertId deduplication,
-                # so retrying would create duplicate rows for accepted events.
+                # Retrying the full batch is safe: telemetry.js passes each
+                # row's event_id as insertId, so BigQuery deduplicates already-
+                # accepted rows within its streaming buffer (~1-minute window).
                 body_text = getattr(response, "text", "") or ""
                 raise PartialFailureError(
                     f"HTTP 207 partial failure from telemetry endpoint "

@@ -406,14 +406,24 @@ describe('telemetryIngestion handler — successful ingestion', () => {
     expect(mockInsert.mock.calls[0][0]).toHaveLength(3);
   });
 
+  test('BigQuery row is wrapped with insertId equal to event_id', async () => {
+    const req = makeReq({ body: { events: [validEvent] } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    const rows = mockInsert.mock.calls[0][0];
+    expect(rows[0].insertId).toBe(validEvent.event_id);
+    expect(rows[0].json).toBeDefined();
+  });
+
   test('BigQuery row includes ingested_at', async () => {
     const req = makeReq({ body: { events: [validEvent] } });
     const res = makeRes();
     await invokeHandler(req, res);
 
     const rows = mockInsert.mock.calls[0][0];
-    expect(rows[0].ingested_at).toBeDefined();
-    expect(new Date(rows[0].ingested_at).getTime()).not.toBeNaN();
+    expect(rows[0].json.ingested_at).toBeDefined();
+    expect(new Date(rows[0].json.ingested_at).getTime()).not.toBeNaN();
   });
 
   test('BigQuery row payload is a JSON string', async () => {
@@ -422,8 +432,8 @@ describe('telemetryIngestion handler — successful ingestion', () => {
     await invokeHandler(req, res);
 
     const rows = mockInsert.mock.calls[0][0];
-    expect(typeof rows[0].payload).toBe('string');
-    expect(JSON.parse(rows[0].payload)).toEqual(validEvent.payload);
+    expect(typeof rows[0].json.payload).toBe('string');
+    expect(JSON.parse(rows[0].json.payload)).toEqual(validEvent.payload);
   });
 });
 

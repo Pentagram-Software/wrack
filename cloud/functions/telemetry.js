@@ -162,13 +162,19 @@ functions.http('telemetryIngestion', (req, res) => {
     let insertedCount = validRows.length;
 
     try {
-      await table.insert(validRows.map((r) => r.row));
+      // Use event_id as insertId for best-effort deduplication in BigQuery's
+      // streaming buffer (~1-minute window).  This makes full-batch retries
+      // safe: already-inserted rows are silently de-duplicated by BigQuery
+      // rather than written twice.
+      await table.insert(validRows.map((r) => ({ insertId: r.row.event_id, json: r.row })));
     } catch (bqError) {
       if (bqError.name === 'PartialFailureError') {
         // bqError.errors: Array<{ row, errors: [{reason, message, location}] }>
         const rowErrors = bqError.errors || [];
 
         bqFailures = rowErrors.map((e) => ({
+          // When rows are passed as { insertId, json } the BigQuery client
+          // surfaces the row under e.row (the json value).
           event_id: e.row ? e.row.event_id : null,
           errors: (e.errors || []).map((err) => err.message || err.reason || 'BigQuery insert error'),
         }));
