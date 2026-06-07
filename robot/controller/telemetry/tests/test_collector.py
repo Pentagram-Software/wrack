@@ -484,3 +484,81 @@ class TestBufferManagement:
         events = c.flush()
         assert events[0]["event_id"] == e1["event_id"]
         assert events[1]["event_id"] == e2["event_id"]
+
+
+# ---------------------------------------------------------------------------
+# Generic collect() API + invalid_count (PEN-121 graft)
+# ---------------------------------------------------------------------------
+
+class TestGenericCollect:
+    def test_initial_invalid_count_zero(self):
+        assert TelemetryCollector().invalid_count == 0
+
+    def test_valid_event_returns_dict(self):
+        c = TelemetryCollector()
+        event = c.collect("battery_status", voltage_mv=7500, percentage=90.0)
+        assert event is not None
+        assert event["event_type"] == "battery_status"
+
+    def test_valid_event_is_buffered(self):
+        c = TelemetryCollector()
+        c.collect("battery_status", voltage_mv=7500, percentage=90.0)
+        assert c.buffer_size == 1
+
+    def test_payload_matches_kwargs(self):
+        c = TelemetryCollector()
+        event = c.collect("battery_status", voltage_mv=6800, percentage=45.0)
+        assert event["payload"] == {"voltage_mv": 6800, "percentage": 45.0}
+
+    def test_event_id_is_uuid_shaped(self):
+        c = TelemetryCollector()
+        event = c.collect("battery_status", voltage_mv=7500, percentage=90.0)
+        assert len(event["event_id"].split("-")) == 5
+
+    def test_timestamp_ends_with_z(self):
+        c = TelemetryCollector()
+        event = c.collect("battery_status", voltage_mv=7500, percentage=90.0)
+        assert event["timestamp"].endswith("Z")
+
+    def test_source_defaults_to_ev3(self):
+        c = TelemetryCollector()
+        event = c.collect("battery_status", voltage_mv=7500, percentage=90.0)
+        assert event["source"] == "ev3"
+
+    def test_invalid_payload_returns_none(self):
+        c = TelemetryCollector()
+        assert c.collect("battery_status", voltage_mv=-1, percentage=200) is None
+
+    def test_invalid_payload_increments_invalid_count(self):
+        c = TelemetryCollector()
+        c.collect("battery_status", voltage_mv=-1, percentage=200)
+        assert c.invalid_count == 1
+
+    def test_invalid_payload_not_buffered(self):
+        c = TelemetryCollector()
+        c.collect("battery_status", voltage_mv=-1, percentage=200)
+        assert c.buffer_size == 0
+
+    def test_multiple_invalid_events_accumulate(self):
+        c = TelemetryCollector()
+        for _ in range(5):
+            c.collect("battery_status", voltage_mv=-1, percentage=999)
+        assert c.invalid_count == 5
+
+    def test_unknown_event_type_rejected_when_validating(self):
+        c = TelemetryCollector()
+        assert c.collect("nonexistent_type", foo="bar") is None
+        assert c.invalid_count == 1
+
+    def test_validate_false_skips_validation(self):
+        c = TelemetryCollector(validate=False)
+        event = c.collect("nonexistent_type", bogus_field=True)
+        assert event is not None
+        assert c.buffer_size == 1
+        assert c.invalid_count == 0
+
+    def test_collect_does_not_affect_typed_helpers(self):
+        c = TelemetryCollector()
+        c.collect("battery_status", voltage_mv=7500, percentage=90.0)
+        c.collect_command_received("forward")
+        assert c.buffer_size == 2
