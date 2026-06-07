@@ -70,6 +70,11 @@ function validateEvent(event) {
 
   if (event.tags !== undefined && !Array.isArray(event.tags)) {
     errors.push('tags must be an array of strings when provided');
+  } else if (
+    Array.isArray(event.tags) &&
+    !event.tags.every((tag) => typeof tag === 'string')
+  ) {
+    errors.push('tags must be an array of strings when provided');
   }
 
   return { valid: errors.length === 0, errors };

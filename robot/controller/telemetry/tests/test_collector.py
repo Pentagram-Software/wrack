@@ -5,6 +5,7 @@ import os
 import tempfile
 import uuid
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -56,6 +57,16 @@ class TestUtcNowIso:
         import re
         pattern = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$")
         assert pattern.match(_utc_now_iso()), f"Timestamp {_utc_now_iso()!r} does not match ISO 8601"
+
+    def test_falls_back_to_gmtime_when_datetime_unavailable(self):
+        fake_time = type("FakeTime", (), {
+            "time": staticmethod(lambda: 1700000000),
+            "gmtime": staticmethod(lambda _epoch: (2023, 11, 14, 22, 13, 20, 1, 318)),
+        })()
+        with patch("telemetry.collector._HAS_DATETIME", False), \
+             patch("telemetry.collector._HAS_TIME", True), \
+             patch("telemetry.collector._time", fake_time):
+            assert _utc_now_iso() == "2023-11-14T22:13:20Z"
 
 
 # ---------------------------------------------------------------------------

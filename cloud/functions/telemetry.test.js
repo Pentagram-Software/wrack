@@ -215,6 +215,12 @@ describe('validateEvent()', () => {
     expect(errors.some((e) => e.includes('tags'))).toBe(true);
   });
 
+  test('rejects non-string tag elements', () => {
+    const { valid, errors } = validateEvent({ ...validEvent, tags: ['ok', 123] });
+    expect(valid).toBe(false);
+    expect(errors.some((e) => e.includes('tags'))).toBe(true);
+  });
+
   test('accepts empty tags array', () => {
     const { valid } = validateEvent({ ...validEvent, tags: [] });
     expect(valid).toBe(true);

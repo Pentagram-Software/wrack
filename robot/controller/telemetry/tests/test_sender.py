@@ -389,6 +389,36 @@ class TestFlushAndSend:
             s.flush_and_send(c)
         assert c.buffer_size == 1
 
+    def test_restores_only_unsent_suffix_after_partial_send(self):
+        """If first batch succeeds and second fails, restore only unsent events."""
+        s = _make_sender(max_retries=0, batch_size=1)
+        c = TelemetryCollector()
+        c.collect_battery_status(7000, 80.0)
+        c.collect_command_received("stop")
+
+        ok_response = MagicMock()
+        ok_response.status_code = 200
+        with patch("telemetry.sender._http") as mock_http:
+            mock_http.post.side_effect = [ok_response, ConnectionError("down")]
+            result = s.flush_and_send(c)
+
+        assert result is False
+        assert c.buffer_size == 1
+
+    def test_async_flush_restores_unsent_events_on_failure(self):
+        """Async flush should also re-buffer events when send ultimately fails."""
+        s = _make_sender(max_retries=0)
+        c = TelemetryCollector()
+        c.collect_battery_status(7000, 80.0)
+
+        with patch("telemetry.sender._http") as mock_http:
+            mock_http.post.side_effect = ConnectionError("down")
+            result = s.flush_and_send(c, async_send=True)
+            assert result is None
+            time.sleep(0.1)
+
+        assert c.buffer_size == 1
+
 
 # ---------------------------------------------------------------------------
 # HTTP 207 Multi-Status — partial batch failure

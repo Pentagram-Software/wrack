@@ -168,25 +168,15 @@ class TelemetrySender:
             ``True`` if all chunks were sent successfully; ``False`` if any
             chunk ultimately failed after all retries.
         """
-        if not events:
-            return True
+        ok, _unsent = self._send_events_with_unsent(events)
+        return ok
 
-        if _http is None:
-            print(
-                "[TelemetrySender] WARNING: No HTTP library available "
-                "(install 'requests'). Cannot send telemetry."
-            )
-            return False
-
-        all_ok = True
-        for batch in self._batches(events):
-            ok = self._send_batch_with_retry(batch)
-            if not ok:
-                all_ok = False
-
-        return all_ok
-
-    def send_events_async(self, events: List[Dict[str, Any]]) -> None:
+    def send_events_async(
+        self,
+        events: List[Dict[str, Any]],
+        *,
+        collector: Optional[Any] = None,
+    ) -> None:
         """Send *events* in a background daemon thread (fire-and-forget).
 
         Returns immediately.  Use :attr:`on_success` / :attr:`on_error`
@@ -196,7 +186,7 @@ class TelemetrySender:
             return
         t = threading.Thread(
             target=self._async_worker,
-            args=(list(events),),
+            args=(list(events), collector),
             daemon=True,
         )
         t.start()
@@ -252,6 +242,33 @@ class TelemetrySender:
                 f"{last_exc}"
             )
         return False
+
+    def _send_events_with_unsent(
+        self,
+        events: List[Dict[str, Any]],
+    ) -> tuple[bool, List[Dict[str, Any]]]:
+        """Send events and return (success, unsent_suffix).
+
+        The unsent suffix starts from the first batch that failed and includes
+        all later batches that were never attempted.
+        """
+        if not events:
+            return True, []
+
+        if _http is None:
+            print(
+                "[TelemetrySender] WARNING: No HTTP library available "
+                "(install 'requests'). Cannot send telemetry."
+            )
+            return False, list(events)
+
+        for batch_start in range(0, len(events), self.batch_size):
+            batch = events[batch_start : batch_start + self.batch_size]
+            ok = self._send_batch_with_retry(batch)
+            if not ok:
+                return False, list(events[batch_start:])
+
+        return True, []
 
     def _post_batch(self, batch: List[Dict[str, Any]]) -> None:
         """Execute a single HTTP POST for *batch*.
@@ -309,9 +326,15 @@ class TelemetrySender:
                     f"{getattr(response, 'text', '')[:200]}"
                 )
 
-    def _async_worker(self, events: List[Dict[str, Any]]) -> None:
+    def _async_worker(
+        self,
+        events: List[Dict[str, Any]],
+        collector: Optional[Any] = None,
+    ) -> None:
         """Thread target for :meth:`send_events_async`."""
-        self.send_events(events)
+        ok, unsent = self._send_events_with_unsent(events)
+        if not ok and collector is not None:
+            self._restore_events_to_collector(collector, unsent)
 
     def _is_permanent_207_validation_failure(self, response_text: str) -> bool:
         """Return True if a 207 body indicates validation-only failures.
@@ -357,11 +380,11 @@ class TelemetrySender:
         if not events:
             return True
         if async_send:
-            self.send_events_async(events)
+            self.send_events_async(events, collector=collector)
             return None
-        ok = self.send_events(events)
+        ok, unsent = self._send_events_with_unsent(events)
         if not ok:
-            self._restore_events_to_collector(collector, events)
+            self._restore_events_to_collector(collector, unsent)
         return ok
 
     def _restore_events_to_collector(

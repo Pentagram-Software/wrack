@@ -85,13 +85,16 @@ def _utc_now_iso() -> str:
     if _HAS_DATETIME:
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     if _HAS_TIME:
-        # Rough fallback: seconds since epoch (not wall-clock UTC but
-        # functional for ordering purposes when datetime is unavailable).
-        epoch = int(_time.time())
-        # Convert to a pseudo ISO string — callers on MicroPython will
-        # override this via the ``timestamp`` parameter if needed.
-        s = epoch % (365 * 24 * 3600)
-        return "1970-01-01T00:00:00Z"
+        try:
+            epoch = int(_time.time())
+            if hasattr(_time, "gmtime"):
+                tm = _time.gmtime(epoch)
+                return (
+                    f"{tm[0]:04d}-{tm[1]:02d}-{tm[2]:02d}T"
+                    f"{tm[3]:02d}:{tm[4]:02d}:{tm[5]:02d}Z"
+                )
+        except Exception:
+            pass
     return "1970-01-01T00:00:00Z"
 
 
