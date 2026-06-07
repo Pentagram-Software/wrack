@@ -1,89 +1,121 @@
 """
-Wrack telemetry event collector for the EV3 robot controller.
+Telemetry event collector for the EV3 robot controller.
 
-This module provides :class:`TelemetryCollector`, a thread-safe, buffered
-event collector that builds standard telemetry event envelopes and stores
-them in an in-memory FIFO queue with optional disk spill on overflow.
+Responsible for:
+- Building well-formed telemetry event envelopes from raw robot data.
+- Buffering events in memory (up to ``max_buffer_size`` events).
+- Optionally persisting overflow events to a local disk file so no data
+  is lost when the send queue is full or the network is unavailable.
+
+Designed to be MicroPython-compatible: no external library dependencies;
+``uuid`` and ``datetime`` are used only when available and fall back to
+simple integer-based IDs and epoch timestamps otherwise.
 
 Usage::
 
     from telemetry.collector import TelemetryCollector
 
-    collector = TelemetryCollector(
-        source="ev3",
-        session_id="session-abc",
-        device_id="ev3-unit-1",
-        max_buffer=500,
-        disk_spill_path="/tmp/telemetry_overflow.jsonl",
-    )
-
-    # Record a battery status event
-    collector.collect("battery_status", voltage_mv=7200, percentage=85.0)
-
-    # Retrieve and drain the buffer
-    events = collector.flush()
+    collector = TelemetryCollector(source="ev3")
+    collector.collect_battery_status(voltage_mv=7500, percentage=90.0)
+    events = collector.flush()   # returns list of event dicts, clears buffer
 """
 
 from __future__ import annotations
 
 import json
 import os
-from collections import deque
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
 
-from .schemas import ValidationError, validate_event
+# ``typing`` is unavailable on Pybricks/MicroPython.  Annotations are strings
+# (``from __future__ import annotations``) so the names are never evaluated at
+# runtime; the fallback simply lets the module import on the EV3.
+try:
+    from typing import Any, Dict, List, Optional
+except ImportError:  # pragma: no cover - MicroPython runtime path
+    Any = Dict = List = Optional = None  # type: ignore[assignment,misc]
 
 # ---------------------------------------------------------------------------
-# Optional: UUID generation (uuid module; MicroPython has a minimal version)
+# Optional standard-library imports (not available on MicroPython)
 # ---------------------------------------------------------------------------
 
 try:
     import uuid as _uuid_mod
-
-    def _new_uuid() -> str:
-        return str(_uuid_mod.uuid4())
-
-except ImportError:  # pragma: no cover — MicroPython fallback
-    import random  # type: ignore[import]
-
-    def _new_uuid() -> str:  # type: ignore[misc]
-        hex_chars = "0123456789abcdef"
-        parts = []
-        for length in (8, 4, 4, 4, 12):
-            parts.append("".join(random.choice(hex_chars) for _ in range(length)))
-        return "-".join(parts)
-
-
-# ---------------------------------------------------------------------------
-# Optional: threading (not available on MicroPython)
-# ---------------------------------------------------------------------------
+    _HAS_UUID = True
+except ImportError:
+    _HAS_UUID = False
 
 try:
-    from threading import Lock as _Lock
+    from datetime import datetime, timezone
+    _HAS_DATETIME = True
+except ImportError:
+    _HAS_DATETIME = False
 
-    def _make_lock():
-        return _Lock()
+try:
+    import time as _time
+    _HAS_TIME = True
+except ImportError:
+    _HAS_TIME = False
 
-except ImportError:  # pragma: no cover — MicroPython fallback
-    class _NoOpLock:  # type: ignore[no-redef]
-        def __enter__(self):
-            return self
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
-        def __exit__(self, *_):
-            pass
-
-    def _make_lock():  # type: ignore[misc]
-        return _NoOpLock()
-
+DEFAULT_MAX_BUFFER_SIZE = 500
+DEFAULT_MAX_DISK_BYTES = 10 * 1024 * 1024  # 10 MB
+DEFAULT_OVERFLOW_PATH = "/tmp/wrack_telemetry_overflow.json"
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+_counter = 0
+
+
+def _open_text(path: str, mode: str):
+    """Open *path* as a UTF-8 text file, tolerant of MicroPython.
+
+    CPython accepts an ``encoding`` keyword; Pybricks/MicroPython's ``open()``
+    does not and raises ``TypeError``.  Fall back to a plain ``open()`` in that
+    case so the overflow-persistence path works on the EV3.
+    """
+    try:
+        return open(path, mode, encoding="utf-8")
+    except TypeError:  # pragma: no cover - MicroPython runtime path
+        return open(path, mode)
+
+
+def _generate_event_id() -> str:
+    """Return a unique event ID string.
+
+    Uses ``uuid.uuid4()`` when available; otherwise falls back to a simple
+    monotonically increasing counter prefixed with zeros so downstream
+    validators (which expect UUID format) can still be satisfied during tests
+    that mock the ID.
+    """
+    if _HAS_UUID:
+        return str(_uuid_mod.uuid4())
+    global _counter
+    _counter += 1
+    # Produce a deterministic UUID-shaped string for MicroPython
+    hex_str = format(_counter, "032x")
+    return f"{hex_str[0:8]}-{hex_str[8:12]}-{hex_str[12:16]}-{hex_str[16:20]}-{hex_str[20:32]}"
+
+
 def _utc_now_iso() -> str:
-    """Return the current UTC time as an ISO 8601 string ending in Z."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    """Return the current UTC time as an ISO 8601 string ending in ``Z``."""
+    if _HAS_DATETIME:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if _HAS_TIME:
+        try:
+            epoch = int(_time.time())
+            if hasattr(_time, "gmtime"):
+                tm = _time.gmtime(epoch)
+                return (
+                    f"{tm[0]:04d}-{tm[1]:02d}-{tm[2]:02d}T"
+                    f"{tm[3]:02d}:{tm[4]:02d}:{tm[5]:02d}Z"
+                )
+        except Exception:
+            pass
+    return "1970-01-01T00:00:00Z"
 
 
 # ---------------------------------------------------------------------------
@@ -92,210 +124,329 @@ def _utc_now_iso() -> str:
 
 
 class TelemetryCollector:
-    """
-    Buffered, thread-safe telemetry event collector.
-
-    Builds standard event envelopes (UUID event_id, ISO timestamp, source,
-    session/device IDs, JSON payload) and stores them in a bounded in-memory
-    FIFO deque.  When the buffer is full the *oldest* event is dropped first
-    (FIFO drop); if *disk_spill_path* is set the dropped event is written to
-    that file as a JSON line before being removed from memory.
+    """Collect, buffer, and expose telemetry events from the EV3 controller.
 
     Parameters
     ----------
     source:
-        Event source tag (one of ``VALID_SOURCES`` — e.g. ``"ev3"``).
-    session_id:
-        Optional session identifier injected into every event envelope.
-    device_id:
-        Optional device identifier injected into every event envelope.
-    max_buffer:
-        Maximum number of events held in memory (default 500).
-    disk_spill_path:
-        Optional path to a file used for overflow events.  Each spilled event
-        is appended as a single JSON line.  The file is created if it does not
-        exist.  Pass ``None`` to disable disk spill (default).
-    validate:
-        If ``True`` (default) each event is validated via
-        :func:`telemetry.schemas.validate_event` before being buffered.
-        Invalid events are silently discarded; the validation error is
-        available via the return value of :meth:`collect`.
+        The event source string (e.g. ``"ev3"``).  Must be one of the
+        values defined in ``telemetry.schemas.VALID_SOURCES``.
+    max_buffer_size:
+        Maximum number of events to hold in memory before falling back to
+        disk persistence.  Oldest events are dropped after the limit is
+        reached *and* disk persistence is also full.
+    overflow_path:
+        File path used to persist overflow events to disk.  Set to
+        ``None`` to disable disk persistence.
+    max_disk_bytes:
+        Maximum bytes written to the overflow file.  Writing stops once
+        this limit is reached.
     """
 
     def __init__(
         self,
         source: str = "ev3",
-        session_id: Optional[str] = None,
-        device_id: Optional[str] = None,
-        max_buffer: int = 500,
-        disk_spill_path: Optional[str] = None,
-        validate: bool = True,
+        max_buffer_size: int = DEFAULT_MAX_BUFFER_SIZE,
+        overflow_path: Optional[str] = DEFAULT_OVERFLOW_PATH,
+        max_disk_bytes: int = DEFAULT_MAX_DISK_BYTES,
     ) -> None:
-        if max_buffer <= 0:
-            raise ValueError(
-                f"max_buffer must be a positive integer, got {max_buffer!r}"
-            )
-        self._source = source
-        self._session_id = session_id
-        self._device_id = device_id
-        self._max_buffer = max_buffer
-        self._disk_spill_path = disk_spill_path
-        self._validate = validate
+        self.source = source
+        self.max_buffer_size = max_buffer_size
+        self.overflow_path = overflow_path
+        self.max_disk_bytes = max_disk_bytes
 
-        self._buffer: deque = deque()
-        self._lock = _make_lock()
+        self._buffer: List[Dict[str, Any]] = []
         self._dropped_count: int = 0
-        self._invalid_count: int = 0
 
     # ------------------------------------------------------------------
-    # Public API
+    # Core factory method
     # ------------------------------------------------------------------
 
-    def collect(
-        self, event_type: str, **data: Any
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Build and buffer a telemetry event.
+    def create_event(
+        self,
+        event_type: str,
+        payload: Dict[str, Any],
+        *,
+        event_id: Optional[str] = None,
+        timestamp: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Build a fully-formed telemetry event envelope dict.
 
         Parameters
         ----------
         event_type:
-            One of ``VALID_EVENT_TYPES`` (e.g. ``"battery_status"``).
-        **data:
-            Payload fields for the event type.  These are passed verbatim as
-            the ``payload`` dict.
+            One of the recognised event type strings
+            (e.g. ``"battery_status"``).
+        payload:
+            Event-type-specific payload dict.
+        event_id:
+            Override the auto-generated UUID (useful in tests).
+        timestamp:
+            Override the auto-generated timestamp (useful in tests).
+        source:
+            Override the collector's default source.
 
         Returns
         -------
-        dict or None
-            The buffered event dict on success; ``None`` if the event failed
-            validation.
+        dict
+            A dict conforming to the event envelope schema.
         """
-        event = self._build_event(event_type, data)
+        return {
+            "event_id": event_id or _generate_event_id(),
+            "event_type": event_type,
+            "source": source or self.source,
+            "timestamp": timestamp or _utc_now_iso(),
+            "payload": payload,
+        }
 
-        if self._validate:
-            try:
-                validate_event(event)
-            except ValidationError:
-                with self._lock:
-                    self._invalid_count += 1
-                return None
+    # ------------------------------------------------------------------
+    # collect helpers — one per P0 event type
+    # ------------------------------------------------------------------
 
-        with self._lock:
-            if len(self._buffer) >= self._max_buffer:
-                dropped = self._buffer.popleft()
-                self._dropped_count += 1
-                self._spill_to_disk(dropped)
-            self._buffer.append(event)
-
-        return event
-
-    def get_events(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
-        """
-        Return a snapshot of buffered events without removing them.
+    def collect_battery_status(
+        self,
+        voltage_mv: int,
+        percentage: float,
+        *,
+        voltage_v: Optional[float] = None,
+        is_critical: Optional[bool] = None,
+        battery_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create and buffer a ``battery_status`` event.
 
         Parameters
         ----------
-        limit:
-            Maximum number of events to return.  ``None`` returns all.
-
-        Returns
-        -------
-        list[dict]
-            A copy of the buffered events (oldest first).
+        voltage_mv:
+            Battery voltage in millivolts (non-negative integer).
+        percentage:
+            State of charge 0–100.
+        voltage_v:
+            Optional voltage in volts (float).
+        is_critical:
+            Optional flag indicating critically-low battery.
+        battery_type:
+            One of ``"rechargeable"``, ``"alkaline"``, or ``"unknown"``.
         """
-        with self._lock:
-            events = list(self._buffer)
-        return events if limit is None else events[:limit]
+        payload: Dict[str, Any] = {
+            "voltage_mv": voltage_mv,
+            "percentage": percentage,
+        }
+        if voltage_v is not None:
+            payload["voltage_v"] = voltage_v
+        if is_critical is not None:
+            payload["is_critical"] = is_critical
+        if battery_type is not None:
+            payload["battery_type"] = battery_type
+
+        event = self.create_event("battery_status", payload)
+        self._buffer_event(event)
+        return event
+
+    def collect_command_received(
+        self,
+        command: str,
+        *,
+        controller_type: Optional[str] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Create and buffer a ``command_received`` event."""
+        payload: Dict[str, Any] = {"command": command}
+        if controller_type is not None:
+            payload["controller_type"] = controller_type
+        if params is not None:
+            payload["params"] = params
+
+        event = self.create_event("command_received", payload)
+        self._buffer_event(event)
+        return event
+
+    def collect_command_executed(
+        self,
+        command: str,
+        success: bool,
+        *,
+        duration_ms: Optional[float] = None,
+        controller_type: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create and buffer a ``command_executed`` event."""
+        payload: Dict[str, Any] = {"command": command, "success": success}
+        if duration_ms is not None:
+            payload["duration_ms"] = duration_ms
+        if controller_type is not None:
+            payload["controller_type"] = controller_type
+        if error_message is not None:
+            payload["error_message"] = error_message
+
+        event = self.create_event("command_executed", payload)
+        self._buffer_event(event)
+        return event
+
+    def collect_device_status(
+        self,
+        device_name: str,
+        status: str,
+        *,
+        device_type: Optional[str] = None,
+        port: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create and buffer a ``device_status`` event."""
+        payload: Dict[str, Any] = {
+            "device_name": device_name,
+            "status": status,
+        }
+        if device_type is not None:
+            payload["device_type"] = device_type
+        if port is not None:
+            payload["port"] = port
+        if error_message is not None:
+            payload["error_message"] = error_message
+
+        event = self.create_event("device_status", payload)
+        self._buffer_event(event)
+        return event
+
+    def collect_error(
+        self,
+        error_type: str,
+        message: str,
+        *,
+        stack_trace: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Create and buffer an ``error`` event."""
+        payload: Dict[str, Any] = {
+            "error_type": error_type,
+            "message": message,
+        }
+        if stack_trace is not None:
+            payload["stack_trace"] = stack_trace
+        if context is not None:
+            payload["context"] = context
+
+        event = self.create_event("error", payload)
+        self._buffer_event(event)
+        return event
+
+    def collect_connection_status(
+        self,
+        connected: bool,
+        *,
+        host: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create and buffer a ``connection_status`` event."""
+        payload: Dict[str, Any] = {"connected": connected}
+        if host is not None:
+            payload["host"] = host
+        if error_message is not None:
+            payload["error_message"] = error_message
+
+        event = self.create_event("connection_status", payload)
+        self._buffer_event(event)
+        return event
+
+    # ------------------------------------------------------------------
+    # Buffer management
+    # ------------------------------------------------------------------
+
+    def _buffer_event(self, event: Dict[str, Any]) -> None:
+        """Append an event to the in-memory buffer.
+
+        When the buffer is full the oldest event is removed.  If disk
+        persistence is enabled the removed event is written there instead.
+        """
+        if len(self._buffer) >= self.max_buffer_size:
+            evicted = self._buffer.pop(0)
+            self._persist_to_disk(evicted)
+        self._buffer.append(event)
+
+    def _persist_to_disk(self, event: Dict[str, Any]) -> None:
+        """Append a single event to the overflow file (if enabled)."""
+        if not self.overflow_path:
+            self._dropped_count += 1
+            return
+        try:
+            line = json.dumps(event) + "\n"
+            try:
+                line_bytes = len(line.encode("utf-8"))
+            except Exception:  # noqa: BLE001 — fall back to char count
+                line_bytes = len(line)
+            current_size = 0
+            if os.path.exists(self.overflow_path):
+                current_size = os.path.getsize(self.overflow_path)
+            # Reject before writing so a single large event cannot push the
+            # file past the configured cap.
+            if current_size + line_bytes > self.max_disk_bytes:
+                self._dropped_count += 1
+                return
+            with _open_text(self.overflow_path, "a") as fh:
+                fh.write(line)
+        except Exception:  # noqa: BLE001 — best-effort overflow must never crash collect_*()
+            self._dropped_count += 1
+
+    # ------------------------------------------------------------------
+    # Public buffer accessors
+    # ------------------------------------------------------------------
 
     def flush(self) -> List[Dict[str, Any]]:
-        """
-        Return all buffered events and clear the buffer.
+        """Return all buffered events and clear the in-memory buffer.
 
         Returns
         -------
-        list[dict]
-            All buffered events (oldest first).  The internal buffer is
-            cleared after this call.
+        list
+            Copy of the current buffer; the internal buffer is emptied.
         """
-        with self._lock:
-            events = list(self._buffer)
-            self._buffer.clear()
+        events = list(self._buffer)
+        self._buffer.clear()
         return events
 
-    def size(self) -> int:
-        """Return the number of events currently in the buffer."""
-        with self._lock:
-            return len(self._buffer)
+    def peek(self) -> List[Dict[str, Any]]:
+        """Return a snapshot of the buffer without clearing it."""
+        return list(self._buffer)
 
-    def clear(self) -> None:
-        """Discard all buffered events."""
-        with self._lock:
-            self._buffer.clear()
+    @property
+    def buffer_size(self) -> int:
+        """Number of events currently in the in-memory buffer."""
+        return len(self._buffer)
 
     @property
     def dropped_count(self) -> int:
-        """Total number of events dropped due to buffer overflow."""
-        with self._lock:
-            return self._dropped_count
+        """Number of events dropped due to buffer + disk overflow."""
+        return self._dropped_count
 
-    @property
-    def invalid_count(self) -> int:
-        """Total number of events rejected due to validation failure."""
-        with self._lock:
-            return self._invalid_count
+    def clear(self) -> None:
+        """Discard all buffered events without sending them."""
+        self._buffer.clear()
 
-    @property
-    def source(self) -> str:
-        """The source tag used for all events from this collector."""
-        return self._source
+    def load_overflow(self) -> List[Dict[str, Any]]:
+        """Read and return events from the overflow file (one JSON per line).
 
-    @property
-    def session_id(self) -> Optional[str]:
-        """The session identifier injected into every event envelope."""
-        return self._session_id
-
-    @property
-    def device_id(self) -> Optional[str]:
-        """The device identifier injected into every event envelope."""
-        return self._device_id
-
-    @property
-    def max_buffer(self) -> int:
-        """The maximum number of events held in memory."""
-        return self._max_buffer
-
-    @property
-    def disk_spill_path(self) -> Optional[str]:
-        """The path used for overflow events, or ``None`` if disabled."""
-        return self._disk_spill_path
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _build_event(self, event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Construct a complete event envelope dict."""
-        event: Dict[str, Any] = {
-            "event_id": _new_uuid(),
-            "event_type": event_type,
-            "source": self._source,
-            "timestamp": _utc_now_iso(),
-            "payload": payload,
-        }
-        if self._session_id is not None:
-            event["session_id"] = self._session_id
-        if self._device_id is not None:
-            event["device_id"] = self._device_id
-        return event
-
-    def _spill_to_disk(self, event: Dict[str, Any]) -> None:
-        """Append a single event as a JSON line to the spill file."""
-        if self._disk_spill_path is None:
-            return
+        The overflow file is *not* deleted by this method — call
+        ``clear_overflow()`` once the events have been sent successfully.
+        """
+        if not self.overflow_path or not os.path.exists(self.overflow_path):
+            return []
+        events: List[Dict[str, Any]] = []
         try:
-            os.makedirs(os.path.dirname(os.path.abspath(self._disk_spill_path)), exist_ok=True)
-            with open(self._disk_spill_path, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(event) + "\n")
-        except (OSError, TypeError, ValueError):
-            pass  # Best-effort — never raise from spill path (includes json serialization errors)
+            with _open_text(self.overflow_path, "r") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        try:
+                            events.append(json.loads(line))
+                        except (ValueError, KeyError):
+                            pass
+        except OSError:
+            pass
+        return events
+
+    def clear_overflow(self) -> None:
+        """Delete the overflow file if it exists."""
+        if self.overflow_path and os.path.exists(self.overflow_path):
+            try:
+                os.remove(self.overflow_path)
+            except OSError:
+                pass
