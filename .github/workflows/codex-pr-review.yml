@@ -13,14 +13,21 @@ permissions:
 
 jobs:
   codex:
-    # Run only for non-draft PRs AND only when the PR author is a trusted
-    # collaborator. This job exposes OPENAI_API_KEY while checking out and
-    # reviewing PR-authored code/description, so restricting it to trusted
-    # actors prevents a malicious fork PR from exfiltrating the secret via
-    # prompt injection or by running checked-out code.
+    # Run only for non-draft PRs that originate from a branch in THIS
+    # repository (i.e. not a fork). This job exposes OPENAI_API_KEY while
+    # checking out and reviewing PR-authored code/description, so restricting
+    # it to same-repo PRs prevents a malicious fork PR from exfiltrating the
+    # secret via prompt injection or by running checked-out code. Only
+    # trusted collaborators can push branches to this repo, so a same-repo
+    # check is the effective trust boundary.
+    #
+    # NB: we deliberately do NOT gate on `author_association` — for PR authors
+    # whose org membership is private, the webhook payload reports
+    # "CONTRIBUTOR" instead of "MEMBER", which caused this job to be skipped
+    # for trusted maintainers.
     if: >-
       github.event.pull_request.draft == false &&
-      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
 
     outputs:
