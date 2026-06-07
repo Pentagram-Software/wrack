@@ -222,8 +222,12 @@ class TelemetrySender:
 
         Raises
         ------
-        Exception
+        IOError
             Any network or HTTP-level error (caller handles retries).
+            Also raised for HTTP 207 Multi-Status, which the Cloud Function
+            uses to signal partial batch failure (some events were rejected by
+            validation or BigQuery).  Retrying is safe because the Cloud
+            Function inserts rows with ``insertId`` for idempotent deduplication.
         """
         headers = {
             "Content-Type": "application/json",
@@ -243,11 +247,26 @@ class TelemetrySender:
             # urequests uses .status_code too, but guard anyway
             status = getattr(response, "status", None)
 
-        if status is not None and not (200 <= int(status) < 300):
-            raise IOError(
-                f"HTTP {status} from telemetry endpoint: "
-                f"{getattr(response, 'text', '')[:200]}"
-            )
+        if status is not None:
+            status_int = int(status)
+
+            if not (200 <= status_int < 300):
+                raise IOError(
+                    f"HTTP {status} from telemetry endpoint: "
+                    f"{getattr(response, 'text', '')[:200]}"
+                )
+
+            if status_int == 207:
+                # The Cloud Function returns 207 only when at least one event
+                # failed validation or the BigQuery insert was partial
+                # (success: false in the response body).  Raise so the
+                # caller retries the whole batch; insertId deduplicates any
+                # rows that were already inserted successfully.
+                body_text = getattr(response, "text", "") or ""
+                raise IOError(
+                    f"HTTP 207 partial failure from telemetry endpoint "
+                    f"(some events rejected): {body_text[:300]}"
+                )
 
     def _async_worker(self, events: List[Dict[str, Any]]) -> None:
         """Thread target for :meth:`send_events_async`."""

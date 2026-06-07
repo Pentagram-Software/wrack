@@ -387,6 +387,91 @@ class TestFlushAndSend:
 
 
 # ---------------------------------------------------------------------------
+# HTTP 207 Multi-Status — partial batch failure
+# ---------------------------------------------------------------------------
+
+class TestSendEvents207Partial:
+    """HTTP 207 from the Cloud Function signals partial batch failure.
+
+    The Cloud Function (telemetry.js) returns 207 with ``success: false``
+    when at least one event fails schema validation or BigQuery insert.
+    A broad 2xx check would silently treat this as success, losing failed
+    events.  The sender must treat 207 as a retriable error.
+    """
+
+    def _207_response(self, inserted: int = 1, failed: int = 1):
+        resp = MagicMock()
+        resp.status_code = 207
+        resp.text = json.dumps({
+            "success": False,
+            "inserted": inserted,
+            "failed": failed,
+            "errors": [
+                {"index": 1, "event_id": "bad-id", "errors": ["event_type is required"]}
+            ],
+        })
+        return resp
+
+    def test_returns_false_on_207(self):
+        s = _make_sender(max_retries=0)
+        events = [_make_event(), _make_event()]
+        with patch("telemetry.sender._http") as mock_http:
+            mock_http.post.return_value = self._207_response()
+            result = s.send_events(events)
+        assert result is False
+
+    def test_on_error_callback_called_on_207(self):
+        error_cb = MagicMock()
+        s = _make_sender(max_retries=0, on_error=error_cb)
+        events = [_make_event()]
+        with patch("telemetry.sender._http") as mock_http:
+            mock_http.post.return_value = self._207_response()
+            s.send_events(events)
+        error_cb.assert_called_once()
+        exc = error_cb.call_args[0][0]
+        assert isinstance(exc, IOError)
+        assert "207" in str(exc)
+
+    def test_retries_on_207(self):
+        """Sender should retry the batch when 207 is received."""
+        ok_response = MagicMock()
+        ok_response.status_code = 200
+        s = _make_sender(max_retries=2)
+        events = [_make_event()]
+        with patch("telemetry.sender._http") as mock_http, \
+             patch("telemetry.sender._time"):
+            mock_http.post.side_effect = [
+                self._207_response(),
+                self._207_response(),
+                ok_response,
+            ]
+            result = s.send_events(events)
+        assert result is True
+        assert mock_http.post.call_count == 3
+
+    def test_207_is_not_treated_as_success(self):
+        """Ensure on_success callback is NOT called for a 207 response."""
+        success_cb = MagicMock()
+        s = _make_sender(max_retries=0, on_success=success_cb)
+        events = [_make_event()]
+        with patch("telemetry.sender._http") as mock_http:
+            mock_http.post.return_value = self._207_response()
+            s.send_events(events)
+        success_cb.assert_not_called()
+
+    def test_207_error_message_contains_response_body(self):
+        """Error surfaced to on_error should include partial-failure details."""
+        errors_received = []
+        s = _make_sender(max_retries=0, on_error=lambda e: errors_received.append(e))
+        events = [_make_event()]
+        with patch("telemetry.sender._http") as mock_http:
+            mock_http.post.return_value = self._207_response(inserted=3, failed=2)
+            s.send_events(events)
+        assert errors_received
+        assert "207" in str(errors_received[0])
+
+
+# ---------------------------------------------------------------------------
 # No HTTP library available
 # ---------------------------------------------------------------------------
 
