@@ -173,13 +173,15 @@ describe('TelemetrySender integration — max batch (100 events)', () => {
 
     const rows = mockInsert.mock.calls[0][0];
     rows.forEach((row) => {
-      expect(row.source).toBe('web');
-      expect(typeof row.payload).toBe('string');
-      expect(JSON.parse(row.payload)).toMatchObject({
+      // Rows are wrapped as { insertId, json } with raw:true for BQ idempotency.
+      expect(row.insertId).toBeDefined();
+      expect(row.json.source).toBe('web');
+      expect(typeof row.json.payload).toBe('string');
+      expect(JSON.parse(row.json.payload)).toMatchObject({
         device_name: 'browser',
         status: 'connected',
       });
-      expect(row.ingested_at).toBeDefined();
+      expect(row.json.ingested_at).toBeDefined();
     });
   });
 });
@@ -263,12 +265,13 @@ describe('TelemetrySender integration — event field mapping', () => {
 
     expect(res.statusCode).toBe(200);
     const row = mockInsert.mock.calls[0][0][0];
-    expect(row.session_id).toBe('sess-abc');
-    expect(row.device_id).toBe('browser-001');
-    expect(row.version).toBe('1.0.0');
-    expect(row.tags).toEqual(['production']);
-    expect(row.user_id).toBe('user-42');
-    expect(row.correlation_id).toBe('corr-xyz');
+    // Row is wrapped as { insertId, json } with raw:true for BQ idempotency.
+    expect(row.json.session_id).toBe('sess-abc');
+    expect(row.json.device_id).toBe('browser-001');
+    expect(row.json.version).toBe('1.0.0');
+    expect(row.json.tags).toEqual(['production']);
+    expect(row.json.user_id).toBe('user-42');
+    expect(row.json.correlation_id).toBe('corr-xyz');
   });
 
   test('optional envelope fields default to null when absent', async () => {
@@ -284,11 +287,12 @@ describe('TelemetrySender integration — event field mapping', () => {
     await invokeHandler(telemetryHandler, req, res);
 
     const row = mockInsert.mock.calls[0][0][0];
-    expect(row.session_id).toBeNull();
-    expect(row.device_id).toBeNull();
-    expect(row.version).toBeNull();
-    expect(row.tags).toBeNull();
-    expect(row.user_id).toBeNull();
-    expect(row.correlation_id).toBeNull();
+    // Row is wrapped as { insertId, json } with raw:true for BQ idempotency.
+    expect(row.json.session_id).toBeNull();
+    expect(row.json.device_id).toBeNull();
+    expect(row.json.version).toBeNull();
+    expect(row.json.tags).toBeNull();
+    expect(row.json.user_id).toBeNull();
+    expect(row.json.correlation_id).toBeNull();
   });
 });
