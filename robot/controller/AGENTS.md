@@ -5,6 +5,49 @@
 - Hardware access goes through `DeviceManager` for safe/optional device handling.
 - Local development can run without an EV3 by keeping hardware calls mocked or guarded.
 
+## Module structure
+
+| Module | Purpose |
+|--------|---------|
+| `event_handler/` | Base event pub/sub mixin (`EventHandler`). |
+| `robot_controllers/` | PS4 + TCP network remote control. |
+| `ev3_devices/` | Device abstraction (`DeviceManager`, drive systems, turret, hot-plug). |
+| `wake_word/` | Mycroft Precise "Hey Wrack" wake-word detection. |
+| `error_reporting/` | MicroPython-safe structured error logging. |
+| `telemetry/` | Event collection, buffering, and HTTP sending to GCP Cloud Functions. |
+| `pixy_camera/` | Pixy2 vision camera wrapper. |
+
+### Telemetry module (`telemetry/`)
+
+The telemetry module provides a non-blocking pipeline for forwarding robot events to BigQuery via a GCP Cloud Function.
+
+| File | Role |
+|------|------|
+| `telemetry/__init__.py` | Public API — re-exports `TelemetryCollector`, `TelemetrySender`, and schema helpers. |
+| `telemetry/schemas.py` | Pure-Python event validation (MicroPython-compatible). |
+| `telemetry/collector.py` | Builds and buffers telemetry event envelopes; persists overflow to disk. |
+| `telemetry/sender.py` | HTTP POST to Cloud Function with batching and exponential back-off retry. |
+| `telemetry/tests/` | Unit tests for all three modules. |
+
+**Quick start:**
+```python
+from telemetry import TelemetryCollector, TelemetrySender
+
+collector = TelemetryCollector(source="ev3")
+sender = TelemetrySender(
+    endpoint="https://<region>-<project>.cloudfunctions.net/telemetryIngestion",
+    api_key="<api-key>",
+)
+
+collector.collect_battery_status(voltage_mv=7500, percentage=90.0)
+sender.flush_and_send(collector)          # blocking
+# or: sender.flush_and_send(collector, async_send=True)  # fire-and-forget
+```
+
+Environment variables used by the sender (read by the caller — not auto-read by the module):
+- `TELEMETRY_ENDPOINT` — Cloud Function URL.
+- `TELEMETRY_API_KEY` — API key for the `X-API-Key` header.
+
 ## Setup commands
 - Python 3.10+ recommended.
 - python -m venv .venv

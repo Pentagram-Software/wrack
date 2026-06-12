@@ -70,6 +70,11 @@ function validateEvent(event) {
 
   if (event.tags !== undefined && !Array.isArray(event.tags)) {
     errors.push('tags must be an array of strings when provided');
+  } else if (
+    Array.isArray(event.tags) &&
+    !event.tags.every((tag) => typeof tag === 'string')
+  ) {
+    errors.push('tags must be an array of strings when provided');
   }
 
   return { valid: errors.length === 0, errors };
@@ -162,16 +167,28 @@ functions.http('telemetryIngestion', (req, res) => {
     let insertedCount = validRows.length;
 
     try {
-      await table.insert(validRows.map((r) => r.row));
+      // Use event_id as insertId for best-effort deduplication in BigQuery's
+      // streaming buffer (~1-minute window).  This makes full-batch retries
+      // safe: already-inserted rows are silently de-duplicated by BigQuery
+      // rather than written twice.
+      await table.insert(
+        validRows.map((r) => ({ insertId: r.row.event_id, json: r.row })),
+        { raw: true }
+      );
     } catch (bqError) {
       if (bqError.name === 'PartialFailureError') {
         // bqError.errors: Array<{ row, errors: [{reason, message, location}] }>
         const rowErrors = bqError.errors || [];
 
-        bqFailures = rowErrors.map((e) => ({
-          event_id: e.row ? e.row.event_id : null,
-          errors: (e.errors || []).map((err) => err.message || err.reason || 'BigQuery insert error'),
-        }));
+        bqFailures = rowErrors.map((e) => {
+          // PartialFailureError row shape can be either raw data row or
+          // { insertId, json } wrapper depending on BigQuery client internals.
+          const rowData = e.row && e.row.json ? e.row.json : e.row;
+          return {
+            event_id: rowData ? rowData.event_id : null,
+            errors: (e.errors || []).map((err) => err.message || err.reason || 'BigQuery insert error'),
+          };
+        });
 
         const failedEventIds = new Set(bqFailures.map((f) => f.event_id).filter(Boolean));
         insertedCount = validRows.filter((r) => !failedEventIds.has(r.row.event_id)).length;
