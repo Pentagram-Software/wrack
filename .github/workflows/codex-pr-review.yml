@@ -25,9 +25,14 @@ jobs:
     # whose org membership is private, the webhook payload reports
     # "CONTRIBUTOR" instead of "MEMBER", which caused this job to be skipped
     # for trusted maintainers.
+    #
+    # Skip bot-authored PRs (e.g. cursor[bot], dependabot[bot]).
+    # The codex-action check-write-access step requires the actor to have
+    # repository write permissions, which GitHub App bots never have.
     if: >-
       github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.type != 'Bot'
     runs-on: ubuntu-latest
 
     outputs:
