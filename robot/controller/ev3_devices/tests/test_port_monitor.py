@@ -72,6 +72,32 @@ class TestPortMonitor:
         time.sleep(0.05)
         assert not port_monitor.is_running()
     
+    def test_start_does_not_use_daemon_kwarg(self, port_monitor):
+        """Regression test for PEN-188: Thread() must not receive the daemon kwarg.
+
+        pybricks MicroPython's threading module does not support the daemon
+        keyword argument. The constructor call must therefore omit it entirely.
+        The thread is stopped cleanly via the _running flag + join(), so daemon
+        behaviour is not needed.
+        """
+        import unittest.mock as mock_module
+        original_thread_class = threading.Thread
+        created_kwargs = []
+
+        def capturing_thread(*args, **kwargs):
+            created_kwargs.append(kwargs)
+            return original_thread_class(*args, **kwargs)
+
+        with mock_module.patch("ev3_devices.port_monitor.threading.Thread", side_effect=capturing_thread):
+            port_monitor.start()
+
+        port_monitor.stop()
+
+        assert len(created_kwargs) == 1, "Expected exactly one Thread to be created"
+        assert "daemon" not in created_kwargs[0], (
+            "daemon kwarg must not be passed to Thread() — it is unsupported by pybricks MicroPython"
+        )
+    
     def test_device_health_check_success(self, port_monitor, device_manager_with_motor):
         """Test health check passes for healthy device"""
         device_manager, motor = device_manager_with_motor
