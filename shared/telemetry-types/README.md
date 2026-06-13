@@ -66,6 +66,38 @@ if (!result.valid) {
 }
 ```
 
+### Web client — TelemetrySender
+
+The web client (`clients/web/src/lib/telemetry-sender.ts`) provides a higher-level
+`TelemetrySender` class that batches events and sends them to the `telemetryIngestion`
+Cloud Function:
+
+```typescript
+import { telemetrySender } from '@/lib/telemetry-sender';
+import type { TelemetryEventEnvelope } from '@/lib/telemetry-sender';
+
+// Track an event — it will be batched and flushed automatically
+telemetrySender.track({
+  event_id: crypto.randomUUID(),
+  event_type: 'device_status',
+  source: 'web',
+  timestamp: new Date().toISOString(),
+  payload: { device_name: 'browser', status: 'connected' },
+});
+
+// Flush immediately (e.g. before page unload)
+await telemetrySender.flush();
+```
+
+Key behaviours:
+- Batches up to **100 events** per HTTP request
+- **Exponential backoff** with 3 retries (delays: 1 s, 2 s, 4 s)
+- **Offline graceful degradation**: batches are dropped when `navigator.onLine === false`
+- **Non-blocking**: errors are logged but never thrown to callers
+- **Background flush** every 30 s for low-traffic scenarios
+
+Required env var: `NEXT_PUBLIC_TELEMETRY_FUNCTION_URL`
+
 ## Python usage
 
 ```python

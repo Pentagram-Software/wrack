@@ -65,7 +65,8 @@ wrack-control-center/
 │   │   ├── CameraView.tsx        # Video streaming
 │   │   └── ConnectionTest.tsx    # GCP connectivity testing
 │   └── lib/
-│       └── robot-api.ts           # GCP API client
+│       ├── robot-api.ts           # GCP API client (controlRobot)
+│       └── telemetry-sender.ts    # Telemetry batch sender (telemetryIngestion)
 ├── public/                        # Static assets
 ├── DESIGN.md                      # Technical architecture
 ├── NOTION_STATUS.md              # Project status & roadmap
@@ -103,6 +104,7 @@ wrack-control-center/
    Edit `.env.local` with your configuration:
    ```bash
    NEXT_PUBLIC_GCP_FUNCTION_URL=https://europe-central2-YOUR-PROJECT.cloudfunctions.net/controlRobot
+   NEXT_PUBLIC_TELEMETRY_FUNCTION_URL=https://europe-central2-YOUR-PROJECT.cloudfunctions.net/telemetryIngestion
    NEXT_PUBLIC_API_KEY=your-secure-api-key-here
    NEXT_PUBLIC_GCP_PROJECT_ID=your-project-id
    NEXT_PUBLIC_GCP_REGION=europe-central2
