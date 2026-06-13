@@ -7,7 +7,7 @@
 #   EV3_IP=1.2.3.4 make deploy-robot
 # ---------------------------------------------------------------------------
 -include robot/controller/deploy.conf
-EV3_IP ?= 192.168.1.100
+EV3_IP ?= 192.168.1.83
 EV3_USER ?= robot
 EV3_SSH_PORT ?= 22
 EV3_REMOTE_PATH ?= /home/robot/controller
@@ -63,8 +63,8 @@ deploy-robot:
 	@[ -n "$(EV3_IP)" ] || { echo "Error: EV3_IP is not set."; echo "  Set it in robot/controller/deploy.conf or run: EV3_IP=<host> make deploy-robot"; exit 1; }
 	@echo "==> Deploying robot/controller to $(EV3_USER)@$(EV3_IP):$(EV3_REMOTE_PATH) (ssh port $(EV3_SSH_PORT))"
 	@START=$$(date +%s); \
-	 rsync -avz --checksum --stats \
-	   -e "ssh -p $(EV3_SSH_PORT)" \
+	 rsync -avz --checksum --delete --stats \
+	   -e "ssh -p $(EV3_SSH_PORT) -o ConnectTimeout=15" \
 	   --exclude '__pycache__' --exclude '*.pyc' --exclude '.venv' \
 	   --exclude 'scripts/' --exclude 'tests/' --exclude '.git' \
 	   --exclude '*.md' --exclude 'AGENTS.md' --exclude '.DS_Store' \
@@ -78,8 +78,8 @@ deploy-robot-dry-run:
 	@command -v rsync >/dev/null 2>&1 || { echo "Error: rsync is required but not installed"; exit 1; }
 	@[ -n "$(EV3_IP)" ] || { echo "Error: EV3_IP is not set."; echo "  Set it in robot/controller/deploy.conf or run: EV3_IP=<host> make deploy-robot-dry-run"; exit 1; }
 	@echo "==> DRY RUN — would deploy robot/controller to $(EV3_USER)@$(EV3_IP):$(EV3_REMOTE_PATH) (ssh port $(EV3_SSH_PORT))"
-	rsync -avzn --checksum --stats \
-	  -e "ssh -p $(EV3_SSH_PORT)" \
+	@rsync -avzn --checksum --delete --stats \
+	  -e "ssh -p $(EV3_SSH_PORT) -o ConnectTimeout=15" \
 	  --exclude '__pycache__' --exclude '*.pyc' --exclude '.venv' \
 	  --exclude 'scripts/' --exclude 'tests/' --exclude '.git' \
 	  --exclude '*.md' --exclude 'AGENTS.md' --exclude '.DS_Store' \

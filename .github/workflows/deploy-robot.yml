@@ -11,6 +11,8 @@ jobs:
   deploy:
     name: Deploy robot/controller to EV3
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -33,17 +35,13 @@ jobs:
         env:
           EV3_IP_SECRET: ${{ secrets.EV3_IP }}
 
-      - name: Install rsync
-        if: steps.check.outputs.ev3_configured == 'true'
-        run: sudo apt-get update -q && sudo apt-get install -y rsync
-
       - name: Setup SSH key
         if: steps.check.outputs.ev3_configured == 'true'
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.EV3_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -p "${{ secrets.EV3_SSH_PORT || '22' }}" -H "${{ secrets.EV3_IP }}" >> ~/.ssh/known_hosts
+          ssh-keyscan -p "${{ secrets.EV3_SSH_PORT || '22' }}" -o ConnectTimeout=15 -H "${{ secrets.EV3_IP }}" >> ~/.ssh/known_hosts
         env:
           EV3_SSH_PORT: ${{ secrets.EV3_SSH_PORT }}
 
