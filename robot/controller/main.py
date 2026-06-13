@@ -72,6 +72,63 @@ except Exception as e:
     print("Error importing WakeWordDetector: {} - wake word detection will be disabled".format(e))
     WakeWordDetector = None
 
+# Import telemetry module with error handling
+TelemetryCollector = None
+TelemetrySender = None
+StatusCollector = None
+try:
+    from telemetry import TelemetryCollector, TelemetrySender, StatusCollector
+    print("Telemetry module imported successfully")
+except ImportError as e:
+    print("Telemetry module not available: {} - telemetry collection will be disabled".format(e))
+except Exception as e:
+    print("Error importing telemetry module: {} - telemetry collection will be disabled".format(e))
+
+# Load telemetry runtime config (see telemetry_config.py.example for setup instructions)
+_TELEMETRY_ENDPOINT = None
+_TELEMETRY_API_KEY = None
+_TELEMETRY_DEVICE_ID = None
+try:
+    from telemetry_config import TELEMETRY_ENDPOINT, TELEMETRY_API_KEY
+    _TELEMETRY_ENDPOINT = TELEMETRY_ENDPOINT
+    _TELEMETRY_API_KEY = TELEMETRY_API_KEY
+    try:
+        from telemetry_config import TELEMETRY_DEVICE_ID
+        _TELEMETRY_DEVICE_ID = TELEMETRY_DEVICE_ID
+    except ImportError:
+        pass
+    print("Telemetry config loaded")
+except ImportError:
+    print("telemetry_config.py not found - events collected but not sent")
+    print("Copy telemetry_config.py.example to telemetry_config.py to enable sending")
+
+# Initialise telemetry instances (collection always on; sending only when config is present)
+_telemetry_collector = None
+_telemetry_sender = None
+_status_collector = None
+
+if TelemetryCollector:
+    _telemetry_collector = TelemetryCollector(device_id=_TELEMETRY_DEVICE_ID)
+    print("Telemetry collector initialised")
+
+if TelemetrySender and _TELEMETRY_ENDPOINT and _TELEMETRY_API_KEY:
+    _telemetry_sender = TelemetrySender(
+        endpoint=_TELEMETRY_ENDPOINT,
+        api_key=_TELEMETRY_API_KEY,
+    )
+    print("Telemetry sender initialised")
+
+
+def _telemetry_send_loop():
+    """Background daemon: flush and POST buffered events every 2 minutes."""
+    import threading
+    while True:
+        sleep(120)
+        try:
+            if _telemetry_sender and _telemetry_collector:
+                _telemetry_sender.send_from_collector(_telemetry_collector)
+        except Exception as exc:
+            print("Telemetry flush error: {}".format(exc))
 
 
 #TODO: Better understand the debug mode
@@ -351,6 +408,19 @@ def cancel_terrain_scan(value):
 def quit(value):
     global terrain_scanner, wake_word_detector
     global _runtime_controller, _runtime_remote_controller
+    global _status_collector
+
+    # Stop telemetry collection and flush any remaining buffered events
+    if _status_collector:
+        print("Shutting down StatusCollector...")
+        _status_collector.stop()
+    if _telemetry_sender and _telemetry_collector:
+        print("Flushing telemetry events...")
+        try:
+            _telemetry_sender.send(_telemetry_collector.flush())
+        except Exception as exc:
+            print("Final telemetry flush failed: {}".format(exc))
+
     # Stop terrain scanner
     if terrain_scanner:
         print("Shutting down TerrainScanner...")
@@ -567,7 +637,27 @@ def main():
     _runtime_remote_controller = remote_controller
     # Attach device manager so status can include battery/cpu/ip
     remote_controller.device_manager = device_manager
-    
+
+    # Wire telemetry collector into both controllers so every command is recorded
+    if _telemetry_collector:
+        controller.set_telemetry_collector(_telemetry_collector)
+        remote_controller.set_telemetry_collector(_telemetry_collector)
+        print("Telemetry collector wired into PS4 and network controllers")
+
+    # Start periodic battery/motor/device telemetry collection
+    global _status_collector
+    if StatusCollector and _telemetry_collector:
+        _status_collector = StatusCollector(_telemetry_collector, device_manager)
+        _status_collector.start()
+        print("StatusCollector started (battery 60s, motor 10s, device events immediate)")
+
+    # Start background telemetry flush thread (sends buffered events every 2 minutes)
+    if _telemetry_sender:
+        import threading as _t
+        _flush_thread = _t.Thread(target=_telemetry_send_loop, daemon=True, name="TelemetryFlush")
+        _flush_thread.start()
+        print("Telemetry flush thread started")
+
     # Start the controller thread first
     controller.start()
     

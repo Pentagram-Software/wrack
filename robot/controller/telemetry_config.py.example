@@ -1,0 +1,14 @@
+# Telemetry configuration for the EV3 robot controller.
+#
+# Copy this file to telemetry_config.py and fill in the values before
+# deploying to the EV3. The actual telemetry_config.py is gitignored so
+# credentials are never committed.
+
+# Full URL of the telemetryIngestion Cloud Function
+TELEMETRY_ENDPOINT = "https://<region>-<project>.cloudfunctions.net/telemetryIngestion"
+
+# API key sent in the X-API-Key header (matches cloud/functions/.env API_KEY)
+TELEMETRY_API_KEY = "your-secret-api-key"
+
+# Optional: human-readable identifier for this EV3 unit (included in every event)
+TELEMETRY_DEVICE_ID = "ev3-001"
