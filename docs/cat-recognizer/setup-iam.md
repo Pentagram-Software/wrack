@@ -171,7 +171,7 @@ Optional flags:
 |---|---|
 | `--key-dir PATH` | Where to write JSON keys (default: `cloud/cat-recognizer/keys/`) |
 | `--store-in-secret-manager` | Upload keys to Secret Manager after creation |
-| `--skip-buckets` | Recreate SA/IAM only; skip bucket creation, lifecycle, and folder structure |
+| `--skip-bucket-setup` | Recreate SA/IAM only; skip bucket creation, lifecycle, folder structure, and bucket IAM |
 | `--dry-run` | Print commands, no execution |
 
 ---
@@ -312,7 +312,7 @@ GCP_PROJECT_ID=wrack-control bash cloud/cat-recognizer/setup-iam.sh
 | `PERMISSION_DENIED` creating bucket | Missing `roles/storage.admin` | Grant storage admin |
 | Smoke test: `bucket not found` | `setup-iam.sh` not run yet | Run `setup-iam.sh` first |
 | Smoke test: `PERMISSION_DENIED` on write | Wrong key used, or wrong mode | Check `GOOGLE_APPLICATION_CREDENTIALS` path and `--mode` flag |
-| Smoke test: `.keep not found` | `setup-iam.sh` not run, or `--skip-buckets` was used | Re-run without `--skip-buckets` |
+| Smoke test: `.keep not found` | `setup-iam.sh` not run, or `--skip-bucket-setup` was used | Re-run without `--skip-bucket-setup` |
 | API not enabled error | APIs not enabled | Run `setup-apis.sh` first |
 
 ---

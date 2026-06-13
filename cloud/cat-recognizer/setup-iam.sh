@@ -9,7 +9,7 @@
 #   --key-dir PATH              Directory to write JSON keys (default: ./keys)
 #   --store-in-secret-manager   Also store generated keys in GCP Secret Manager
 #   --dry-run                   Print commands without executing them
-#   --skip-buckets              Skip GCS bucket creation, lifecycle, and folder structure (IAM only)
+#   --skip-bucket-setup         Skip all bucket setup: creation, lifecycle, folder structure, and bucket IAM
 #
 # Resources created:
 #
@@ -74,7 +74,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --store-in-secret-manager) STORE_IN_SECRET_MANAGER=true ;;
-    --skip-buckets) SKIP_BUCKETS=true ;;
+    --skip-bucket-setup) SKIP_BUCKETS=true ;;
     --key-dir)
       if [[ $# -lt 2 || "$2" == -* ]]; then
         echo "Error: --key-dir requires a path argument" >&2
@@ -162,7 +162,7 @@ set_project() {
 # ── Step 2: Create GCS buckets ──────────────────────────────────────────────────
 create_buckets() {
   if [[ "${SKIP_BUCKETS}" == "true" ]]; then
-    info "Skipping bucket creation (--skip-buckets)"
+    info "Skipping bucket creation (--skip-bucket-setup)"
     return
   fi
 
@@ -190,7 +190,7 @@ create_buckets() {
 # ── Step 3: Apply lifecycle rule to raw-data bucket ────────────────────────────
 apply_lifecycle() {
   if [[ "${SKIP_BUCKETS}" == "true" ]]; then
-    info "Skipping lifecycle rule (--skip-buckets)"
+    info "Skipping lifecycle rule (--skip-bucket-setup)"
     return
   fi
 
@@ -243,7 +243,7 @@ create_service_accounts() {
 # ── Step 5: Grant bucket-level IAM roles ───────────────────────────────────────
 grant_bucket_iam() {
   if [[ "${SKIP_BUCKETS}" == "true" ]]; then
-    info "Skipping bucket IAM (--skip-buckets)"
+    info "Skipping bucket IAM (--skip-bucket-setup)"
     return
   fi
 
@@ -352,7 +352,7 @@ _upload_keep() {
 # ── Step 8: Initialise folder structure with .keep placeholders ────────────────
 create_folder_structure() {
   if [[ "${SKIP_BUCKETS}" == "true" ]]; then
-    info "Skipping folder structure (--skip-buckets)"
+    info "Skipping folder structure (--skip-bucket-setup)"
     return
   fi
 

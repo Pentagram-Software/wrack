@@ -96,7 +96,7 @@ Optional flags for `setup-iam.sh`:
 |---|---|
 | `--key-dir PATH` | Directory to write JSON keys (default: `./keys`) |
 | `--store-in-secret-manager` | Upload keys to GCP Secret Manager |
-| `--skip-buckets` | IAM only — skip bucket creation, lifecycle, and folder structure |
+| `--skip-bucket-setup` | IAM only — skip bucket creation, lifecycle, and folder structure |
 | `--dry-run` | Print all commands without executing |
 
 ### 3. Store keys securely
