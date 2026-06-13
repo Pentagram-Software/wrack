@@ -76,6 +76,8 @@ def _mock_client(
     upload_side_effect=None,
     download_side_effect=None,
     delete_side_effect=None,
+    exists_return_value=True,
+    exists_side_effect=None,
 ):
     """Build a mock storage.Client whose bucket().blob() chain is pre-wired."""
     blob = MagicMock()
@@ -87,6 +89,10 @@ def _mock_client(
         blob.delete.side_effect = delete_side_effect
     else:
         blob.download_as_bytes.return_value = b"cat-recognizer smoke test"
+    if exists_side_effect is not None:
+        blob.exists.side_effect = exists_side_effect
+    else:
+        blob.exists.return_value = exists_return_value
 
     bucket = MagicMock()
     bucket.blob.return_value = blob
@@ -175,6 +181,14 @@ class TestCheckWriteObject(unittest.TestCase):
         result = st.check_write_object(client, "my-bucket", c)
         self.assertIsNotNone(result)
         self.assertTrue(result.startswith("_smoke-test/"))
+        self.assertEqual(c.passed, 1)
+
+    def test_custom_prefix(self):
+        client, _, _ = _mock_client()
+        c = st._Counter()
+        result = st.check_write_object(client, "my-bucket", c, prefix="ryfka/_smoke-test")
+        self.assertIsNotNone(result)
+        self.assertTrue(result.startswith("ryfka/_smoke-test/"))
         self.assertEqual(c.passed, 1)
 
     def test_forbidden_returns_none(self):
@@ -276,46 +290,106 @@ class TestCleanupObject(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# check_keep_exists
+# ---------------------------------------------------------------------------
+
+class TestCheckKeepExists(unittest.TestCase):
+    def test_keep_exists_passes(self):
+        client, _, _ = _mock_client(exists_return_value=True)
+        c = st._Counter()
+        st.check_keep_exists(client, "my-bucket", "ryfka", c)
+        self.assertEqual(c.passed, 1)
+        self.assertEqual(c.failed, 0)
+
+    def test_keep_missing_fails(self):
+        client, _, _ = _mock_client(exists_return_value=False)
+        c = st._Counter()
+        st.check_keep_exists(client, "my-bucket", "ryfka", c)
+        self.assertEqual(c.failed, 1)
+        self.assertEqual(c.passed, 0)
+
+    def test_forbidden_fails(self):
+        client, _, _ = _mock_client(exists_side_effect=Forbidden("denied"))
+        c = st._Counter()
+        st.check_keep_exists(client, "my-bucket", "ryfka", c)
+        self.assertEqual(c.failed, 1)
+
+    def test_unexpected_exception_fails(self):
+        client, _, _ = _mock_client(exists_side_effect=RuntimeError("timeout"))
+        c = st._Counter()
+        st.check_keep_exists(client, "my-bucket", "train", c)
+        self.assertEqual(c.failed, 1)
+
+    def test_blob_name_format(self):
+        """Verify check_keep_exists looks up prefix/.keep."""
+        client, bucket, blob = _mock_client(exists_return_value=True)
+        c = st._Counter()
+        st.check_keep_exists(client, "my-bucket", "chaja", c)
+        bucket.blob.assert_called_with("chaja/.keep")
+        self.assertEqual(c.passed, 1)
+
+
+# ---------------------------------------------------------------------------
 # _derive_bucket_names
 # ---------------------------------------------------------------------------
 
 class TestDeriveBucketNames(unittest.TestCase):
-    def _args(self, mode, bucket=None, bucket_data=None, bucket_models=None,
-              project="wrack-control"):
+    def _args(self, mode, bucket_raw=None, bucket_processed=None,
+              bucket_models=None, project="wrack-control"):
         ns = unittest.mock.MagicMock()
         ns.mode = mode
-        ns.bucket = bucket
-        ns.bucket_data = bucket_data
+        ns.bucket_raw = bucket_raw
+        ns.bucket_processed = bucket_processed
         ns.bucket_models = bucket_models
         ns.project = project
         return ns
 
     def test_data_mode_default_names(self):
-        training, models = st._derive_bucket_names(self._args("data"))
-        self.assertEqual(training, "wrack-control-cat-recognizer-training-data")
+        raw, processed, models = st._derive_bucket_names(self._args("data"))
+        self.assertEqual(raw, "wrack-control-cat-recognizer-raw-data")
+        self.assertEqual(processed, "wrack-control-cat-recognizer-processed-data")
         self.assertEqual(models, "wrack-control-cat-recognizer-models")
 
-    def test_data_mode_custom_bucket(self):
-        training, models = st._derive_bucket_names(
-            self._args("data", bucket="my-custom-bucket")
+    def test_data_mode_custom_raw_bucket(self):
+        raw, processed, models = st._derive_bucket_names(
+            self._args("data", bucket_raw="my-raw-bucket")
         )
-        self.assertEqual(training, "my-custom-bucket")
+        self.assertEqual(raw, "my-raw-bucket")
+        self.assertEqual(processed, "wrack-control-cat-recognizer-processed-data")
+        self.assertEqual(models, "wrack-control-cat-recognizer-models")
 
     def test_trainer_mode_default_names(self):
-        training, models = st._derive_bucket_names(self._args("trainer"))
-        self.assertEqual(training, "wrack-control-cat-recognizer-training-data")
+        raw, processed, models = st._derive_bucket_names(self._args("trainer"))
+        self.assertEqual(raw, "wrack-control-cat-recognizer-raw-data")
+        self.assertEqual(processed, "wrack-control-cat-recognizer-processed-data")
         self.assertEqual(models, "wrack-control-cat-recognizer-models")
 
     def test_trainer_mode_custom_buckets(self):
-        training, models = st._derive_bucket_names(
-            self._args("trainer", bucket_data="data-bucket", bucket_models="models-bucket")
+        raw, processed, models = st._derive_bucket_names(
+            self._args(
+                "trainer",
+                bucket_raw="raw-bucket",
+                bucket_processed="proc-bucket",
+                bucket_models="models-bucket",
+            )
         )
-        self.assertEqual(training, "data-bucket")
+        self.assertEqual(raw, "raw-bucket")
+        self.assertEqual(processed, "proc-bucket")
         self.assertEqual(models, "models-bucket")
 
     def test_custom_project_prefix(self):
-        training, _ = st._derive_bucket_names(self._args("data", project="my-project"))
-        self.assertTrue(training.startswith("my-project-"))
+        raw, processed, models = st._derive_bucket_names(
+            self._args("data", project="my-project")
+        )
+        self.assertTrue(raw.startswith("my-project-"))
+        self.assertTrue(processed.startswith("my-project-"))
+        self.assertTrue(models.startswith("my-project-"))
+
+    def test_bucket_names_contain_expected_suffixes(self):
+        raw, processed, models = st._derive_bucket_names(self._args("data"))
+        self.assertIn("raw-data", raw)
+        self.assertIn("processed-data", processed)
+        self.assertIn("models", models)
 
 
 # ---------------------------------------------------------------------------
@@ -325,38 +399,167 @@ class TestDeriveBucketNames(unittest.TestCase):
 class TestRunDataMode(unittest.TestCase):
     @patch("smoke_test._gcs_client")
     def test_all_pass(self, mock_factory):
-        client, _, blob = _mock_client()
+        """data SA: write raw, denied on processed, all .keep present → all pass."""
+        calls = {"count": 0}
+
+        def upload_side_effect(data, content_type=None):
+            calls["count"] += 1
+            if calls["count"] == 2:
+                # Second upload is the check_denied_write call on processed bucket
+                raise Forbidden("denied on processed-data")
+
+        client, _, blob = _mock_client(
+            upload_side_effect=upload_side_effect,
+            exists_return_value=True,
+        )
         mock_factory.return_value = client
-        counter = st.run_data_mode("test-bucket")
+        counter = st.run_data_mode("raw-bucket", "processed-bucket")
         self.assertTrue(counter.all_passed)
-        self.assertGreaterEqual(counter.passed, 2)  # list + write + read
+        # list(1) + write(1) + read(1) + denied(1) + keep×3(raw) + keep×3(processed) = 10
+        self.assertEqual(counter.passed, 10)
+        self.assertEqual(counter.failed, 0)
 
     @patch("smoke_test._gcs_client")
     def test_list_fails_counts_as_failed(self, mock_factory):
         client, _, _ = _mock_client(list_blobs_side_effect=Forbidden("no"))
         mock_factory.return_value = client
-        counter = st.run_data_mode("test-bucket")
+        counter = st.run_data_mode("raw-bucket", "processed-bucket")
         self.assertFalse(counter.all_passed)
+
+    @patch("smoke_test._gcs_client")
+    def test_keep_missing_counts_as_failed(self, mock_factory):
+        """If .keep placeholders are absent the mode should report failures."""
+        calls = {"count": 0}
+
+        def upload_side_effect(data, content_type=None):
+            calls["count"] += 1
+            if calls["count"] == 2:
+                raise Forbidden("denied on processed-data")
+
+        client, _, _ = _mock_client(
+            upload_side_effect=upload_side_effect,
+            exists_return_value=False,  # all .keep checks return False → fail
+        )
+        mock_factory.return_value = client
+        counter = st.run_data_mode("raw-bucket", "processed-bucket")
+        self.assertFalse(counter.all_passed)
+        # 6 .keep checks all fail
+        self.assertEqual(counter.failed, 6)
+
+    @patch("smoke_test._gcs_client")
+    def test_write_prefix_uses_ryfka(self, mock_factory):
+        """Verify that data mode writes under the ryfka/ prefix."""
+        calls = {"count": 0}
+
+        def upload_side_effect(data, content_type=None):
+            calls["count"] += 1
+            if calls["count"] == 2:
+                raise Forbidden("denied on processed-data")
+
+        client, bucket, blob = _mock_client(
+            upload_side_effect=upload_side_effect,
+            exists_return_value=True,
+        )
+        mock_factory.return_value = client
+        st.run_data_mode("raw-bucket", "processed-bucket")
+        # The first blob creation should use a ryfka/_smoke-test/ prefix
+        first_blob_name = bucket.blob.call_args_list[0][0][0]
+        self.assertTrue(first_blob_name.startswith("ryfka/_smoke-test/"))
 
 
 class TestRunTrainerMode(unittest.TestCase):
     @patch("smoke_test._gcs_client")
-    def test_trainer_denied_write_on_training_data(self, mock_factory):
-        # Trainer should be denied writes to training-data but allowed on models
+    def test_all_pass(self, mock_factory):
+        """trainer SA: denied on raw, write processed+models, all .keep present → all pass."""
         calls = {"count": 0}
 
         def upload_side_effect(data, content_type=None):
             calls["count"] += 1
             if calls["count"] == 1:
-                # First upload attempt is to training-data — must be Forbidden
-                raise Forbidden("denied on training-data")
-            # Subsequent uploads are to models bucket — succeed
+                # First upload is the check_denied_write call on raw bucket
+                raise Forbidden("denied on raw-data")
+            # Subsequent uploads (processed + models) succeed
+
+        client, _, blob = _mock_client(
+            upload_side_effect=upload_side_effect,
+            exists_return_value=True,
+        )
+        mock_factory.return_value = client
+        counter = st.run_trainer_mode("raw-bucket", "processed-bucket", "models-bucket")
+        self.assertTrue(counter.all_passed)
+        # list(raw)(1) + denied(1) + list(proc)(1) + write(proc)(1) + read(proc)(1)
+        # + list(models)(1) + write(models)(1) + read(models)(1)
+        # + keep×3(raw) + keep×3(processed) = 14
+        self.assertEqual(counter.passed, 14)
+        self.assertEqual(counter.failed, 0)
+
+    @patch("smoke_test._gcs_client")
+    def test_trainer_denied_write_on_raw_data(self, mock_factory):
+        """Trainer should be denied writes on raw-data but allowed on processed + models."""
+        calls = {"count": 0}
+
+        def upload_side_effect(data, content_type=None):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise Forbidden("denied on raw-data")
 
         client, _, blob = _mock_client(upload_side_effect=upload_side_effect)
         mock_factory.return_value = client
-        counter = st.run_trainer_mode("train-bucket", "models-bucket")
-        # The "denied write" on training-data should count as passed
+        counter = st.run_trainer_mode("raw-bucket", "processed-bucket", "models-bucket")
+        # The "denied write" on raw-data should count as passed
         self.assertGreater(counter.passed, 0)
+
+    @patch("smoke_test._gcs_client")
+    def test_keep_missing_counts_as_failed(self, mock_factory):
+        """If .keep placeholders are absent the mode should report failures."""
+        calls = {"count": 0}
+
+        def upload_side_effect(data, content_type=None):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise Forbidden("denied on raw-data")
+
+        client, _, _ = _mock_client(
+            upload_side_effect=upload_side_effect,
+            exists_return_value=False,
+        )
+        mock_factory.return_value = client
+        counter = st.run_trainer_mode("raw-bucket", "processed-bucket", "models-bucket")
+        self.assertFalse(counter.all_passed)
+        self.assertEqual(counter.failed, 6)
+
+    @patch("smoke_test._gcs_client")
+    def test_write_prefix_uses_train(self, mock_factory):
+        """Verify that trainer mode writes to processed bucket under train/ prefix."""
+        calls = {"count": 0}
+
+        def upload_side_effect(data, content_type=None):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise Forbidden("denied on raw-data")
+
+        client, bucket, blob = _mock_client(
+            upload_side_effect=upload_side_effect,
+            exists_return_value=True,
+        )
+        mock_factory.return_value = client
+        st.run_trainer_mode("raw-bucket", "processed-bucket", "models-bucket")
+        # Second blob creation (after denied_write) goes to processed with train/ prefix
+        blob_names = [c[0][0] for c in bucket.blob.call_args_list]
+        train_blobs = [n for n in blob_names if n.startswith("train/_smoke-test/")]
+        self.assertGreater(len(train_blobs), 0)
+
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+class TestConstants(unittest.TestCase):
+    def test_raw_prefixes(self):
+        self.assertEqual(set(st.RAW_PREFIXES), {"ryfka", "chaja", "lea"})
+
+    def test_processed_prefixes(self):
+        self.assertEqual(set(st.PROCESSED_PREFIXES), {"train", "val", "test"})
 
 
 if __name__ == "__main__":

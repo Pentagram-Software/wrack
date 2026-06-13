@@ -36,16 +36,28 @@
 
 ## CatRecognizer ML Infrastructure
 
+Three-bucket layout (PEN-25):
+
 ```
 Edge (Raspberry Pi)
-  cat-recognizer-data SA ──objectAdmin──► GCS training-data bucket
-                                                    │
-                                              (read-only)
-                                                    ▼
-  cat-recognizer-trainer SA ──────────────► Training (workstation / CI)
-    ──objectAdmin──► GCS models bucket
-    ──AR writer───► Artifact Registry (cat-recognizer repo, europe-west3)
+  cat-recognizer-data SA
+    ──objectAdmin──►   GCS raw-data bucket  (ryfka/ chaja/ lea/  — 90-day auto-delete)
+    ──objectViewer──►  GCS processed-data bucket (read-only)
+                                     │
+                               (read-only)
+                                     ▼
+  cat-recognizer-trainer SA ──────────────────► Training (workstation / CI)
+    ──objectViewer──►  GCS raw-data bucket
+    ──objectAdmin───►  GCS processed-data bucket  (train/ val/ test/)
+    ──objectAdmin───►  GCS models bucket
+    ──AR writer─────►  Artifact Registry (cat-recognizer repo, europe-west3)
 ```
+
+| Bucket | Lifecycle |
+|---|---|
+| `<PROJECT>-cat-recognizer-raw-data` | Auto-delete after 90 days |
+| `<PROJECT>-cat-recognizer-processed-data` | None |
+| `<PROJECT>-cat-recognizer-models` | None |
 
 Setup: `GCP_PROJECT_ID=wrack-control bash cloud/cat-recognizer/setup-iam.sh`  
 Smoke test: `bash cloud/cat-recognizer/smoke-test.sh --mode=data`
