@@ -1,6 +1,6 @@
-# CatRecognizer — GCP Infrastructure (PEN-24)
+# CatRecognizer — GCP Infrastructure (PEN-25)
 
-This directory contains scripts to set up the GCP project infrastructure required by the CatRecognizer ML pipeline — enabling APIs, creating GCS buckets, provisioning service accounts with least-privilege IAM roles, and verifying access with a smoke test.
+This directory contains scripts to set up the GCP project infrastructure required by the CatRecognizer ML pipeline — enabling APIs, creating GCS buckets with lifecycle rules and folder structure, provisioning service accounts with least-privilege IAM roles, and verifying access with a smoke test.
 
 ## Overview
 
@@ -8,18 +8,48 @@ This directory contains scripts to set up the GCP project infrastructure require
 |---|---|
 | GCP project | `wrack-control` (override via `GCP_PROJECT_ID`) |
 | Region | `europe-west3` |
-| Training-data bucket | `<PROJECT>-cat-recognizer-training-data` |
+| Raw-data bucket | `<PROJECT>-cat-recognizer-raw-data` |
+| Processed-data bucket | `<PROJECT>-cat-recognizer-processed-data` |
 | Model-artifacts bucket | `<PROJECT>-cat-recognizer-models` |
 | Artifact Registry repo | `cat-recognizer` (Docker, `europe-west3`) |
 | Data collector SA | `cat-recognizer-data@<PROJECT>.iam.gserviceaccount.com` |
 | Trainer SA | `cat-recognizer-trainer@<PROJECT>.iam.gserviceaccount.com` |
 
+## Bucket Layout
+
+| Bucket | Purpose | Lifecycle |
+|---|---|---|
+| `<PROJECT>-cat-recognizer-raw-data` | Raw captured frames per cat, uploaded from edge devices | Auto-delete after **90 days** |
+| `<PROJECT>-cat-recognizer-processed-data` | Train/val/test splits and annotation files | No lifecycle rule |
+| `<PROJECT>-cat-recognizer-models` | Exported ONNX model artifacts from training runs | No lifecycle rule |
+
+### Folder structure
+
+Zero-byte `.keep` placeholder objects are created to establish the expected prefix hierarchy in each bucket (visible in the GCS console):
+
+```
+gs://<PROJECT>-cat-recognizer-raw-data/
+  ryfka/.keep
+  chaja/.keep
+  lea/.keep
+
+gs://<PROJECT>-cat-recognizer-processed-data/
+  train/.keep
+  val/.keep
+  test/.keep
+
+gs://<PROJECT>-cat-recognizer-models/
+  (top-level only — no subfolders required)
+```
+
 ## Service Account Roles (least-privilege)
 
 | Service Account | Resource | Role |
 |---|---|---|
-| `cat-recognizer-data` | `training-data` bucket | `roles/storage.objectAdmin` |
-| `cat-recognizer-trainer` | `training-data` bucket | `roles/storage.objectViewer` |
+| `cat-recognizer-data` | `raw-data` bucket | `roles/storage.objectAdmin` |
+| `cat-recognizer-data` | `processed-data` bucket | `roles/storage.objectViewer` |
+| `cat-recognizer-trainer` | `raw-data` bucket | `roles/storage.objectViewer` |
+| `cat-recognizer-trainer` | `processed-data` bucket | `roles/storage.objectAdmin` |
 | `cat-recognizer-trainer` | `models` bucket | `roles/storage.objectAdmin` |
 | `cat-recognizer-trainer` | Artifact Registry `cat-recognizer` | `roles/artifactregistry.writer` |
 
@@ -31,7 +61,7 @@ No roles are granted at the **project level** — all bindings are resource-scop
 - Authenticated account must have:
   - `roles/serviceusage.serviceUsageAdmin` (to enable APIs)
   - `roles/iam.serviceAccountAdmin` + `roles/iam.serviceAccountKeyAdmin` (to create SAs and keys)
-  - `roles/storage.admin` (to create buckets and set bucket-level IAM)
+  - `roles/storage.admin` (to create buckets, set lifecycle, set bucket-level IAM)
   - `roles/artifactregistry.admin` (to create AR repos and set repo-level IAM)
 
 ```bash
@@ -52,7 +82,7 @@ APIs enabled:
 - `artifactregistry.googleapis.com` — Artifact Registry
 - `containerregistry.googleapis.com` — Container Registry (legacy compatibility)
 
-### 2. Create buckets, service accounts, and IAM bindings
+### 2. Create buckets, service accounts, lifecycle rules, folder structure, and IAM bindings
 
 ```bash
 GCP_PROJECT_ID=wrack-control bash cloud/cat-recognizer/setup-iam.sh
@@ -66,7 +96,7 @@ Optional flags for `setup-iam.sh`:
 |---|---|
 | `--key-dir PATH` | Directory to write JSON keys (default: `./keys`) |
 | `--store-in-secret-manager` | Upload keys to GCP Secret Manager |
-| `--skip-buckets` | IAM only — skip bucket creation |
+| `--skip-buckets` | IAM only — skip bucket creation, lifecycle, and folder structure |
 | `--dry-run` | Print all commands without executing |
 
 ### 3. Store keys securely
@@ -101,10 +131,10 @@ Secrets created: `cat-recognizer-data-key`, `cat-recognizer-trainer-key`
 ### 4. Smoke-test access
 
 ```bash
-# Test the data collector SA (expects write access to training-data bucket)
+# Test the data collector SA
 bash cloud/cat-recognizer/smoke-test.sh --mode=data
 
-# Test the trainer SA (expects read-only on training-data, write on models)
+# Test the trainer SA
 bash cloud/cat-recognizer/smoke-test.sh --mode=trainer
 ```
 
