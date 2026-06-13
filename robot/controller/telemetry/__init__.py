@@ -10,6 +10,9 @@ collector
 sender
     :class:`TelemetrySender` — sends buffered events to the Cloud Function
     ingestion endpoint via HTTP POST with retry logic.
+status_collector
+    Periodic battery/motor telemetry and immediate device-change events
+    (StatusCollector — PEN-124).
 
 Quick start::
 
@@ -27,6 +30,11 @@ Quick start::
 
 from .collector import TelemetryCollector
 from .sender import TelemetrySender, PartialFailureError
+from .status_collector import (
+    StatusCollector,
+    DEFAULT_BATTERY_INTERVAL,
+    DEFAULT_MOTOR_INTERVAL,
+)
 from .schemas import (
     validate_event,
     validate_payload,
@@ -42,6 +50,11 @@ __all__ = [
     "TelemetryCollector",
     "TelemetrySender",
     "PartialFailureError",
+    # Status collector (PEN-124)
+    "StatusCollector",
+    "DEFAULT_BATTERY_INTERVAL",
+    "DEFAULT_MOTOR_INTERVAL",
+    # Schema validation
     "validate_event",
     "validate_payload",
     "is_valid_event",

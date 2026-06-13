@@ -38,6 +38,9 @@ service-account-key.json
 *-key.json
 telemetry-writer-key.json
 
+# EV3 telemetry runtime config (contains API keys — never commit)
+robot/controller/telemetry_config.py
+
 # Claude Code
 .claude/settings.json
 .claude/settings.local.json
