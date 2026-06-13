@@ -322,7 +322,7 @@ exec "$BRICKRUN" -r -- "$INTERPRETER" main.py "$@"
 
 def _ssh_target(user: str, host: str, port: int) -> List[str]:
     """Build base ssh command targeting the EV3."""
-    return ["ssh", "-p", str(port), f"{user}@{host}"]
+    return ["ssh", "-p", str(port), "-o", "ConnectTimeout=15", f"{user}@{host}"]
 
 
 def deploy_to_ev3_via_tar(
@@ -493,6 +493,7 @@ def verify_deployment(
     ssh_cmd = [
         "ssh",
         "-p", str(port),
+        "-o", "ConnectTimeout=15",
         f"{user}@{host}",
         f"ls -la {remote_path}/main.py {remote_path}/run.sh 2>/dev/null && echo 'VERIFY_OK'"
     ]

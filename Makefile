@@ -59,32 +59,31 @@ deploy-edge:
 # Config: robot/controller/deploy.conf  |  override: EV3_IP=x make deploy-robot
 # ---------------------------------------------------------------------------
 deploy-robot:
-	@command -v rsync >/dev/null 2>&1 || { echo "Error: rsync is required but not installed"; exit 1; }
 	@[ -n "$(EV3_IP)" ] || { echo "Error: EV3_IP is not set."; echo "  Set it in robot/controller/deploy.conf or run: EV3_IP=<host> make deploy-robot"; exit 1; }
 	@echo "==> Deploying robot/controller to $(EV3_USER)@$(EV3_IP):$(EV3_REMOTE_PATH) (ssh port $(EV3_SSH_PORT))"
 	@START=$$(date +%s); \
-	 rsync -avz --checksum --delete --stats \
-	   -e "ssh -p $(EV3_SSH_PORT) -o ConnectTimeout=15" \
-	   --exclude '__pycache__' --exclude '*.pyc' --exclude '.venv' \
-	   --exclude 'scripts/' --exclude 'tests/' --exclude '.git' \
-	   --exclude '*.md' --exclude 'AGENTS.md' --exclude '.DS_Store' \
-	   --exclude 'deploy.conf' --exclude '.pytest_cache' --exclude '*.coverage' \
-	   robot/controller/ $(EV3_USER)@$(EV3_IP):$(EV3_REMOTE_PATH)/; \
+	 python3 robot/controller/scripts/deploy_ev3.py \
+	   --host "$(EV3_IP)" \
+	   --user "$(EV3_USER)" \
+	   --port "$(EV3_SSH_PORT)" \
+	   --path "$(EV3_REMOTE_PATH)" \
+	   --method tar \
+	   --verbose; \
 	 EXIT=$$?; END=$$(date +%s); \
 	 echo "==> Elapsed: $$((END - START))s"; \
 	 exit $$EXIT
 
 deploy-robot-dry-run:
-	@command -v rsync >/dev/null 2>&1 || { echo "Error: rsync is required but not installed"; exit 1; }
 	@[ -n "$(EV3_IP)" ] || { echo "Error: EV3_IP is not set."; echo "  Set it in robot/controller/deploy.conf or run: EV3_IP=<host> make deploy-robot-dry-run"; exit 1; }
 	@echo "==> DRY RUN — would deploy robot/controller to $(EV3_USER)@$(EV3_IP):$(EV3_REMOTE_PATH) (ssh port $(EV3_SSH_PORT))"
-	@rsync -avzn --checksum --delete --stats \
-	  -e "ssh -p $(EV3_SSH_PORT) -o ConnectTimeout=15" \
-	  --exclude '__pycache__' --exclude '*.pyc' --exclude '.venv' \
-	  --exclude 'scripts/' --exclude 'tests/' --exclude '.git' \
-	  --exclude '*.md' --exclude 'AGENTS.md' --exclude '.DS_Store' \
-	  --exclude 'deploy.conf' --exclude '.pytest_cache' --exclude '*.coverage' \
-	  robot/controller/ $(EV3_USER)@$(EV3_IP):$(EV3_REMOTE_PATH)/
+	@python3 robot/controller/scripts/deploy_ev3.py \
+	  --host "$(EV3_IP)" \
+	  --user "$(EV3_USER)" \
+	  --port "$(EV3_SSH_PORT)" \
+	  --path "$(EV3_REMOTE_PATH)" \
+	  --method tar \
+	  --dry-run \
+	  --verbose
 	@echo "==> Dry run complete — no files transferred"
 
 test:
