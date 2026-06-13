@@ -17,6 +17,7 @@ Usage::
 from __future__ import annotations
 
 import uuid
+from collections import deque as _deque
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -67,7 +68,7 @@ class TelemetryCollector:
         self.device_id = device_id
         self.session_id: str = session_id if session_id is not None else str(uuid.uuid4())
 
-        self._buffer: List[Dict[str, Any]] = []
+        self._buffer: _deque = _deque(maxlen=self.max_buffer_size)
         self._lock = _threading.Lock() if _THREADING_AVAILABLE else _NoLock()
 
     # ------------------------------------------------------------------
@@ -101,9 +102,7 @@ class TelemetryCollector:
             event["device_id"] = self.device_id
 
         with self._lock:
-            if len(self._buffer) >= self.max_buffer_size:
-                self._buffer.pop(0)
-            self._buffer.append(event)
+            self._buffer.append(event)  # deque(maxlen=...) auto-drops oldest when full
 
         return event
 
