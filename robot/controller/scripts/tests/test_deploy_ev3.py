@@ -378,14 +378,19 @@ class TestDeployToEv3(unittest.TestCase):
         )
 
         self.assertTrue(result)
-        self.assertEqual(mock_run.call_count, 2)
+        # prepare + extract (via Popen stdin) + atomic swap
+        self.assertEqual(mock_run.call_count, 3)
         prepare_cmd = mock_run.call_args_list[0][0][0]
         self.assertIn("robot@192.168.1.100", prepare_cmd)
-        self.assertIn("mkdir -p /home/robot/ev3PS4Controlled", prepare_cmd[-1])
+        self.assertIn("mkdir -p /home/robot/ev3PS4Controlled.tmp", prepare_cmd[-1])
+        self.assertIn("rm -rf /home/robot/ev3PS4Controlled.tmp", prepare_cmd[-1])
         mock_popen.assert_called_once_with(
             ["tar", "czf", "-", "-C", "/tmp/pkg", "."],
             stdout=subprocess.PIPE,
         )
+        swap_cmd = mock_run.call_args_list[2][0][0]
+        self.assertIn("robot@192.168.1.100", swap_cmd)
+        self.assertIn("mv /home/robot/ev3PS4Controlled.tmp /home/robot/ev3PS4Controlled", swap_cmd[-1])
 
     @patch("deploy_ev3.subprocess.run")
     def test_tar_deploy_dry_run_skips_ssh(self, mock_run):
@@ -407,7 +412,7 @@ class TestDeployToEv3(unittest.TestCase):
         self.assertTrue(result)
         rsync_cmd = mock_run.call_args[0][0]
         self.assertEqual(rsync_cmd[0], "rsync")
-        self.assertIn("robot@192.168.1.100:/home/robot/ev3PS4Controlled/", rsync_cmd[-1])
+        self.assertIn("robot@192.168.1.100:/home/robot/controller/", rsync_cmd[-1])
 
 
 class TestVerifyDeployment(unittest.TestCase):

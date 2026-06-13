@@ -39,7 +39,7 @@ from typing import List, Optional, Tuple
 
 # Default configuration
 DEFAULT_EV3_USER = "robot"
-DEFAULT_EV3_PATH = "/home/robot/ev3PS4Controlled"
+DEFAULT_EV3_PATH = "/home/robot/controller"
 DEFAULT_SSH_PORT = 22
 
 # Files/directories to always exclude from deployment
@@ -322,7 +322,12 @@ exec "$BRICKRUN" -r -- "$INTERPRETER" main.py "$@"
 
 def _ssh_target(user: str, host: str, port: int) -> List[str]:
     """Build base ssh command targeting the EV3."""
-    return ["ssh", "-p", str(port), f"{user}@{host}"]
+    return [
+        "ssh", "-p", str(port),
+        "-o", "ConnectTimeout=15",
+        "-o", "StrictHostKeyChecking=accept-new",
+        f"{user}@{host}",
+    ]
 
 
 def deploy_to_ev3_via_tar(
@@ -339,16 +344,28 @@ def deploy_to_ev3_via_tar(
 
     This works on lightweight ev3dev images that do not ship rsync.
     Only ssh and tar are required on the EV3.
+
+    The transfer is atomic: files are extracted into a staging directory
+    (<remote_path>.tmp) and swapped into place only after the full tar
+    pipeline succeeds.  The previous deployment is preserved as
+    <remote_path>.bak so it can be restored manually if needed.
     """
     ssh_cmd = _ssh_target(user, host, port)
-    prepare_remote_cmd = f"mkdir -p {remote_path} && rm -rf {remote_path}/*"
-    extract_remote_cmd = f"tar xzf - -C {remote_path}"
+    tmp_path = f"{remote_path}.tmp"
+
+    prepare_remote_cmd = f"rm -rf {tmp_path} && mkdir -p {tmp_path}"
+    extract_remote_cmd = f"tar xzf - -C {tmp_path}"
+    swap_remote_cmd = (
+        f"mv {remote_path} {remote_path}.bak 2>/dev/null || true"
+        f" && mv {tmp_path} {remote_path}"
+    )
 
     if dry_run:
         if verbose:
             print(f"Would deploy via tar+ssh to {user}@{host}:{remote_path}")
-            print(f"  ssh prepare: {prepare_remote_cmd}")
-            print(f"  tar czf - -C {package_dir} . | ssh ... {extract_remote_cmd}")
+            print(f"  ssh prepare : {prepare_remote_cmd}")
+            print(f"  tar pipeline: tar czf - -C {package_dir} . | ssh ... {extract_remote_cmd}")
+            print(f"  ssh swap    : {swap_remote_cmd}")
         return True
 
     if verbose:
@@ -367,7 +384,7 @@ def deploy_to_ev3_via_tar(
             stdout=subprocess.PIPE,
         )
         try:
-            extract_result = subprocess.run(
+            subprocess.run(
                 ssh_cmd + [extract_remote_cmd],
                 stdin=tar_create.stdout,
                 check=True,
@@ -385,6 +402,13 @@ def deploy_to_ev3_via_tar(
                 file=sys.stderr,
             )
             return False
+
+        subprocess.run(
+            ssh_cmd + [swap_remote_cmd],
+            check=True,
+            capture_output=not verbose,
+            text=True,
+        )
 
         return True
     except subprocess.CalledProcessError as e:
@@ -493,6 +517,7 @@ def verify_deployment(
     ssh_cmd = [
         "ssh",
         "-p", str(port),
+        "-o", "ConnectTimeout=15",
         f"{user}@{host}",
         f"ls -la {remote_path}/main.py {remote_path}/run.sh 2>/dev/null && echo 'VERIFY_OK'"
     ]
