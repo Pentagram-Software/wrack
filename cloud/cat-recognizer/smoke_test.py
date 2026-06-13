@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """smoke_test.py — GCS access smoke test for CatRecognizer service accounts.
 
-PEN-24: Verifies that the provisioned service accounts can perform their
+PEN-25: Verifies that the provisioned service accounts can perform their
 expected GCS operations.  Designed to be run after setup-iam.sh.
 
 Usage
 -----
-# Data collector SA — should have objectAdmin on training-data bucket:
+# Data collector SA — objectAdmin on raw-data, objectViewer on processed-data:
 GOOGLE_APPLICATION_CREDENTIALS=keys/cat-recognizer-data-key.json \\
   python3 cloud/cat-recognizer/smoke_test.py \\
-  --bucket=<PROJECT>-cat-recognizer-training-data --mode=data
+  --bucket-raw=<PROJECT>-cat-recognizer-raw-data \\
+  --bucket-processed=<PROJECT>-cat-recognizer-processed-data \\
+  --mode=data
 
-# Trainer SA — should have objectViewer on training-data, objectAdmin on models:
+# Trainer SA — objectViewer on raw-data, objectAdmin on processed-data and models:
 GOOGLE_APPLICATION_CREDENTIALS=keys/cat-recognizer-trainer-key.json \\
   python3 cloud/cat-recognizer/smoke_test.py \\
-  --bucket-data=<PROJECT>-cat-recognizer-training-data \\
+  --bucket-raw=<PROJECT>-cat-recognizer-raw-data \\
+  --bucket-processed=<PROJECT>-cat-recognizer-processed-data \\
   --bucket-models=<PROJECT>-cat-recognizer-models \\
   --mode=trainer
 
@@ -27,7 +30,6 @@ Exit codes:
 import argparse
 import os
 import sys
-import tempfile
 import uuid
 from typing import Optional
 
@@ -40,6 +42,13 @@ except ImportError:  # pragma: no cover
         "ERROR: google-cloud-storage not installed.\n"
         "Install with: pip install google-cloud-storage"
     )
+
+
+# ── Folder-structure constants ─────────────────────────────────────────────────
+
+# Expected .keep prefixes in each bucket
+RAW_PREFIXES: tuple[str, ...] = ("ryfka", "chaja", "lea")
+PROCESSED_PREFIXES: tuple[str, ...] = ("train", "val", "test")
 
 
 # ── Test result helpers ────────────────────────────────────────────────────────
@@ -88,9 +97,10 @@ def check_write_object(
     client: storage.Client,
     bucket_name: str,
     counter: _Counter,
+    prefix: str = "_smoke-test",
 ) -> Optional[str]:
     """Upload a small test file; return the blob name on success, None on failure."""
-    blob_name = f"_smoke-test/{uuid.uuid4().hex}.txt"
+    blob_name = f"{prefix}/{uuid.uuid4().hex}.txt"
     label = f"write object gs://{bucket_name}/{blob_name}"
     try:
         bucket = client.bucket(bucket_name)
@@ -172,48 +182,100 @@ def check_denied_write(
         counter.fail(label, str(exc))
 
 
+def check_keep_exists(
+    client: storage.Client,
+    bucket_name: str,
+    prefix: str,
+    counter: _Counter,
+) -> None:
+    """Verify the .keep placeholder at prefix/.keep exists in bucket_name."""
+    blob_name = f"{prefix}/.keep"
+    label = f"verify .keep at gs://{bucket_name}/{blob_name}"
+    try:
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(blob_name)
+        if blob.exists():
+            counter.ok(label)
+        else:
+            counter.fail(label, ".keep not found — has setup-iam.sh been run?")
+    except Forbidden as exc:
+        counter.fail(label, f"PERMISSION_DENIED — {exc}")
+    except Exception as exc:  # noqa: BLE001
+        counter.fail(label, str(exc))
+
+
 # ── Mode-specific test suites ──────────────────────────────────────────────────
 
-def run_data_mode(bucket_training: str) -> _Counter:
+def run_data_mode(bucket_raw: str, bucket_processed: str) -> _Counter:
     """
     Test the cat-recognizer-data SA:
-      - objectAdmin on training-data bucket → can list, write, read
+      - objectAdmin on raw-data bucket → can list, write (ryfka/ prefix), read
+      - objectViewer on processed-data bucket → write should be denied
+      - .keep placeholders present in both buckets
     """
-    print(f"\nMode: data  (bucket: gs://{bucket_training})")
+    print(f"\nMode: data")
+    print(f"  raw-data bucket:       gs://{bucket_raw}")
+    print(f"  processed-data bucket: gs://{bucket_processed}")
     counter = _Counter()
     client = _gcs_client()
 
-    check_list_objects(client, bucket_training, counter)
-    blob_name = check_write_object(client, bucket_training, counter)
+    # raw-data: full object admin
+    check_list_objects(client, bucket_raw, counter)
+    blob_name = check_write_object(client, bucket_raw, counter, prefix="ryfka/_smoke-test")
     if blob_name:
-        check_read_object(client, bucket_training, blob_name, counter)
-        cleanup_object(client, bucket_training, blob_name)
+        check_read_object(client, bucket_raw, blob_name, counter)
+        cleanup_object(client, bucket_raw, blob_name)
+
+    # processed-data: read-only — write must be denied
+    check_denied_write(client, bucket_processed, counter)
+
+    # verify .keep placeholders exist
+    for prefix in RAW_PREFIXES:
+        check_keep_exists(client, bucket_raw, prefix, counter)
+    for prefix in PROCESSED_PREFIXES:
+        check_keep_exists(client, bucket_processed, prefix, counter)
 
     return counter
 
 
-def run_trainer_mode(bucket_training: str, bucket_models: str) -> _Counter:
+def run_trainer_mode(bucket_raw: str, bucket_processed: str, bucket_models: str) -> _Counter:
     """
     Test the cat-recognizer-trainer SA:
-      - objectViewer on training-data bucket → can list and read, but NOT write
-      - objectAdmin on models bucket         → can list, write, read
+      - objectViewer on raw-data bucket → can list and read, NOT write
+      - objectAdmin on processed-data bucket → can list, write (train/ prefix), read
+      - objectAdmin on models bucket → can list, write, read
+      - .keep placeholders present in raw-data and processed-data buckets
     """
     print(f"\nMode: trainer")
-    print(f"  training-data bucket: gs://{bucket_training}")
-    print(f"  models bucket:        gs://{bucket_models}")
+    print(f"  raw-data bucket:       gs://{bucket_raw}")
+    print(f"  processed-data bucket: gs://{bucket_processed}")
+    print(f"  models bucket:         gs://{bucket_models}")
     counter = _Counter()
     client = _gcs_client()
 
-    # Training-data: read-only checks
-    check_list_objects(client, bucket_training, counter)
-    check_denied_write(client, bucket_training, counter)
+    # raw-data: read-only checks
+    check_list_objects(client, bucket_raw, counter)
+    check_denied_write(client, bucket_raw, counter)
 
-    # Models bucket: full write checks
+    # processed-data: full object admin
+    check_list_objects(client, bucket_processed, counter)
+    blob_name = check_write_object(client, bucket_processed, counter, prefix="train/_smoke-test")
+    if blob_name:
+        check_read_object(client, bucket_processed, blob_name, counter)
+        cleanup_object(client, bucket_processed, blob_name)
+
+    # models bucket: full object admin
     check_list_objects(client, bucket_models, counter)
     blob_name = check_write_object(client, bucket_models, counter)
     if blob_name:
         check_read_object(client, bucket_models, blob_name, counter)
         cleanup_object(client, bucket_models, blob_name)
+
+    # verify .keep placeholders exist
+    for prefix in RAW_PREFIXES:
+        check_keep_exists(client, bucket_raw, prefix, counter)
+    for prefix in PROCESSED_PREFIXES:
+        check_keep_exists(client, bucket_processed, prefix, counter)
 
     return counter
 
@@ -233,15 +295,16 @@ def _parse_args() -> argparse.Namespace:
         help="Which service account role to test.",
     )
     p.add_argument(
-        "--bucket",
-        metavar="BUCKET",
-        help="Bucket name to test (used for --mode=data as the training-data bucket).",
+        "--bucket-raw",
+        metavar="BUCKET_RAW",
+        dest="bucket_raw",
+        help="Raw-data bucket name.",
     )
     p.add_argument(
-        "--bucket-data",
-        metavar="BUCKET_DATA",
-        dest="bucket_data",
-        help="Training-data bucket name (used for --mode=trainer).",
+        "--bucket-processed",
+        metavar="BUCKET_PROCESSED",
+        dest="bucket_processed",
+        help="Processed-data bucket name.",
     )
     p.add_argument(
         "--bucket-models",
@@ -259,36 +322,29 @@ def _parse_args() -> argparse.Namespace:
 
 def _derive_bucket_names(
     args: argparse.Namespace,
-) -> tuple[str, str]:
-    """Return (bucket_training, bucket_models) resolved from CLI args or defaults."""
+) -> tuple[str, str, str]:
+    """Return (bucket_raw, bucket_processed, bucket_models) resolved from CLI args or defaults."""
     project = args.project
-    default_training = f"{project}-cat-recognizer-training-data"
-    default_models = f"{project}-cat-recognizer-models"
-
-    if args.mode == "data":
-        training = args.bucket or default_training
-        models = default_models
-    else:  # trainer
-        training = args.bucket_data or default_training
-        models = args.bucket_models or default_models
-
-    return training, models
+    raw = getattr(args, "bucket_raw", None) or f"{project}-cat-recognizer-raw-data"
+    processed = getattr(args, "bucket_processed", None) or f"{project}-cat-recognizer-processed-data"
+    models = getattr(args, "bucket_models", None) or f"{project}-cat-recognizer-models"
+    return raw, processed, models
 
 
 def main() -> int:
     args = _parse_args()
-    bucket_training, bucket_models = _derive_bucket_names(args)
+    bucket_raw, bucket_processed, bucket_models = _derive_bucket_names(args)
 
     print("=" * 50)
-    print("  CatRecognizer GCS Smoke Test (PEN-24)")
+    print("  CatRecognizer GCS Smoke Test (PEN-25)")
     print("=" * 50)
     creds_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "(default credentials)")
     print(f"  Credentials: {creds_path}")
 
     if args.mode == "data":
-        counter = run_data_mode(bucket_training)
+        counter = run_data_mode(bucket_raw, bucket_processed)
     else:
-        counter = run_trainer_mode(bucket_training, bucket_models)
+        counter = run_trainer_mode(bucket_raw, bucket_processed, bucket_models)
 
     print()
     print("=" * 50)
