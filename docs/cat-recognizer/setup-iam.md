@@ -1,8 +1,8 @@
-# CatRecognizer IAM Setup — PEN-24
+# CatRecognizer IAM Setup — PEN-25
 
 This runbook describes how to provision the GCP infrastructure for the CatRecognizer
-ML pipeline: enabling required APIs, creating GCS storage buckets, and setting up
-service accounts with least-privilege IAM roles.
+ML pipeline: enabling required APIs, creating GCS storage buckets with lifecycle rules
+and folder structure, and setting up service accounts with least-privilege IAM roles.
 
 ---
 
@@ -10,15 +10,19 @@ service accounts with least-privilege IAM roles.
 
 ```
 Edge (Raspberry Pi)                  GCP (wrack-control)
-──────────────────                   ───────────────────────────────────
+──────────────────                   ─────────────────────────────────────────
 cat-recognizer-data SA
-  ──objectAdmin──►  gs://<proj>-cat-recognizer-training-data
-                              │
-                              │ (read-only)
+  ──objectAdmin──►   gs://<proj>-cat-recognizer-raw-data
+                         ryfka/ │ chaja/ │ lea/   (90-day auto-delete)
+  ──objectViewer──►  gs://<proj>-cat-recognizer-processed-data
+
+                              │ (objectViewer — read raw frames)
                               ▼
-cat-recognizer-trainer SA ────────►  Training job (local workstation / CI)
-  ──objectAdmin──►  gs://<proj>-cat-recognizer-models
-  ──writer──────►   Artifact Registry  europe-west3/cat-recognizer (Docker)
+cat-recognizer-trainer SA ──────────────────────► Training job (workstation / CI)
+  ──objectAdmin──►   gs://<proj>-cat-recognizer-processed-data
+                         train/ │ val/ │ test/
+  ──objectAdmin──►   gs://<proj>-cat-recognizer-models
+  ──writer──────►    Artifact Registry  europe-west3/cat-recognizer (Docker)
 ```
 
 ---
@@ -27,27 +31,47 @@ cat-recognizer-trainer SA ────────►  Training job (local works
 
 ### GCS Buckets
 
-| Bucket | Purpose | Region |
-|---|---|---|
-| `<PROJECT>-cat-recognizer-training-data` | Raw frames and annotation files uploaded from edge | `europe-west3` |
-| `<PROJECT>-cat-recognizer-models` | Exported ONNX model artifacts from training runs | `europe-west3` |
+| Bucket | Purpose | Region | Lifecycle |
+|---|---|---|---|
+| `<PROJECT>-cat-recognizer-raw-data` | Raw frames captured from edge per cat (ryfka, chaja, lea) | `europe-west3` | Auto-delete after **90 days** |
+| `<PROJECT>-cat-recognizer-processed-data` | Train/val/test splits and annotations produced by trainer | `europe-west3` | None |
+| `<PROJECT>-cat-recognizer-models` | Exported ONNX model artifacts from training runs | `europe-west3` | None |
 
-Both buckets use **uniform bucket-level access** and **public access prevention**.
+All buckets use **uniform bucket-level access** and **public access prevention**.
+
+The 90-day lifecycle rule on the raw-data bucket is applied from `raw-lifecycle.json` via:
+```bash
+gcloud storage buckets update gs://<bucket> --lifecycle-file=raw-lifecycle.json
+```
+
+### Folder structure
+
+Zero-byte `.keep` placeholder objects establish the prefix hierarchy in the GCS console:
+
+| Bucket | Placeholder objects |
+|---|---|
+| `raw-data` | `ryfka/.keep`, `chaja/.keep`, `lea/.keep` |
+| `processed-data` | `train/.keep`, `val/.keep`, `test/.keep` |
+| `models` | (no subfolders required) |
+
+Placeholders are created idempotently by `setup-iam.sh` — re-running skips existing objects.
 
 ### Service Accounts
 
 | Service Account | Purpose |
 |---|---|
-| `cat-recognizer-data@<PROJECT>.iam.gserviceaccount.com` | Edge device uploads training frames to GCS |
-| `cat-recognizer-trainer@<PROJECT>.iam.gserviceaccount.com` | Training script reads data, writes model artifacts, pushes containers |
+| `cat-recognizer-data@<PROJECT>.iam.gserviceaccount.com` | Edge device uploads raw frames to GCS |
+| `cat-recognizer-trainer@<PROJECT>.iam.gserviceaccount.com` | Training script reads raw data, writes processed splits and model artifacts, pushes containers |
 
 ### IAM Bindings (all resource-scoped — no project-level grants)
 
 | SA | Resource | Role | Justification |
 |---|---|---|---|
-| `cat-recognizer-data` | training-data bucket | `roles/storage.objectAdmin` | Must upload, list, and optionally delete frames |
-| `cat-recognizer-trainer` | training-data bucket | `roles/storage.objectViewer` | Read-only access to training frames |
-| `cat-recognizer-trainer` | models bucket | `roles/storage.objectAdmin` | Write and manage exported model artifacts |
+| `cat-recognizer-data` | `raw-data` bucket | `roles/storage.objectAdmin` | Must upload, list, and optionally delete raw frames |
+| `cat-recognizer-data` | `processed-data` bucket | `roles/storage.objectViewer` | Read-only access to existing splits |
+| `cat-recognizer-trainer` | `raw-data` bucket | `roles/storage.objectViewer` | Read-only access to raw frames |
+| `cat-recognizer-trainer` | `processed-data` bucket | `roles/storage.objectAdmin` | Write and manage train/val/test splits |
+| `cat-recognizer-trainer` | `models` bucket | `roles/storage.objectAdmin` | Write and manage exported model artifacts |
 | `cat-recognizer-trainer` | AR repo `cat-recognizer` | `roles/artifactregistry.writer` | Push training container images |
 
 ### Artifact Registry
@@ -120,7 +144,7 @@ Optional flags:
 |---|---|
 | `--key-dir PATH` | Where to write JSON keys (default: `cloud/cat-recognizer/keys/`) |
 | `--store-in-secret-manager` | Upload keys to Secret Manager after creation |
-| `--skip-buckets` | Recreate SA/IAM only; skip bucket creation |
+| `--skip-buckets` | Recreate SA/IAM only; skip bucket creation, lifecycle rules, and folder structure |
 | `--dry-run` | Print commands, no execution |
 
 ---
@@ -190,10 +214,10 @@ Run `setup-iam.sh --store-in-secret-manager`, then add GitHub Actions secrets.
 After keys are in place, verify end-to-end access:
 
 ```bash
-# Data collector SA: expects write access to training-data bucket
+# Data collector SA: expects write access to raw-data bucket, read-only on processed
 bash cloud/cat-recognizer/smoke-test.sh --mode=data
 
-# Trainer SA: expects read-only on training-data, write on models bucket
+# Trainer SA: expects read-only on raw-data, write on processed and models buckets
 bash cloud/cat-recognizer/smoke-test.sh --mode=trainer
 ```
 
@@ -206,21 +230,35 @@ GOOGLE_APPLICATION_CREDENTIALS=cloud/cat-recognizer/keys/cat-recognizer-data-key
   --project=wrack-control
 ```
 
+The smoke test validates:
+- Correct write/read/deny permissions per SA and bucket
+- Presence of `.keep` placeholder objects in `raw-data` (ryfka/, chaja/, lea/) and `processed-data` (train/, val/, test/)
+
 Expected output when all checks pass:
 
 ```
 ==================================================
-  CatRecognizer GCS Smoke Test (PEN-24)
+  CatRecognizer GCS Smoke Test (PEN-25)
 ==================================================
   Credentials: cloud/cat-recognizer/keys/cat-recognizer-data-key.json
 
-Mode: data  (bucket: gs://wrack-control-cat-recognizer-training-data)
-  ✓ list objects in gs://wrack-control-cat-recognizer-training-data (found 0 object(s))
-  ✓ write object gs://wrack-control-cat-recognizer-training-data/_smoke-test/...
-  ✓ read object gs://wrack-control-cat-recognizer-training-data/_smoke-test/...
+Mode: data
+  raw-data bucket:   gs://wrack-control-cat-recognizer-raw-data
+  processed bucket:  gs://wrack-control-cat-recognizer-processed-data
+  ✓ list objects in gs://wrack-control-cat-recognizer-raw-data (found 3 object(s))
+  ✓ write object gs://wrack-control-cat-recognizer-raw-data/ryfka/_smoke-test/...
+  ✓ read object gs://wrack-control-cat-recognizer-raw-data/ryfka/_smoke-test/...
+  ✓ placeholder exists gs://wrack-control-cat-recognizer-raw-data/ryfka/.keep
+  ✓ placeholder exists gs://wrack-control-cat-recognizer-raw-data/chaja/.keep
+  ✓ placeholder exists gs://wrack-control-cat-recognizer-raw-data/lea/.keep
+  ✓ list objects in gs://wrack-control-cat-recognizer-processed-data (found 3 object(s))
+  ✓ write DENIED on gs://wrack-control-cat-recognizer-processed-data (expected Forbidden)
+  ✓ placeholder exists gs://wrack-control-cat-recognizer-processed-data/train/.keep
+  ✓ placeholder exists gs://wrack-control-cat-recognizer-processed-data/val/.keep
+  ✓ placeholder exists gs://wrack-control-cat-recognizer-processed-data/test/.keep
 
 ==================================================
-  Results: 3 passed, 0 failed
+  Results: 11 passed, 0 failed
 ==================================================
   ✓ All checks passed — service account access verified!
 ```
@@ -252,7 +290,9 @@ GCP_PROJECT_ID=wrack-control bash cloud/cat-recognizer/setup-iam.sh
 | `PERMISSION_DENIED` creating bucket | Missing `roles/storage.admin` | Grant storage admin |
 | Smoke test: `bucket not found` | `setup-iam.sh` not run yet | Run `setup-iam.sh` first |
 | Smoke test: `PERMISSION_DENIED` on write | Wrong key used, or wrong mode | Check `GOOGLE_APPLICATION_CREDENTIALS` path and `--mode` flag |
+| Smoke test: `.keep` object not found | Folder structure not created | Re-run `setup-iam.sh` without `--skip-buckets` |
 | API not enabled error | APIs not enabled | Run `setup-apis.sh` first |
+| Lifecycle config not found | `raw-lifecycle.json` missing | Ensure `raw-lifecycle.json` is present alongside `setup-iam.sh` |
 
 ---
 
