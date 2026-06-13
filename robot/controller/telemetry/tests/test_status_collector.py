@@ -121,7 +121,7 @@ class TestManualCollection:
         dm = _make_device_manager()
         sc = StatusCollector(c, dm)
         sc.collect_battery_now()
-        assert c.size() == 1
+        assert c.buffer_size == 1
 
     def test_collect_battery_payload_fields(self):
         c = TelemetryCollector()
@@ -138,7 +138,7 @@ class TestManualCollection:
         sc = StatusCollector(c, dm)
         event = sc.collect_battery_now()
         assert event is None
-        assert c.size() == 0
+        assert c.buffer_size == 0
 
     def test_collect_motor_now_returns_event(self):
         c = TelemetryCollector()
@@ -168,7 +168,7 @@ class TestDeviceEvents:
         dm = _make_device_manager()
         sc = StatusCollector(c, dm)
         sc._on_device_disconnect("drive_L_motor", {"port": "A"})
-        assert c.size() == 1
+        assert c.buffer_size == 1
         event = c.peek()[0]
         assert event["event_type"] == "device_status"
         assert event["payload"]["status"] == "disconnected"
@@ -179,7 +179,7 @@ class TestDeviceEvents:
         dm = _make_device_manager()
         sc = StatusCollector(c, dm)
         sc._on_device_reconnect("drive_L_motor", {"port": "A"})
-        assert c.size() == 1
+        assert c.buffer_size == 1
         event = c.peek()[0]
         assert event["event_type"] == "device_status"
         assert event["payload"]["status"] == "connected"

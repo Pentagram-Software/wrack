@@ -14,7 +14,7 @@ Usage::
     from telemetry.collector import TelemetryCollector
     from telemetry.status_collector import StatusCollector
 
-    collector = TelemetryCollector(device_id="ev3-001")
+    collector = TelemetryCollector(source="ev3")
     status = StatusCollector(collector, device_manager)
     status.start()
 

@@ -108,7 +108,7 @@ _telemetry_sender = None
 _status_collector = None
 
 if TelemetryCollector:
-    _telemetry_collector = TelemetryCollector(device_id=_TELEMETRY_DEVICE_ID)
+    _telemetry_collector = TelemetryCollector(source="ev3")
     print("Telemetry collector initialised")
 
 if TelemetrySender and _TELEMETRY_ENDPOINT and _TELEMETRY_API_KEY:
@@ -126,9 +126,21 @@ def _telemetry_send_loop():
         sleep(120)
         try:
             if _telemetry_sender and _telemetry_collector:
-                _telemetry_sender.send_from_collector(_telemetry_collector)
+                _telemetry_sender.flush_and_send(_telemetry_collector, async_send=True)
         except Exception as exc:
             print("Telemetry flush error: {}".format(exc))
+
+
+# Import telemetry module with error handling
+TelemetryCollector = None
+TelemetrySender = None
+try:
+    from telemetry import TelemetryCollector, TelemetrySender
+    print("Telemetry module imported successfully")
+except ImportError as e:
+    print("Telemetry module not available: {} - telemetry collection will be disabled".format(e))
+except Exception as e:
+    print("Error importing telemetry module: {} - telemetry collection will be disabled".format(e))
 
 
 #TODO: Better understand the debug mode
@@ -417,7 +429,7 @@ def quit(value):
     if _telemetry_sender and _telemetry_collector:
         print("Flushing telemetry events...")
         try:
-            _telemetry_sender.send(_telemetry_collector.flush())
+            _telemetry_sender.flush_and_send(_telemetry_collector)
         except Exception as exc:
             print("Final telemetry flush failed: {}".format(exc))
 

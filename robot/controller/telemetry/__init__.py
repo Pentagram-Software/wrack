@@ -6,16 +6,30 @@ Submodules
 schemas
     Event type definitions and validation utilities.
 collector
-    Thread-safe in-memory event buffer (TelemetryCollector).
+    :class:`TelemetryCollector` — builds and buffers telemetry event dicts.
 sender
-    HTTP delivery to the Cloud Function ingestion endpoint (TelemetrySender).
+    :class:`TelemetrySender` — sends buffered events to the Cloud Function
+    ingestion endpoint via HTTP POST with retry logic.
 status_collector
     Periodic battery/motor telemetry and immediate device-change events
     (StatusCollector — PEN-124).
+
+Quick start::
+
+    from telemetry import TelemetryCollector, TelemetrySender
+
+    collector = TelemetryCollector(source="ev3")
+    sender = TelemetrySender(
+        endpoint="https://...cloudfunctions.net/telemetryIngestion",
+        api_key="<your-api-key>",
+    )
+
+    collector.collect_battery_status(voltage_mv=7500, percentage=90.0)
+    sender.flush_and_send(collector)
 """
 
 from .collector import TelemetryCollector
-from .sender import TelemetrySender, SendError
+from .sender import TelemetrySender, PartialFailureError
 from .status_collector import (
     StatusCollector,
     DEFAULT_BATTERY_INTERVAL,
@@ -31,12 +45,11 @@ from .schemas import (
     P0_EVENT_TYPES,
 )
 
+__version__ = "1.0.0"
 __all__ = [
-    # Collector
     "TelemetryCollector",
-    # Sender
     "TelemetrySender",
-    "SendError",
+    "PartialFailureError",
     # Status collector (PEN-124)
     "StatusCollector",
     "DEFAULT_BATTERY_INTERVAL",

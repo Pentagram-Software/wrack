@@ -105,7 +105,7 @@ class TestEventForwarding:
         c = TelemetryCollector()
         eh.set_telemetry_collector(c)
         eh.trigger("forward")
-        assert c.size() == 1
+        assert c.buffer_size == 1
 
     def test_forwarded_event_type_is_command_received(self):
         eh = EventHandler()
@@ -130,7 +130,7 @@ class TestEventForwarding:
         eh.trigger("forward")
         eh.trigger("turn")
         eh.trigger("stop")
-        assert c.size() == 3
+        assert c.buffer_size == 3
 
     def test_no_forwarding_after_collector_detached(self):
         eh = EventHandler()
@@ -139,7 +139,7 @@ class TestEventForwarding:
         eh.trigger("forward")
         eh.set_telemetry_collector(None)
         eh.trigger("stop")
-        assert c.size() == 1
+        assert c.buffer_size == 1
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +156,7 @@ class TestEventFiltering:
         eh.trigger("turn")
         eh.trigger("reverse")
         eh.trigger("stop")
-        assert c.size() == 2
+        assert c.buffer_size == 2
         commands = {e["payload"]["command"] for e in c.peek()}
         assert commands == {"forward", "reverse"}
 
@@ -166,7 +166,7 @@ class TestEventFiltering:
         eh.set_telemetry_collector(c)
         for name in ["a", "b", "c", "d"]:
             eh.trigger(name)
-        assert c.size() == 4
+        assert c.buffer_size == 4
 
     def test_empty_filter_collects_nothing(self):
         eh = EventHandler()
@@ -174,7 +174,7 @@ class TestEventFiltering:
         eh.set_telemetry_collector(c, event_filter=[])
         eh.trigger("forward")
         eh.trigger("stop")
-        assert c.size() == 0
+        assert c.buffer_size == 0
 
 
 # ---------------------------------------------------------------------------
