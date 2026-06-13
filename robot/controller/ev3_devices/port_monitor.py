@@ -86,7 +86,7 @@ class PortMonitor:
             return
         
         self._running = True
-        self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self._monitor_thread = threading.Thread(target=self._monitor_loop)
         self._monitor_thread.start()
         
         if __debug__:
