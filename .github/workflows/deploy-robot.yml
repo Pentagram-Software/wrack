@@ -1,0 +1,62 @@
+name: Deploy to EV3
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'robot/controller/**'
+      - '.github/workflows/deploy-robot.yml'
+
+jobs:
+  deploy:
+    name: Deploy robot/controller to EV3
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Determine whether the EV3 is reachable via the configured secrets.
+      # The job skips gracefully when EV3_IP is not set so that forks and
+      # contributors without hardware can still push to main without failure.
+      # -----------------------------------------------------------------------
+      - name: Check EV3 secrets
+        id: check
+        run: |
+          if [ -n "$EV3_IP_SECRET" ]; then
+            echo "ev3_configured=true" >> "$GITHUB_OUTPUT"
+            echo "EV3 secrets configured — proceeding with deploy"
+          else
+            echo "ev3_configured=false" >> "$GITHUB_OUTPUT"
+            echo "EV3_IP secret not set — skipping EV3 deploy"
+          fi
+        env:
+          EV3_IP_SECRET: ${{ secrets.EV3_IP }}
+
+      - name: Setup SSH key
+        if: steps.check.outputs.ev3_configured == 'true'
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EV3_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p "${{ secrets.EV3_SSH_PORT || '22' }}" -o ConnectTimeout=15 -H "${{ secrets.EV3_IP }}" >> ~/.ssh/known_hosts
+        env:
+          EV3_SSH_PORT: ${{ secrets.EV3_SSH_PORT }}
+
+      - name: Deploy to EV3
+        if: steps.check.outputs.ev3_configured == 'true'
+        env:
+          EV3_IP: ${{ secrets.EV3_IP }}
+          EV3_SSH_PORT: ${{ secrets.EV3_SSH_PORT || '22' }}
+          EV3_USER: ${{ secrets.EV3_USER || 'robot' }}
+        run: make deploy-robot
+
+      - name: Tag successful deployment
+        if: steps.check.outputs.ev3_configured == 'true' && success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "deploy/ev3/$(date -u +%Y%m%d-%H%M%S)-${GITHUB_SHA::8}"
+          git push origin --tags
