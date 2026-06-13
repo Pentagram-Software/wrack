@@ -256,6 +256,10 @@ grant_bucket_iam() {
   [[ "${DRY_RUN}" != "true" ]] && ok "${SA_DATA_EMAIL} → roles/storage.objectAdmin on ${BUCKET_RAW}"
 
   # cat-recognizer-data: objectViewer on processed-data bucket (read annotations)
+  # The edge device currently only uploads raw frames; this grant is provisioned
+  # ahead of the planned annotation-feedback loop where the edge will pull
+  # per-cat class labels from processed-data to filter uploads at the source.
+  # Until that flow is implemented the grant is intentionally dormant.
   info "Granting roles/storage.objectViewer on ${BUCKET_PROCESSED} to ${SA_DATA_EMAIL}..."
   run gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_PROCESSED}" \
     --member="serviceAccount:${SA_DATA_EMAIL}" \
