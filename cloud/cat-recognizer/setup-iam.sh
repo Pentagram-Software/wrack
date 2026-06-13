@@ -342,10 +342,10 @@ _upload_keep() {
 
   local tmp_file
   tmp_file="$(mktemp)"
+  trap "rm -f ${tmp_file}" RETURN
   gcloud storage cp "${tmp_file}" "${object}" \
     --content-type="text/plain" \
     --project="${PROJECT_ID}"
-  rm -f "${tmp_file}"
   ok "Created ${object}"
 }
 
