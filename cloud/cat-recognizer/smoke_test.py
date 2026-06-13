@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
 """smoke_test.py — GCS access smoke test for CatRecognizer service accounts.
 
-PEN-24: Verifies that the provisioned service accounts can perform their
-expected GCS operations.  Designed to be run after setup-iam.sh.
+PEN-25: Verifies that the provisioned service accounts can perform their
+expected GCS operations across the three-bucket layout.  Designed to be run
+after setup-iam.sh.
 
 Usage
 -----
-# Data collector SA — should have objectAdmin on training-data bucket:
+# Data collector SA — objectAdmin on raw-data, objectViewer on processed-data:
 GOOGLE_APPLICATION_CREDENTIALS=keys/cat-recognizer-data-key.json \\
   python3 cloud/cat-recognizer/smoke_test.py \\
-  --bucket=<PROJECT>-cat-recognizer-training-data --mode=data
+  --mode=data \\
+  --bucket-raw=<PROJECT>-cat-recognizer-raw-data \\
+  --bucket-processed=<PROJECT>-cat-recognizer-processed-data
 
-# Trainer SA — should have objectViewer on training-data, objectAdmin on models:
+# Trainer SA — objectViewer on raw-data, objectAdmin on processed-data and models:
 GOOGLE_APPLICATION_CREDENTIALS=keys/cat-recognizer-trainer-key.json \\
   python3 cloud/cat-recognizer/smoke_test.py \\
-  --bucket-data=<PROJECT>-cat-recognizer-training-data \\
-  --bucket-models=<PROJECT>-cat-recognizer-models \\
-  --mode=trainer
+  --mode=trainer \\
+  --bucket-raw=<PROJECT>-cat-recognizer-raw-data \\
+  --bucket-processed=<PROJECT>-cat-recognizer-processed-data \\
+  --bucket-models=<PROJECT>-cat-recognizer-models
 
 Exit codes:
   0  — all checks passed
@@ -27,7 +31,6 @@ Exit codes:
 import argparse
 import os
 import sys
-import tempfile
 import uuid
 from typing import Optional
 
@@ -88,9 +91,14 @@ def check_write_object(
     client: storage.Client,
     bucket_name: str,
     counter: _Counter,
+    prefix: str = "",
 ) -> Optional[str]:
-    """Upload a small test file; return the blob name on success, None on failure."""
-    blob_name = f"_smoke-test/{uuid.uuid4().hex}.txt"
+    """Upload a small test file under *prefix*; return the blob name on success.
+
+    *prefix* should end with "/" when provided (e.g. "ryfka/", "train/").
+    The sentinel blob is placed at ``{prefix}_smoke-test/<uuid>.txt``.
+    """
+    blob_name = f"{prefix}_smoke-test/{uuid.uuid4().hex}.txt"
     label = f"write object gs://{bucket_name}/{blob_name}"
     try:
         bucket = client.bucket(bucket_name)
@@ -172,43 +180,101 @@ def check_denied_write(
         counter.fail(label, str(exc))
 
 
+def check_keep_objects(
+    client: storage.Client,
+    bucket_name: str,
+    prefixes: list,
+    counter: _Counter,
+) -> None:
+    """Verify that .keep placeholder objects exist at the given prefixes.
+
+    Each entry in *prefixes* should end with "/" (e.g. "ryfka/"), and the
+    expected object name is ``{prefix}.keep``.
+    """
+    for prefix in prefixes:
+        blob_name = f"{prefix}.keep"
+        label = f"placeholder exists gs://{bucket_name}/{blob_name}"
+        try:
+            bucket = client.bucket(bucket_name)
+            blob = bucket.blob(blob_name)
+            blob.reload()
+            counter.ok(label)
+        except NotFound:
+            counter.fail(label, "placeholder .keep object not found — has setup-iam.sh been run?")
+        except Forbidden as exc:
+            counter.fail(label, f"PERMISSION_DENIED — {exc}")
+        except Exception as exc:  # noqa: BLE001
+            counter.fail(label, str(exc))
+
+
 # ── Mode-specific test suites ──────────────────────────────────────────────────
 
-def run_data_mode(bucket_training: str) -> _Counter:
+def run_data_mode(bucket_raw: str, bucket_processed: str) -> _Counter:
     """
     Test the cat-recognizer-data SA:
-      - objectAdmin on training-data bucket → can list, write, read
+      - objectAdmin on raw-data bucket    → can list, write to ryfka/, read
+      - objectViewer on processed bucket  → can list, but NOT write
+      - Both buckets: verify .keep placeholder objects exist
     """
-    print(f"\nMode: data  (bucket: gs://{bucket_training})")
+    print(f"\nMode: data")
+    print(f"  raw-data bucket:   gs://{bucket_raw}")
+    print(f"  processed bucket:  gs://{bucket_processed}")
     counter = _Counter()
     client = _gcs_client()
 
-    check_list_objects(client, bucket_training, counter)
-    blob_name = check_write_object(client, bucket_training, counter)
+    # raw-data bucket: write access checks
+    check_list_objects(client, bucket_raw, counter)
+    blob_name = check_write_object(client, bucket_raw, counter, prefix="ryfka/")
     if blob_name:
-        check_read_object(client, bucket_training, blob_name, counter)
-        cleanup_object(client, bucket_training, blob_name)
+        check_read_object(client, bucket_raw, blob_name, counter)
+        cleanup_object(client, bucket_raw, blob_name)
+
+    # raw-data bucket: verify .keep placeholders per cat
+    check_keep_objects(client, bucket_raw, ["ryfka/", "chaja/", "lea/"], counter)
+
+    # processed bucket: read-only checks
+    check_list_objects(client, bucket_processed, counter)
+    check_denied_write(client, bucket_processed, counter)
+
+    # processed bucket: verify .keep placeholders per split
+    check_keep_objects(client, bucket_processed, ["train/", "val/", "test/"], counter)
 
     return counter
 
 
-def run_trainer_mode(bucket_training: str, bucket_models: str) -> _Counter:
+def run_trainer_mode(bucket_raw: str, bucket_processed: str, bucket_models: str) -> _Counter:
     """
     Test the cat-recognizer-trainer SA:
-      - objectViewer on training-data bucket → can list and read, but NOT write
-      - objectAdmin on models bucket         → can list, write, read
+      - objectViewer on raw-data bucket   → can list and read, but NOT write
+      - objectAdmin on processed bucket   → can list, write to train/, read
+      - objectAdmin on models bucket      → can list, write, read
+      - Both raw and processed: verify .keep placeholder objects exist
     """
     print(f"\nMode: trainer")
-    print(f"  training-data bucket: gs://{bucket_training}")
-    print(f"  models bucket:        gs://{bucket_models}")
+    print(f"  raw-data bucket:   gs://{bucket_raw}")
+    print(f"  processed bucket:  gs://{bucket_processed}")
+    print(f"  models bucket:     gs://{bucket_models}")
     counter = _Counter()
     client = _gcs_client()
 
-    # Training-data: read-only checks
-    check_list_objects(client, bucket_training, counter)
-    check_denied_write(client, bucket_training, counter)
+    # raw-data bucket: read-only checks
+    check_list_objects(client, bucket_raw, counter)
+    check_denied_write(client, bucket_raw, counter)
 
-    # Models bucket: full write checks
+    # raw-data bucket: verify .keep placeholders per cat
+    check_keep_objects(client, bucket_raw, ["ryfka/", "chaja/", "lea/"], counter)
+
+    # processed bucket: write access checks (write to train/ prefix)
+    check_list_objects(client, bucket_processed, counter)
+    blob_name = check_write_object(client, bucket_processed, counter, prefix="train/")
+    if blob_name:
+        check_read_object(client, bucket_processed, blob_name, counter)
+        cleanup_object(client, bucket_processed, blob_name)
+
+    # processed bucket: verify .keep placeholders per split
+    check_keep_objects(client, bucket_processed, ["train/", "val/", "test/"], counter)
+
+    # models bucket: write access checks
     check_list_objects(client, bucket_models, counter)
     blob_name = check_write_object(client, bucket_models, counter)
     if blob_name:
@@ -233,21 +299,22 @@ def _parse_args() -> argparse.Namespace:
         help="Which service account role to test.",
     )
     p.add_argument(
-        "--bucket",
-        metavar="BUCKET",
-        help="Bucket name to test (used for --mode=data as the training-data bucket).",
+        "--bucket-raw",
+        metavar="BUCKET_RAW",
+        dest="bucket_raw",
+        help="Raw-data bucket name (default: <project>-cat-recognizer-raw-data).",
     )
     p.add_argument(
-        "--bucket-data",
-        metavar="BUCKET_DATA",
-        dest="bucket_data",
-        help="Training-data bucket name (used for --mode=trainer).",
+        "--bucket-processed",
+        metavar="BUCKET_PROCESSED",
+        dest="bucket_processed",
+        help="Processed-data bucket name (default: <project>-cat-recognizer-processed-data).",
     )
     p.add_argument(
         "--bucket-models",
         metavar="BUCKET_MODELS",
         dest="bucket_models",
-        help="Models bucket name (used for --mode=trainer).",
+        help="Models bucket name (default: <project>-cat-recognizer-models).",
     )
     p.add_argument(
         "--project",
@@ -259,36 +326,29 @@ def _parse_args() -> argparse.Namespace:
 
 def _derive_bucket_names(
     args: argparse.Namespace,
-) -> tuple[str, str]:
-    """Return (bucket_training, bucket_models) resolved from CLI args or defaults."""
+) -> tuple:
+    """Return (bucket_raw, bucket_processed, bucket_models) from CLI args or defaults."""
     project = args.project
-    default_training = f"{project}-cat-recognizer-training-data"
-    default_models = f"{project}-cat-recognizer-models"
-
-    if args.mode == "data":
-        training = args.bucket or default_training
-        models = default_models
-    else:  # trainer
-        training = args.bucket_data or default_training
-        models = args.bucket_models or default_models
-
-    return training, models
+    raw = args.bucket_raw or f"{project}-cat-recognizer-raw-data"
+    processed = args.bucket_processed or f"{project}-cat-recognizer-processed-data"
+    models = args.bucket_models or f"{project}-cat-recognizer-models"
+    return raw, processed, models
 
 
 def main() -> int:
     args = _parse_args()
-    bucket_training, bucket_models = _derive_bucket_names(args)
+    bucket_raw, bucket_processed, bucket_models = _derive_bucket_names(args)
 
     print("=" * 50)
-    print("  CatRecognizer GCS Smoke Test (PEN-24)")
+    print("  CatRecognizer GCS Smoke Test (PEN-25)")
     print("=" * 50)
     creds_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "(default credentials)")
     print(f"  Credentials: {creds_path}")
 
     if args.mode == "data":
-        counter = run_data_mode(bucket_training)
+        counter = run_data_mode(bucket_raw, bucket_processed)
     else:
-        counter = run_trainer_mode(bucket_training, bucket_models)
+        counter = run_trainer_mode(bucket_raw, bucket_processed, bucket_models)
 
     print()
     print("=" * 50)

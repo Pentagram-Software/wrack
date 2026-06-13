@@ -1,6 +1,6 @@
 #!/bin/bash
 # smoke-test.sh — Convenience wrapper around smoke_test.py
-# PEN-24: Verify CatRecognizer service account access end-to-end
+# PEN-25: Verify CatRecognizer service account access across three-bucket layout
 #
 # Usage:
 #   bash cloud/cat-recognizer/smoke-test.sh [options]
@@ -47,17 +47,18 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-BUCKET_TRAINING="${PROJECT_ID}-cat-recognizer-training-data"
+BUCKET_RAW="${PROJECT_ID}-cat-recognizer-raw-data"
+BUCKET_PROCESSED="${PROJECT_ID}-cat-recognizer-processed-data"
 BUCKET_MODELS="${PROJECT_ID}-cat-recognizer-models"
 
 case "${MODE}" in
   data)
     KEY_FILE="${KEY_DIR}/cat-recognizer-data-key.json"
-    EXTRA_ARGS="--bucket=${BUCKET_TRAINING}"
+    EXTRA_ARGS="--bucket-raw=${BUCKET_RAW} --bucket-processed=${BUCKET_PROCESSED}"
     ;;
   trainer)
     KEY_FILE="${KEY_DIR}/cat-recognizer-trainer-key.json"
-    EXTRA_ARGS="--bucket-data=${BUCKET_TRAINING} --bucket-models=${BUCKET_MODELS}"
+    EXTRA_ARGS="--bucket-raw=${BUCKET_RAW} --bucket-processed=${BUCKET_PROCESSED} --bucket-models=${BUCKET_MODELS}"
     ;;
   *)
     echo "Error: --mode must be 'data' or 'trainer'" >&2
