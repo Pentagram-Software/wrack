@@ -1,6 +1,6 @@
 #!/bin/bash
 # setup-iam.sh — Create GCS buckets and service accounts for the CatRecognizer ML pipeline
-# PEN-24: Set up GCP project, IAM, and service accounts
+# PEN-25: Provision GCS buckets and structure (three-bucket layout)
 #
 # Usage:
 #   GCP_PROJECT_ID=wrack-control bash setup-iam.sh [options]
@@ -9,20 +9,27 @@
 #   --key-dir PATH              Directory to write JSON keys (default: ./keys)
 #   --store-in-secret-manager   Also store generated keys in GCP Secret Manager
 #   --dry-run                   Print commands without executing them
-#   --skip-buckets              Skip GCS bucket creation (IAM only)
+#   --skip-buckets              Skip GCS bucket creation, lifecycle, and folder structure (IAM only)
 #
 # Resources created:
 #
 #   GCS Buckets (region: europe-west3):
-#     <PROJECT>-cat-recognizer-training-data  — raw frames and annotation files
-#     <PROJECT>-cat-recognizer-models         — exported ONNX model artifacts
+#     <PROJECT>-cat-recognizer-raw-data        — raw captured frames per cat (90-day auto-delete)
+#     <PROJECT>-cat-recognizer-processed-data  — train/val/test splits and annotations
+#     <PROJECT>-cat-recognizer-models          — exported ONNX model artifacts
+#
+#   Folder structure (zero-byte .keep placeholders):
+#     raw-data:       ryfka/.keep  chaja/.keep  lea/.keep
+#     processed-data: train/.keep  val/.keep    test/.keep
 #
 #   Service Accounts:
 #     cat-recognizer-data@<PROJECT>.iam.gserviceaccount.com
-#       roles/storage.objectAdmin  on training-data bucket  (upload + manage frames)
+#       roles/storage.objectAdmin  on raw-data bucket       (upload + manage frames)
+#       roles/storage.objectViewer on processed-data bucket (read annotations)
 #
 #     cat-recognizer-trainer@<PROJECT>.iam.gserviceaccount.com
-#       roles/storage.objectViewer on training-data bucket  (read frames for training)
+#       roles/storage.objectViewer on raw-data bucket       (read frames for training)
+#       roles/storage.objectAdmin  on processed-data bucket (write splits/annotations)
 #       roles/storage.objectAdmin  on models bucket         (write model artifacts)
 #       roles/artifactregistry.writer on cat-recognizer repo (push container images)
 #
@@ -38,7 +45,8 @@ REGION="europe-west3"
 AR_LOCATION="europe-west3"
 
 # GCS bucket names (must be globally unique — using project prefix)
-BUCKET_TRAINING="${PROJECT_ID}-cat-recognizer-training-data"
+BUCKET_RAW="${PROJECT_ID}-cat-recognizer-raw-data"
+BUCKET_PROCESSED="${PROJECT_ID}-cat-recognizer-processed-data"
 BUCKET_MODELS="${PROJECT_ID}-cat-recognizer-models"
 
 # Artifact Registry repository
@@ -48,11 +56,11 @@ AR_FORMAT="DOCKER"
 # Service accounts
 SA_DATA_NAME="cat-recognizer-data"
 SA_DATA_DISPLAY="CatRecognizer Data Collector"
-SA_DATA_DESC="Uploads training frames to GCS ${BUCKET_TRAINING} (least-privilege)"
+SA_DATA_DESC="Uploads raw frames to GCS ${BUCKET_RAW}; reads processed data (least-privilege)"
 
 SA_TRAINER_NAME="cat-recognizer-trainer"
 SA_TRAINER_DISPLAY="CatRecognizer Trainer"
-SA_TRAINER_DESC="Reads training data, writes model artifacts to GCS; pushes container images (least-privilege)"
+SA_TRAINER_DESC="Reads raw data, writes processed data and model artifacts; pushes container images (least-privilege)"
 
 # Defaults — overridable via flags
 KEY_DIR="./keys"
@@ -104,17 +112,18 @@ err()  { echo "  ✗ $*" >&2; }
 print_banner() {
   echo ""
   echo "=================================================="
-  echo "  CatRecognizer — IAM Setup (PEN-24)"
+  echo "  CatRecognizer — IAM Setup (PEN-25)"
   echo "=================================================="
-  echo "  Project:       ${PROJECT_ID}"
-  echo "  Region:        ${REGION}"
-  echo "  Bucket data:   ${BUCKET_TRAINING}"
-  echo "  Bucket models: ${BUCKET_MODELS}"
-  echo "  SA data:       ${SA_DATA_EMAIL}"
-  echo "  SA trainer:    ${SA_TRAINER_EMAIL}"
-  echo "  Key dir:       ${KEY_DIR}"
-  [[ "${STORE_IN_SECRET_MANAGER}" == "true" ]] && echo "  Secret Mgr:    enabled"
-  [[ "${DRY_RUN}" == "true" ]] && echo "  Mode:          DRY-RUN (no changes)"
+  echo "  Project:           ${PROJECT_ID}"
+  echo "  Region:            ${REGION}"
+  echo "  Bucket raw:        ${BUCKET_RAW}"
+  echo "  Bucket processed:  ${BUCKET_PROCESSED}"
+  echo "  Bucket models:     ${BUCKET_MODELS}"
+  echo "  SA data:           ${SA_DATA_EMAIL}"
+  echo "  SA trainer:        ${SA_TRAINER_EMAIL}"
+  echo "  Key dir:           ${KEY_DIR}"
+  [[ "${STORE_IN_SECRET_MANAGER}" == "true" ]] && echo "  Secret Mgr:        enabled"
+  [[ "${DRY_RUN}" == "true" ]] && echo "  Mode:              DRY-RUN (no changes)"
   echo "=================================================="
   echo ""
 }
@@ -157,7 +166,7 @@ create_buckets() {
     return
   fi
 
-  for bucket in "${BUCKET_TRAINING}" "${BUCKET_MODELS}"; do
+  for bucket in "${BUCKET_RAW}" "${BUCKET_PROCESSED}" "${BUCKET_MODELS}"; do
     info "Creating GCS bucket gs://${bucket}..."
 
     if [[ "${DRY_RUN}" != "true" ]]; then
@@ -178,7 +187,28 @@ create_buckets() {
   done
 }
 
-# ── Step 3: Create service accounts (idempotent) ───────────────────────────────
+# ── Step 3: Apply lifecycle rule to raw-data bucket ────────────────────────────
+apply_lifecycle() {
+  if [[ "${SKIP_BUCKETS}" == "true" ]]; then
+    info "Skipping lifecycle rule (--skip-buckets)"
+    return
+  fi
+
+  local lifecycle_file="${SCRIPT_DIR}/lifecycle-raw-data.json"
+
+  if [[ ! -f "${lifecycle_file}" ]] && [[ "${DRY_RUN}" != "true" ]]; then
+    err "Lifecycle config file not found: ${lifecycle_file}"
+    exit 1
+  fi
+
+  info "Applying 90-day auto-delete lifecycle rule to gs://${BUCKET_RAW}..."
+  run gcloud storage buckets update "gs://${BUCKET_RAW}" \
+    --lifecycle-file="${lifecycle_file}" \
+    --project="${PROJECT_ID}"
+  [[ "${DRY_RUN}" != "true" ]] && ok "90-day auto-delete lifecycle applied to gs://${BUCKET_RAW}"
+}
+
+# ── Step 4: Create service accounts (idempotent) ───────────────────────────────
 create_service_account() {
   local name="$1" email="$2" display="$3" description="$4"
 
@@ -210,30 +240,46 @@ create_service_accounts() {
     "${SA_TRAINER_DISPLAY}" "${SA_TRAINER_DESC}"
 }
 
-# ── Step 4: Grant bucket-level IAM roles ───────────────────────────────────────
+# ── Step 5: Grant bucket-level IAM roles ───────────────────────────────────────
 grant_bucket_iam() {
   if [[ "${SKIP_BUCKETS}" == "true" ]]; then
     info "Skipping bucket IAM (--skip-buckets)"
     return
   fi
 
-  # cat-recognizer-data: full object admin on training-data bucket
-  info "Granting roles/storage.objectAdmin on ${BUCKET_TRAINING} to ${SA_DATA_EMAIL}..."
-  run gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_TRAINING}" \
+  # cat-recognizer-data: objectAdmin on raw-data bucket (upload + manage frames)
+  info "Granting roles/storage.objectAdmin on ${BUCKET_RAW} to ${SA_DATA_EMAIL}..."
+  run gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_RAW}" \
     --member="serviceAccount:${SA_DATA_EMAIL}" \
     --role="roles/storage.objectAdmin" \
     --project="${PROJECT_ID}"
-  [[ "${DRY_RUN}" != "true" ]] && ok "${SA_DATA_EMAIL} → roles/storage.objectAdmin on ${BUCKET_TRAINING}"
+  [[ "${DRY_RUN}" != "true" ]] && ok "${SA_DATA_EMAIL} → roles/storage.objectAdmin on ${BUCKET_RAW}"
 
-  # cat-recognizer-trainer: read training data
-  info "Granting roles/storage.objectViewer on ${BUCKET_TRAINING} to ${SA_TRAINER_EMAIL}..."
-  run gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_TRAINING}" \
+  # cat-recognizer-data: objectViewer on processed-data bucket (read annotations)
+  info "Granting roles/storage.objectViewer on ${BUCKET_PROCESSED} to ${SA_DATA_EMAIL}..."
+  run gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_PROCESSED}" \
+    --member="serviceAccount:${SA_DATA_EMAIL}" \
+    --role="roles/storage.objectViewer" \
+    --project="${PROJECT_ID}"
+  [[ "${DRY_RUN}" != "true" ]] && ok "${SA_DATA_EMAIL} → roles/storage.objectViewer on ${BUCKET_PROCESSED}"
+
+  # cat-recognizer-trainer: objectViewer on raw-data bucket (read frames for training)
+  info "Granting roles/storage.objectViewer on ${BUCKET_RAW} to ${SA_TRAINER_EMAIL}..."
+  run gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_RAW}" \
     --member="serviceAccount:${SA_TRAINER_EMAIL}" \
     --role="roles/storage.objectViewer" \
     --project="${PROJECT_ID}"
-  [[ "${DRY_RUN}" != "true" ]] && ok "${SA_TRAINER_EMAIL} → roles/storage.objectViewer on ${BUCKET_TRAINING}"
+  [[ "${DRY_RUN}" != "true" ]] && ok "${SA_TRAINER_EMAIL} → roles/storage.objectViewer on ${BUCKET_RAW}"
 
-  # cat-recognizer-trainer: full object admin on models bucket
+  # cat-recognizer-trainer: objectAdmin on processed-data bucket (write splits/annotations)
+  info "Granting roles/storage.objectAdmin on ${BUCKET_PROCESSED} to ${SA_TRAINER_EMAIL}..."
+  run gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_PROCESSED}" \
+    --member="serviceAccount:${SA_TRAINER_EMAIL}" \
+    --role="roles/storage.objectAdmin" \
+    --project="${PROJECT_ID}"
+  [[ "${DRY_RUN}" != "true" ]] && ok "${SA_TRAINER_EMAIL} → roles/storage.objectAdmin on ${BUCKET_PROCESSED}"
+
+  # cat-recognizer-trainer: objectAdmin on models bucket (write model artifacts)
   info "Granting roles/storage.objectAdmin on ${BUCKET_MODELS} to ${SA_TRAINER_EMAIL}..."
   run gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_MODELS}" \
     --member="serviceAccount:${SA_TRAINER_EMAIL}" \
@@ -242,7 +288,7 @@ grant_bucket_iam() {
   [[ "${DRY_RUN}" != "true" ]] && ok "${SA_TRAINER_EMAIL} → roles/storage.objectAdmin on ${BUCKET_MODELS}"
 }
 
-# ── Step 5: Create Artifact Registry repo + grant writer role ──────────────────
+# ── Step 6: Create Artifact Registry repo + grant writer role ──────────────────
 setup_artifact_registry() {
   info "Creating Artifact Registry repository '${AR_REPO}' (${AR_FORMAT})..."
 
@@ -277,7 +323,54 @@ setup_artifact_registry() {
   [[ "${DRY_RUN}" != "true" ]] && ok "${SA_TRAINER_EMAIL} → roles/artifactregistry.writer on ${AR_REPO}"
 }
 
-# ── Step 6: Generate service account keys ─────────────────────────────────────
+# ── Step 7: Upload zero-byte .keep placeholder (idempotent) ────────────────────
+_upload_keep() {
+  local bucket="$1" prefix="$2"
+  local object="gs://${bucket}/${prefix}/.keep"
+
+  info "Ensuring placeholder ${object}..."
+
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    echo "[DRY-RUN] gcloud storage cp <empty-file> ${object} --content-type=text/plain --project=${PROJECT_ID}"
+    return
+  fi
+
+  if gcloud storage objects describe "${object}" --project="${PROJECT_ID}" &>/dev/null; then
+    ok "${object} already exists — skipping"
+    return
+  fi
+
+  local tmp_file
+  tmp_file="$(mktemp)"
+  gcloud storage cp "${tmp_file}" "${object}" \
+    --content-type="text/plain" \
+    --project="${PROJECT_ID}"
+  rm -f "${tmp_file}"
+  ok "Created ${object}"
+}
+
+# ── Step 8: Initialise folder structure with .keep placeholders ────────────────
+create_folder_structure() {
+  if [[ "${SKIP_BUCKETS}" == "true" ]]; then
+    info "Skipping folder structure (--skip-buckets)"
+    return
+  fi
+
+  echo ""
+  echo "  ── Folder structure ───────────────────────────────────────────────"
+
+  # raw-data bucket: one subfolder per cat
+  for prefix in ryfka chaja lea; do
+    _upload_keep "${BUCKET_RAW}" "${prefix}"
+  done
+
+  # processed-data bucket: train/val/test splits
+  for prefix in train val test; do
+    _upload_keep "${BUCKET_PROCESSED}" "${prefix}"
+  done
+}
+
+# ── Step 9: Generate service account keys ──────────────────────────────────────
 generate_key() {
   local email="$1" key_file="$2" secret_name="$3"
 
@@ -315,7 +408,7 @@ generate_keys() {
   generate_key "${SA_TRAINER_EMAIL}" "${KEY_TRAINER}" "cat-recognizer-trainer-key"
 }
 
-# ── Step 7 (optional): Store key in GCP Secret Manager ─────────────────────────
+# ── Step 10 (optional): Store key in GCP Secret Manager ─────────────────────────
 store_secret() {
   local secret_name="$1" key_file="$2"
 
@@ -355,7 +448,7 @@ verify() {
   done
 
   if [[ "${SKIP_BUCKETS}" != "true" ]]; then
-    for bucket in "${BUCKET_TRAINING}" "${BUCKET_MODELS}"; do
+    for bucket in "${BUCKET_RAW}" "${BUCKET_PROCESSED}" "${BUCKET_MODELS}"; do
       info "Verifying bucket gs://${bucket}..."
       gcloud storage buckets describe "gs://${bucket}" \
         --project="${PROJECT_ID}" \
@@ -397,11 +490,12 @@ print_next_steps() {
   echo "Run the smoke test to verify end-to-end access:"
   echo "  GOOGLE_APPLICATION_CREDENTIALS=${KEY_DATA} \\"
   echo "    python3 cloud/cat-recognizer/smoke_test.py \\"
-  echo "    --bucket=${BUCKET_TRAINING} --mode=data"
+  echo "    --bucket-raw=${BUCKET_RAW} --bucket-processed=${BUCKET_PROCESSED} --mode=data"
   echo ""
   echo "  GOOGLE_APPLICATION_CREDENTIALS=${KEY_TRAINER} \\"
   echo "    python3 cloud/cat-recognizer/smoke_test.py \\"
-  echo "    --bucket=${BUCKET_TRAINING} --mode=trainer"
+  echo "    --bucket-raw=${BUCKET_RAW} --bucket-processed=${BUCKET_PROCESSED} \\"
+  echo "    --bucket-models=${BUCKET_MODELS} --mode=trainer"
   echo ""
 }
 
@@ -411,9 +505,11 @@ main() {
   check_prerequisites
   set_project
   create_buckets
+  apply_lifecycle
   create_service_accounts
   grant_bucket_iam
   setup_artifact_registry
+  create_folder_structure
   generate_keys
   verify
   print_next_steps
