@@ -150,8 +150,9 @@ class StatusCollector:
             self.device_manager.register_reconnect_callback(
                 self._on_device_reconnect
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            print("StatusCollector: device callback registration failed — "
+                  "device connect/disconnect events will not be collected: {}".format(exc))
 
     def _run(self) -> None:
         """Main loop — runs in a daemon thread."""
