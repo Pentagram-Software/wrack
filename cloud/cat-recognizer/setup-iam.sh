@@ -506,10 +506,10 @@ main() {
   set_project
   create_buckets
   apply_lifecycle
+  create_folder_structure
   create_service_accounts
   grant_bucket_iam
   setup_artifact_registry
-  create_folder_structure
   generate_keys
   verify
   print_next_steps
