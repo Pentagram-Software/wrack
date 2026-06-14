@@ -1,15 +1,18 @@
 """
-Tests for EventHandler telemetry integration (PEN-123).
+Tests for EventHandler telemetry integration (PEN-123 / PEN-165).
 
 Verifies that:
 - set_telemetry_collector() attaches/detaches a collector.
-- trigger() forwards events to the collector when set.
+- trigger() emits command_received (before callbacks) and command_executed (after).
+- controller_type is propagated from _controller_type attribute.
 - event_filter restricts which events are forwarded.
 - Existing event-handler behaviour is not affected.
 - Collector exceptions do not propagate to callers.
+- command_executed carries timing and success/failure information.
 """
 
 import pytest
+from unittest.mock import MagicMock
 
 from event_handler import EventHandler
 from telemetry.collector import TelemetryCollector
@@ -35,19 +38,22 @@ class TestBackwardCompatibility:
         eh.trigger("move")
         assert fired == ["move"]
 
-    def test_existing_callbacks_fire_before_telemetry(self):
+    def test_command_received_emitted_before_callbacks_command_executed_after(self):
+        """New ordering: command_received → callback → command_executed."""
         order = []
         eh = EventHandler()
 
         class OrderRecordingCollector:
-            def collect(self, *args, **kwargs):
-                order.append("telemetry")
+            def collect_command_received(self, *args, **kwargs):
+                order.append("command_received")
+
+            def collect_command_executed(self, *args, **kwargs):
+                order.append("command_executed")
 
         eh.on("ping", lambda s: order.append("callback"))
         eh.set_telemetry_collector(OrderRecordingCollector())
         eh.trigger("ping")
-        assert order[0] == "callback"
-        assert order[1] == "telemetry"
+        assert order == ["command_received", "callback", "command_executed"]
 
     def test_no_collector_attached_by_default(self):
         eh = EventHandler()
@@ -100,37 +106,40 @@ class TestSetTelemetryCollector:
 
 
 class TestEventForwarding:
-    def test_trigger_forwards_event_to_collector(self):
+    def test_trigger_produces_command_received_and_command_executed(self):
+        """One trigger() call produces two buffered events."""
         eh = EventHandler()
         c = TelemetryCollector()
         eh.set_telemetry_collector(c)
         eh.trigger("forward")
-        assert c.buffer_size == 1
+        assert c.buffer_size == 2
 
     def test_forwarded_event_type_is_command_received(self):
         eh = EventHandler()
         c = TelemetryCollector()
         eh.set_telemetry_collector(c)
         eh.trigger("drive")
-        event = c.peek()[0]
-        assert event["event_type"] == "command_received"
+        events = c.peek()
+        types = [e["event_type"] for e in events]
+        assert "command_received" in types
 
     def test_forwarded_event_payload_contains_command(self):
         eh = EventHandler()
         c = TelemetryCollector()
         eh.set_telemetry_collector(c)
         eh.trigger("drive")
-        event = c.peek()[0]
-        assert event["payload"]["command"] == "drive"
+        received = next(e for e in c.peek() if e["event_type"] == "command_received")
+        assert received["payload"]["command"] == "drive"
 
-    def test_multiple_triggers_produce_multiple_events(self):
+    def test_multiple_triggers_produce_two_events_each(self):
+        """3 triggers → 6 events (command_received + command_executed per trigger)."""
         eh = EventHandler()
         c = TelemetryCollector()
         eh.set_telemetry_collector(c)
         eh.trigger("forward")
         eh.trigger("turn")
         eh.trigger("stop")
-        assert c.buffer_size == 3
+        assert c.buffer_size == 6
 
     def test_no_forwarding_after_collector_detached(self):
         eh = EventHandler()
@@ -139,7 +148,8 @@ class TestEventForwarding:
         eh.trigger("forward")
         eh.set_telemetry_collector(None)
         eh.trigger("stop")
-        assert c.buffer_size == 1
+        # Only 2 events from the first trigger; none from the second
+        assert c.buffer_size == 2
 
 
 # ---------------------------------------------------------------------------
@@ -153,10 +163,11 @@ class TestEventFiltering:
         c = TelemetryCollector()
         eh.set_telemetry_collector(c, event_filter=["forward", "reverse"])
         eh.trigger("forward")
-        eh.trigger("turn")
+        eh.trigger("turn")    # filtered out
         eh.trigger("reverse")
-        eh.trigger("stop")
-        assert c.buffer_size == 2
+        eh.trigger("stop")    # filtered out
+        # 2 matching triggers × 2 events each
+        assert c.buffer_size == 4
         commands = {e["payload"]["command"] for e in c.peek()}
         assert commands == {"forward", "reverse"}
 
@@ -166,7 +177,8 @@ class TestEventFiltering:
         eh.set_telemetry_collector(c)
         for name in ["a", "b", "c", "d"]:
             eh.trigger(name)
-        assert c.buffer_size == 4
+        # 4 triggers × 2 events each
+        assert c.buffer_size == 8
 
     def test_empty_filter_collects_nothing(self):
         eh = EventHandler()
@@ -185,7 +197,10 @@ class TestEventFiltering:
 class TestCollectorExceptionIsolation:
     def test_collector_error_does_not_raise_to_caller(self):
         class BrokenCollector:
-            def collect(self, *args, **kwargs):
+            def collect_command_received(self, *args, **kwargs):
+                raise RuntimeError("collector exploded")
+
+            def collect_command_executed(self, *args, **kwargs):
                 raise RuntimeError("collector exploded")
 
         eh = EventHandler()
@@ -195,7 +210,10 @@ class TestCollectorExceptionIsolation:
 
     def test_callbacks_still_fire_when_collector_raises(self):
         class BrokenCollector:
-            def collect(self, *args, **kwargs):
+            def collect_command_received(self, *args, **kwargs):
+                raise RuntimeError("broken")
+
+            def collect_command_executed(self, *args, **kwargs):
                 raise RuntimeError("broken")
 
         fired = []
@@ -204,3 +222,155 @@ class TestCollectorExceptionIsolation:
         eh.on("move", lambda s: fired.append(True))
         eh.trigger("move")
         assert fired == [True]
+
+
+# ---------------------------------------------------------------------------
+# controller_type propagation (PEN-165)
+# ---------------------------------------------------------------------------
+
+
+class TestControllerTypeInEvents:
+    def test_default_controller_type_is_unknown(self):
+        eh = EventHandler()
+        c = TelemetryCollector()
+        eh.set_telemetry_collector(c)
+        eh.trigger("move")
+        received = next(e for e in c.peek() if e["event_type"] == "command_received")
+        assert received["payload"]["controller_type"] == "unknown"
+
+    def test_custom_controller_type_propagated_to_command_received(self):
+        class CustomHandler(EventHandler):
+            _controller_type = "ps4"
+
+        eh = CustomHandler()
+        c = TelemetryCollector()
+        eh.set_telemetry_collector(c)
+        eh.trigger("move")
+        received = next(e for e in c.peek() if e["event_type"] == "command_received")
+        assert received["payload"]["controller_type"] == "ps4"
+
+    def test_custom_controller_type_propagated_to_command_executed(self):
+        class CustomHandler(EventHandler):
+            _controller_type = "network_remote"
+
+        eh = CustomHandler()
+        c = TelemetryCollector()
+        eh.set_telemetry_collector(c)
+        eh.trigger("move")
+        executed = next(e for e in c.peek() if e["event_type"] == "command_executed")
+        assert executed["payload"]["controller_type"] == "network_remote"
+
+
+# ---------------------------------------------------------------------------
+# command_executed event details (PEN-165)
+# ---------------------------------------------------------------------------
+
+
+class TestCommandExecutedEvent:
+    def test_command_executed_emitted_on_every_trigger(self):
+        eh = EventHandler()
+        c = TelemetryCollector()
+        eh.set_telemetry_collector(c)
+        eh.trigger("move")
+        executed = [e for e in c.peek() if e["event_type"] == "command_executed"]
+        assert len(executed) == 1
+
+    def test_command_executed_success_true_when_no_exception(self):
+        eh = EventHandler()
+        c = TelemetryCollector()
+        eh.set_telemetry_collector(c)
+        eh.on("move", lambda s: None)
+        eh.trigger("move")
+        executed = next(e for e in c.peek() if e["event_type"] == "command_executed")
+        assert executed["payload"]["success"] is True
+
+    def test_command_executed_success_false_when_callback_raises(self):
+        eh = EventHandler()
+        c = TelemetryCollector()
+        eh.set_telemetry_collector(c)
+        eh.on("move", lambda s: (_ for _ in ()).throw(ValueError("boom")))
+
+        with pytest.raises(ValueError):
+            eh.trigger("move")
+
+        executed = next(e for e in c.peek() if e["event_type"] == "command_executed")
+        assert executed["payload"]["success"] is False
+
+    def test_command_executed_error_message_set_when_callback_raises(self):
+        eh = EventHandler()
+        c = TelemetryCollector()
+        eh.set_telemetry_collector(c)
+        eh.on("move", lambda s: (_ for _ in ()).throw(ValueError("boom")))
+
+        with pytest.raises(ValueError):
+            eh.trigger("move")
+
+        executed = next(e for e in c.peek() if e["event_type"] == "command_executed")
+        assert "boom" in executed["payload"]["error_message"]
+
+    def test_command_executed_duration_ms_is_non_negative(self):
+        eh = EventHandler()
+        c = TelemetryCollector()
+        eh.set_telemetry_collector(c)
+        eh.trigger("move")
+        executed = next(e for e in c.peek() if e["event_type"] == "command_executed")
+        duration = executed["payload"].get("duration_ms")
+        assert duration is not None
+        assert duration >= 0
+
+    def test_command_executed_emitted_even_when_callback_raises(self):
+        """command_executed must be emitted before the exception propagates."""
+        eh = EventHandler()
+        c = TelemetryCollector()
+        eh.set_telemetry_collector(c)
+        eh.on("move", lambda s: (_ for _ in ()).throw(RuntimeError("err")))
+
+        with pytest.raises(RuntimeError):
+            eh.trigger("move")
+
+        # Both command_received and command_executed should be in the buffer
+        types = {e["event_type"] for e in c.peek()}
+        assert "command_received" in types
+        assert "command_executed" in types
+
+    def test_exception_from_callback_propagates_after_telemetry(self):
+        """The original exception from a callback must still propagate."""
+        eh = EventHandler()
+        c = TelemetryCollector()
+        eh.set_telemetry_collector(c)
+        eh.on("move", lambda s: (_ for _ in ()).throw(RuntimeError("propagate_me")))
+
+        with pytest.raises(RuntimeError, match="propagate_me"):
+            eh.trigger("move")
+
+    def test_command_executed_respects_event_filter(self):
+        """command_executed is not emitted for filtered-out events."""
+        eh = EventHandler()
+        c = TelemetryCollector()
+        eh.set_telemetry_collector(c, event_filter=["allowed"])
+        eh.trigger("allowed")
+        eh.trigger("blocked")
+        executed = [e for e in c.peek() if e["event_type"] == "command_executed"]
+        assert len(executed) == 1
+        assert executed[0]["payload"]["command"] == "allowed"
+
+    def test_command_executed_payload_passes_schema_validation(self):
+        """command_executed event passes schema validation."""
+        from telemetry.schemas import validate_event
+        eh = EventHandler()
+        c = TelemetryCollector()
+        eh.set_telemetry_collector(c)
+        eh.on("move", lambda s: None)
+        eh.trigger("move")
+        executed = next(e for e in c.peek() if e["event_type"] == "command_executed")
+        validate_event(executed)  # must not raise
+
+    def test_command_received_payload_passes_schema_validation(self):
+        """command_received event passes schema validation."""
+        from telemetry.schemas import validate_event
+        eh = EventHandler()
+        c = TelemetryCollector()
+        eh.set_telemetry_collector(c)
+        eh.trigger("move")
+        received = next(e for e in c.peek() if e["event_type"] == "command_received")
+        validate_event(received)  # must not raise

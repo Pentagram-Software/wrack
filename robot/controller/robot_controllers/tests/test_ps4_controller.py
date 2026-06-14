@@ -580,4 +580,64 @@ class TestPS4ControllerAxisScaling:
         assert self.controller._scale_axis(255, (-1000, 1000)) is None
         assert self.controller._scale_axis(4294967295, (-1000, 1000)) is None
 
+class TestPS4ControllerTelemetry:
+    """Telemetry tests for PS4Controller (PEN-165)."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.controller = PS4Controller()
+        from telemetry.collector import TelemetryCollector
+        self.collector = TelemetryCollector()
+        self.controller.set_telemetry_collector(self.collector)
+
+    def test_controller_type_attribute_is_ps4(self):
+        assert self.controller._controller_type == "ps4"
+
+    @pytest.mark.parametrize("event_name", [
+        "cross_button",
+        "left_joystick",
+        "right_joystick",
+        "l1_button",
+        "r1_button",
+    ])
+    def test_trigger_produces_command_received_with_ps4_controller_type(self, event_name):
+        self.controller.trigger(event_name)
+        received = next(
+            e for e in self.collector.peek() if e["event_type"] == "command_received"
+        )
+        assert received["payload"]["controller_type"] == "ps4"
+
+    @pytest.mark.parametrize("event_name", [
+        "cross_button",
+        "left_joystick",
+        "square_button",
+    ])
+    def test_trigger_produces_command_executed_with_ps4_controller_type(self, event_name):
+        self.controller.trigger(event_name)
+        executed = next(
+            e for e in self.collector.peek() if e["event_type"] == "command_executed"
+        )
+        assert executed["payload"]["controller_type"] == "ps4"
+
+    def test_command_received_and_command_executed_both_emitted(self):
+        self.controller.trigger("cross_button")
+        types = {e["event_type"] for e in self.collector.peek()}
+        assert "command_received" in types
+        assert "command_executed" in types
+
+    def test_command_executed_success_true_with_no_raising_callback(self):
+        self.controller.on("cross_button", lambda s: None)
+        self.controller.trigger("cross_button")
+        executed = next(
+            e for e in self.collector.peek() if e["event_type"] == "command_executed"
+        )
+        assert executed["payload"]["success"] is True
+
+    def test_events_pass_schema_validation(self):
+        from telemetry.schemas import validate_event
+        self.controller.trigger("cross_button")
+        for event in self.collector.peek():
+            validate_event(event)
+
+
 # Tests can be run with: pytest tests/test_ps4_controller.py
