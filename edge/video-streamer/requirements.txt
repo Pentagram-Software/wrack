@@ -26,6 +26,10 @@ pytest>=7.4.0
 # numpy>=1.24.0  # Usually comes with opencv-python
 # pillow>=9.0.0  # For additional image format support
 
+# LL-HLS pipeline (hls/ package) — all stdlib; no extra runtime deps.
+# The hls/ package uses only: pathlib, threading, struct, collections,
+# http.server, urllib.parse — all part of the Python 3.12 standard library.
+
 # System requirements (install via apt/system package manager):
 # - libcamera-dev
 # - python3-libcamera

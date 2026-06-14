@@ -1,272 +1,151 @@
-# Raspberry Pi Camera Video Streaming Server
+# edge/video-streamer
 
-A high-performance video streaming server for Raspberry Pi 5 with multiple streaming protocols (UDP, TCP, HTTP/MJPEG). Optimized for both local network and internet streaming with NAT traversal support.
-
-## 🚀 Features
-
-- **Multiple Streaming Protocols**:
-  - **UDP Streaming**: Low-latency, NAT-friendly chunked transmission
-  - **TCP Streaming**: Reliable connection-based streaming
-  - **HTTP/MJPEG**: Web browser compatible streaming
-
-- **Internet-Ready UDP Protocol**:
-  - Always-chunked transmission (1200-byte payloads) to avoid IP fragmentation
-  - NAT-friendly single-socket client model
-  - Frame IDs for robust reassembly
-  - Automatic client timeout and cleanup
-
-- **Camera Features**:
-  - Raspberry Pi Camera v2.1 support via Picamera2
-  - 640x480 @ 30 FPS (configurable)
-  - JPEG compression with adjustable quality
-  - Real-time frame rate monitoring
-
-## 📋 Requirements
-
-### Hardware
-- Raspberry Pi 5 (tested)
-- Raspberry Pi Camera v2.1 or compatible
-- Network connection
-
-### Software
-- Python 3.x
-- See `requirements.txt` for Python dependencies
-
-## 🛠️ Installation
-
-1. **Clone the repository**:
-```bash
-git clone https://github.com/yourusername/rpi-camera-streaming.git
-cd rpi-camera-streaming
-```
-
-2. **Install dependencies**:
-```bash
-pip install -r requirements.txt
-```
-
-3. **Enable camera interface**:
-```bash
-sudo raspi-config
-# Navigate to Interface Options > Camera > Enable
-```
-
-## 🎯 Quick Start
-
-### Server (Raspberry Pi)
-
-Run the streaming server (uses `config/config.json` by default):
-```bash
-python3 streamer.py
-```
-
-Choose your streaming method:
-- **1**: UDP Streaming (recommended for internet)
-- **2**: TCP Streaming (reliable, local network)
-- **3**: HTTP/MJPEG (web browser compatible)
-
-### Configure Capture Settings
-
-You can configure capture and encoder settings using either JSON config or CLI flags.
-
-#### Default JSON config
-Edit `config/config.json`:
-```json
-{
-  "width": 1280,
-  "height": 720,
-  "fps": 30,
-  "bitrate": 2000000,
-  "gop": 30,
-  "profile": "baseline"
-}
-```
-
-#### Use a custom JSON file
-```bash
-python3 streamer.py --config /path/to/config.json
-```
-
-#### Override via CLI (highest priority)
-```bash
-python3 streamer.py --width 1920 --height 1080 --fps 25 --bitrate 3000000 --gop 60 --profile main
-```
-
-#### Priority order
-1. CLI flags
-2. JSON config (if present)
-3. Defaults (640x480 @ 30 FPS)
-
-#### Argument reference
-- `--width`: Video width in pixels (default: 640)
-- `--height`: Video height in pixels (default: 480)
-- `--fps`: Frames per second (default: 30)
-- `--bitrate`: H.264 target bitrate in bits/sec (default: 2_000_000)
-- `--gop`: H.264 GOP / keyframe interval in frames (default: 30)
-- `--profile`: H.264 profile (`baseline`, `main`, `high`) (default: `baseline`)
-
-### Client Examples
-
-#### UDP Client (Python)
-```python
-import socket
-import struct
-import pickle
-import cv2
-
-# Single socket for NAT-friendly operation
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.sendto(b"REGISTER_CLIENT", ("server_ip", 9999))
-
-pending = {}
-expected = {}
-
-while True:
-    data, addr = sock.recvfrom(65507)
-    
-    if data == b"REGISTERED":
-        print("Connected to server!")
-        continue
-    
-    if data.startswith(b"FRAME_START"):
-        frame_id, frame_size, chunk_count = struct.unpack("LLL", data[11:23])
-        pending[frame_id] = bytearray(frame_size)
-        expected[frame_id] = chunk_count
-        
-    elif data.startswith(b"CHUNK"):
-        frame_id, chunk_index = struct.unpack("LL", data[5:13])
-        payload = data[13:]
-        
-        if frame_id in pending:
-            offset = chunk_index * 1200
-            pending[frame_id][offset:offset+len(payload)] = payload
-            expected[frame_id] -= 1
-            
-            if expected[frame_id] == 0:
-                # Frame complete - decode and display
-                frame_data = bytes(pending.pop(frame_id))
-                expected.pop(frame_id, None)
-                
-                jpeg_buffer = pickle.loads(frame_data)
-                frame = cv2.imdecode(jpeg_buffer, cv2.IMREAD_COLOR)
-                cv2.imshow('Stream', frame)
-                
-                if cv2.waitKey(1) == 27:  # ESC to exit
-                    break
-
-cv2.destroyAllWindows()
-```
-
-#### Web Browser (HTTP)
-Simply navigate to: `http://raspberry_pi_ip:8080`
-
-## 🌐 Network Configuration
-
-### For Internet Streaming (UDP)
-
-1. **Port Forward UDP 9999** on your router to the Raspberry Pi
-2. **Firewall**: Allow UDP 9999 inbound on Raspberry Pi
-3. **Client**: Use single UDP socket (see example above)
-
-### Protocol Comparison
-
-| Protocol | Latency | Reliability | NAT Support | Browser Support |
-|----------|---------|-------------|-------------|-----------------|
-| UDP      | Lowest  | Medium      | ✅ Yes      | ❌ No          |
-| TCP      | Medium  | Highest     | ✅ Yes      | ❌ No          |
-| HTTP     | Highest | High        | ✅ Yes      | ✅ Yes         |
-
-## 📊 Performance
-
-- **Resolution**: 640x480 pixels
-- **Frame Rate**: Up to 40+ FPS (network dependent)
-- **Bandwidth**: ~600KB - 2.4MB/s (depends on scene complexity)
-- **Latency**: <100ms (UDP), ~200-500ms (TCP/HTTP)
-
-## 🔧 Configuration
-
-### Camera Settings
-Use `config/config.json` or CLI flags (`--width`, `--height`, `--fps`). The default config file is loaded automatically unless overridden with `--config`.
-
-### JPEG Quality
-Adjust compression quality (1-100):
-```python
-cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-```
-
-### Logs
-Encoder settings are written to `logs/streamer.log` with timestamps at startup.
-
-### UDP Chunk Size
-Modify chunk payload size:
-```python
-self.chunk_payload_size = 1200  # bytes
-```
-
-## 📖 Protocol Documentation
-
-See [`UDP_Frame_Format_Documentation.md`](UDP_Frame_Format_Documentation.md) for detailed protocol specifications.
-
-## 🐛 Troubleshooting
-
-### UDP Frames Not Received Over Internet
-- **Cause**: IP fragmentation or NAT issues
-- **Solution**: Use the updated always-chunked protocol (v1.1+)
-
-### Client Can't Connect
-- **Check**: Port forwarding (UDP 9999)
-- **Check**: Firewall settings
-- **Check**: Client uses same socket for registration and receiving
-
-### Low Frame Rate
-- **Reduce JPEG quality**: Lower from 80 to 50-60
-- **Check network bandwidth**: Monitor with `iftop` or similar
-- **Optimize scene**: Reduce motion/complexity in camera view
-
-## ✅ Testing
-
-### Option A: Virtual Environment (recommended on Raspberry Pi)
-```bash
-sudo apt-get update
-sudo apt-get install -y python3-venv python3-full
-
-python3 -m venv .venv
-source .venv/bin/activate
-
-pip install -r requirements.txt
-pytest -q
-```
-
-### Option B: System package
-```bash
-sudo apt-get update
-sudo apt-get install -y python3-pytest
-pytest -q
-```
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- Built with [Picamera2](https://github.com/raspberrypi/picamera2) for Raspberry Pi camera interface
-- Uses OpenCV for image processing and encoding
-- Inspired by the need for robust internet video streaming from Raspberry Pi
-
-## 📞 Support
-
-- **Issues**: [GitHub Issues](https://github.com/yourusername/rpi-camera-streaming/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/rpi-camera-streaming/discussions)
+Raspberry Pi 5 camera streaming server.  Captures live video via
+[Picamera2](https://github.com/raspberrypi/picamera2), encodes it with
+H.264/AVC, and delivers it over multiple transports.
 
 ---
 
-**Made with ❤️ for the Raspberry Pi community**
+## Directory layout
+
+```
+edge/video-streamer/
+├── streamer.py        # Legacy UDP/TCP/HTTP-MJPEG streaming (JPEG frames)
+├── config.py          # StreamConfig dataclass + JSON/CLI config parser
+├── hls/               # LL-HLS pipeline (new, PEN-52)
+│   ├── __init__.py
+│   ├── segment.py     # PartialSegment + Segment data models
+│   ├── store.py       # Thread-safe sliding-window SegmentStore
+│   ├── muxer.py       # Minimal MPEG-TS muxer (PAT + PMT + H.264 PES)
+│   ├── segmenter.py   # H.264 Annex B IDR detection + segment/part flushing
+│   ├── playlist.py    # LL-HLS M3U8 playlist generator
+│   └── server.py      # HTTP server with blocking playlist reload
+├── config/
+│   └── config.json    # Default encoding settings
+├── tests/
+│   ├── conftest.py
+│   ├── test_config.py
+│   ├── test_segmenter.py  # HLSSegmenter + NAL-unit helpers
+│   ├── test_store.py      # SegmentStore ring-buffer + blocking reload
+│   └── test_playlist.py   # PlaylistGenerator M3U8 format
+└── requirements.txt
+```
+
+---
+
+## Running
+
+### Legacy (UDP/JPEG)
+
+```bash
+cd edge/video-streamer
+python streamer.py                         # interactive mode selection
+python streamer.py --config config/config.json
+```
+
+### LL-HLS pipeline (Pi)
+
+Wire the `hls` package into your camera capture loop:
+
+```python
+from pathlib import Path
+from hls import HLSSegmenter, SegmentStore, PlaylistGenerator, LLHLSServer
+
+store     = SegmentStore(max_segments=5)
+segmenter = HLSSegmenter(output_dir=Path("/tmp/hls"), store=store,
+                          target_duration=2.0, part_target=0.25)
+generator = PlaylistGenerator(target_duration=2.0, part_target=0.25)
+server    = LLHLSServer(store, generator, output_dir=Path("/tmp/hls"), port=8888)
+server.start()
+
+# Inside the Picamera2 output callback:
+def on_h264_data(data: bytes):
+    segmenter.feed(data)
+```
+
+Clients can then play the stream via:
+
+```
+http://<pi-ip>:8888/index.m3u8    ← master playlist
+http://<pi-ip>:8888/stream.m3u8   ← media playlist (LL-HLS blocking reload)
+```
+
+---
+
+## LL-HLS pipeline (hls/)
+
+The pipeline targets [RFC 8216bis](https://datatracker.ietf.org/doc/draft-pantos-hls-rfc8216bis/)
+(Low-Latency HLS).  End-to-end latency goal: **2–4 s** (LAN).
+
+### Components
+
+| Module | Role |
+|--------|------|
+| `segment.py` | `PartialSegment` (sub-second part) and `Segment` (full segment) data classes |
+| `store.py` | `SegmentStore` – bounded deque of completed segments + pending parts.  `wait_for_part(msn, part_index)` implements the blocking-reload wait. |
+| `muxer.py` | `mux_h264_to_ts()` – wraps raw H.264 Annex B bytes in MPEG-TS packets (PAT + PMT + PES, 188-byte packets). |
+| `segmenter.py` | `HLSSegmenter` – detects IDR (keyframe) NAL units, accumulates frames, flushes partial segments every `part_target` s, and finalises full segments at IDR boundaries after `target_duration` s have elapsed.  Also exposes `contains_idr()` and `find_nal_boundaries()` as standalone utilities. |
+| `playlist.py` | `PlaylistGenerator` – produces standards-compliant M3U8 text with all required LL-HLS tags (`#EXT-X-VERSION:9`, `#EXT-X-SERVER-CONTROL`, `#EXT-X-PART-INF`, `#EXT-X-PART`, `#EXT-X-PRELOAD-HINT`). |
+| `server.py` | `LLHLSServer` – threaded `HTTPServer` serving playlists and `.ts` files.  Holds the `stream.m3u8` response until the requested `_HLS_msn` / `_HLS_part` is available (LL-HLS blocking reload). |
+
+### Playlist format
+
+**Media playlist** example (`stream.m3u8`):
+
+```m3u8
+#EXTM3U
+#EXT-X-VERSION:9
+#EXT-X-TARGETDURATION:3
+#EXT-X-PART-INF:PART-TARGET=0.250
+#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES,PART-HOLD-BACK=0.750
+#EXT-X-MEDIA-SEQUENCE:0
+
+#EXT-X-PART:DURATION=0.25000,URI="part0_0.ts",INDEPENDENT=YES
+#EXT-X-PART:DURATION=0.25000,URI="part0_1.ts"
+#EXT-X-PART:DURATION=0.25000,URI="part0_2.ts"
+#EXT-X-PART:DURATION=0.25000,URI="part0_3.ts"
+#EXTINF:2.00000,
+seg0.ts
+
+#EXT-X-PART:DURATION=0.22000,URI="part1_0.ts",INDEPENDENT=YES
+#EXT-X-PRELOAD-HINT:TYPE=PART,URI="part1_1.ts"
+```
+
+---
+
+## Configuration
+
+All camera and encoding parameters are configurable via JSON or CLI:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `width` | 640 | Video width (pixels) |
+| `height` | 480 | Video height (pixels) |
+| `fps` | 30 | Frame rate |
+| `bitrate` | 2000000 | H.264 bitrate (bps) |
+| `gop` | 30 | Keyframe interval (frames) |
+| `profile` | `baseline` | H.264 profile (`baseline`, `main`, `high`) |
+
+```bash
+python streamer.py --width 1280 --height 720 --fps 30 --bitrate 3000000
+```
+
+---
+
+## Tests
+
+```bash
+# All tests (131 total: 14 config + 117 LL-HLS)
+cd edge/video-streamer
+python -m pytest tests/ -v
+
+# LL-HLS tests only
+python -m pytest tests/test_segmenter.py tests/test_store.py tests/test_playlist.py -v
+```
+
+The LL-HLS tests cover:
+- **`test_segmenter.py`** (36 tests) – NAL boundary detection, IDR detection, SPS/PPS extraction, `HLSSegmenter` segment/part creation, timing, file writing, MPEG-TS packet alignment.
+- **`test_store.py`** (32 tests) – `SegmentStore` ring-buffer, eviction, media-sequence tracking, snapshot atomicity, `wait_for_part` blocking/timeout, concurrent access.
+- **`test_playlist.py`** (49 tests) – All required LL-HLS M3U8 tags (`#EXT-X-VERSION`, `#EXT-X-SERVER-CONTROL`, `#EXT-X-PART-INF`, `#EXT-X-PART`, `#EXT-X-PRELOAD-HINT`, `#EXTINF`), master playlist format.
+
+All tests run on the development machine without Raspberry Pi hardware (no `picamera2` import in the `hls/` package).
