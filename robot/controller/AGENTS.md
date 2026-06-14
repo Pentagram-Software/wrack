@@ -17,6 +17,23 @@
 | `telemetry/` | Event collection, buffering, and HTTP sending to GCP Cloud Functions. |
 | `pixy_camera/` | Pixy2 vision camera wrapper. |
 
+### EventHandler telemetry integration
+
+`EventHandler.trigger()` automatically emits two telemetry events per call when a collector is attached:
+
+1. **`command_received`** — emitted *before* callbacks run; includes `controller_type` derived from the class-level `_controller_type` attribute.
+2. **`command_executed`** — emitted *after* all callbacks complete; includes `success` (bool), `duration_ms` (wall-clock callback time), `controller_type`, and `error_message` if a callback raised.
+
+Subclasses declare their controller type:
+
+| Class | `_controller_type` |
+|-------|--------------------|
+| `EventHandler` (base) | `"unknown"` |
+| `PS4Controller` | `"ps4"` |
+| `RemoteController` | `"network_remote"` |
+
+Collector exceptions are always swallowed so telemetry never breaks the control path. Callback exceptions are re-raised **after** `command_executed` has been emitted (with `success=False`).
+
 ### Telemetry module (`telemetry/`)
 
 The telemetry module provides a non-blocking pipeline for forwarding robot events to BigQuery via a GCP Cloud Function.
