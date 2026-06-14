@@ -55,22 +55,34 @@ sudo raspi-config
 
 ### Server (Raspberry Pi)
 
-Run the streaming server (uses `config/config.json` by default):
+Run the streaming server (uses `config/config.json` by default, UDP transport):
 ```bash
 python3 streamer.py
 ```
 
-Choose your streaming method:
-- **1**: UDP Streaming (recommended for internet)
-- **2**: TCP Streaming (reliable, local network)
-- **3**: HTTP/MJPEG (web browser compatible)
+Select the transport via CLI or JSON config — no interactive prompt:
+```bash
+# UDP (default)
+python3 streamer.py --transport udp
 
-### Configure Capture Settings
+# TCP
+python3 streamer.py --transport tcp
 
-You can configure capture and encoder settings using either JSON config or CLI flags.
+# HTTP/MJPEG
+python3 streamer.py --transport http
+```
 
-#### Default JSON config
-Edit `config/config.json`:
+### Configuration
+
+All settings — camera, encoder, transport, and logging — can be provided through
+a **JSON config file** and/or **CLI flags**. CLI flags always win.
+
+#### Priority order
+1. CLI flags (highest)
+2. JSON config file (if present)
+3. Built-in defaults (lowest)
+
+#### Default JSON config (`config/config.json`)
 ```json
 {
   "width": 1280,
@@ -78,32 +90,50 @@ Edit `config/config.json`:
   "fps": 30,
   "bitrate": 2000000,
   "gop": 30,
-  "profile": "baseline"
+  "profile": "baseline",
+  "transport": "udp",
+  "host": "0.0.0.0",
+  "udp_port": 9999,
+  "tcp_port": 8888,
+  "http_port": 8080,
+  "log_level": "info",
+  "log_path": "logs/streamer.log"
 }
 ```
 
 #### Use a custom JSON file
 ```bash
-python3 streamer.py --config /path/to/config.json
+python3 streamer.py --config /path/to/custom.json
 ```
 
-#### Override via CLI (highest priority)
+#### Full CLI example
 ```bash
-python3 streamer.py --width 1920 --height 1080 --fps 25 --bitrate 3000000 --gop 60 --profile main
+python3 streamer.py \
+  --transport http \
+  --host 0.0.0.0 --http-port 8080 \
+  --width 1920 --height 1080 --fps 25 \
+  --bitrate 3000000 --gop 60 --profile main \
+  --log-level debug --log-path /var/log/streamer.log
 ```
 
-#### Priority order
-1. CLI flags
-2. JSON config (if present)
-3. Defaults (640x480 @ 30 FPS)
+#### CLI reference
 
-#### Argument reference
-- `--width`: Video width in pixels (default: 640)
-- `--height`: Video height in pixels (default: 480)
-- `--fps`: Frames per second (default: 30)
-- `--bitrate`: H.264 target bitrate in bits/sec (default: 2_000_000)
-- `--gop`: H.264 GOP / keyframe interval in frames (default: 30)
-- `--profile`: H.264 profile (`baseline`, `main`, `high`) (default: `baseline`)
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config` | `config/config.json` | Path to JSON config file |
+| `--width` | `640` | Video width in pixels |
+| `--height` | `480` | Video height in pixels |
+| `--fps` | `30` | Frames per second |
+| `--bitrate` | `2000000` | H.264 target bitrate (bps) |
+| `--gop` | `30` | H.264 GOP / keyframe interval (frames) |
+| `--profile` | `baseline` | H.264 profile: `baseline`, `main`, `high` |
+| `--transport` | `udp` | Streaming transport: `udp`, `tcp`, `http` |
+| `--host` | `0.0.0.0` | Server bind address |
+| `--udp-port` | `9999` | UDP server port |
+| `--tcp-port` | `8888` | TCP server port |
+| `--http-port` | `8080` | HTTP/MJPEG server port |
+| `--log-level` | `info` | Log level: `debug`, `info`, `warning`, `error`, `critical` |
+| `--log-path` | `logs/streamer.log` | Log file path |
 
 ### Client Examples
 
@@ -185,17 +215,20 @@ Simply navigate to: `http://raspberry_pi_ip:8080`
 
 ## 🔧 Configuration
 
-### Camera Settings
-Use `config/config.json` or CLI flags (`--width`, `--height`, `--fps`). The default config file is loaded automatically unless overridden with `--config`.
+### Camera / Encoder Settings
+Use `config/config.json` or CLI flags (`--width`, `--height`, `--fps`, `--bitrate`, `--gop`, `--profile`). The default config file is loaded automatically unless overridden with `--config`.
+
+### Transport Settings
+Set `transport` (and optional `host` / port flags) in `config/config.json` or via CLI. Transport selection no longer requires an interactive prompt.
+
+### Logging
+Control log verbosity with `--log-level` and the output path with `--log-path`. Log entries are written with timestamps at the INFO level by default.
 
 ### JPEG Quality
-Adjust compression quality (1-100):
+Adjust compression quality (1–100):
 ```python
 cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
 ```
-
-### Logs
-Encoder settings are written to `logs/streamer.log` with timestamps at startup.
 
 ### UDP Chunk Size
 Modify chunk payload size:
