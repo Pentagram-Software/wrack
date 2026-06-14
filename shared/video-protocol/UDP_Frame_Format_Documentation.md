@@ -74,18 +74,46 @@ UDP chunks (default payload ~1200 bytes). Each frame has a unique `frame_id`.
 This packet format is shared by both JPEG and H.264 payload modes.
 
 ### Frame Start Packet
+
+The Pi streamer uses 64-bit `unsigned long` (`L`) for the three integer fields
+(8 bytes each on Linux/Pi), giving a 35-byte FRAME_START.
+
 ```
 ┌──────────────┬────────────────────┬──────────────────┬──────────────────┐
-│ "FRAME_START"│ frame_id (uint32)  │ frame_size (u32) │ chunk_count (u32)│
-│ 11 bytes     │ 4 bytes            │ 4 bytes          │ 4 bytes          │
+│ "FRAME_START"│ frame_id (uint64)  │ frame_size (u64) │chunk_count (u64) │
+│ 11 bytes     │ 8 bytes            │ 8 bytes          │ 8 bytes          │
 └──────────────┴────────────────────┴──────────────────┴──────────────────┘
+Total: 35 bytes (without timestamp)
 ```
 
+**Optional timestamp extension** (`--embed-timestamps` flag on the streamer):
+
+An additional 8-byte `uint64` capture timestamp (microseconds since epoch,
+little-endian) is appended, making the packet 43 bytes.  Clients detect this
+by checking `len(data) == 43` and use it to compute end-to-end latency with
+`lan_validate.py` (requires NTP clock sync, ≤ 5 ms on a typical LAN).
+
+```
+┌──────────────┬────────────────────┬──────────────────┬──────────────────┬───────────────────┐
+│ "FRAME_START"│ frame_id (uint64)  │ frame_size (u64) │chunk_count (u64) │capture_ts (uint64)│
+│ 11 bytes     │ 8 bytes            │ 8 bytes          │ 8 bytes          │ 8 bytes (µs epoch)│
+└──────────────┴────────────────────┴──────────────────┴──────────────────┴───────────────────┘
+Total: 43 bytes (with timestamp)
+```
+
+For compatibility, clients should detect format by packet length:
+- 23 bytes → 32-bit FRAME_START (non-Pi platforms)
+- 35 bytes → 64-bit FRAME_START (standard Pi)
+- 43 bytes → 64-bit FRAME_START + capture timestamp
+
 ### Chunk Packets
+
+On the Pi, `L` is 64-bit, giving 21-byte chunk headers.
+
 ```
 ┌─────────┬────────────────────┬────────────────────┬────────────────────┐
-│ "CHUNK" │ frame_id (uint32)  │ chunk_index (u32)  │ chunk_payload (<=1200B)
-│ 5 bytes │ 4 bytes            │ 4 bytes            │ variable           │
+│ "CHUNK" │ frame_id (uint64)  │ chunk_index (u64)  │ chunk_payload (<=1200B)
+│ 5 bytes │ 8 bytes            │ 8 bytes            │ variable           │
 └─────────┴────────────────────┴────────────────────┴────────────────────┘
 ```
 
@@ -254,7 +282,7 @@ For production systems, consider:
 
 ---
 
-**Document Version**: 1.2  
-**Last Updated**: March 2026  
+**Document Version**: 1.3  
+**Last Updated**: June 2026  
 **System**: Raspberry Pi 5 + Pi Camera v2.1  
 **Software**: Python 3.x, OpenCV, Picamera2

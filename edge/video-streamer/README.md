@@ -104,6 +104,11 @@ python3 streamer.py --width 1920 --height 1080 --fps 25 --bitrate 3000000 --gop 
 - `--bitrate`: H.264 target bitrate in bits/sec (default: 2_000_000)
 - `--gop`: H.264 GOP / keyframe interval in frames (default: 30)
 - `--profile`: H.264 profile (`baseline`, `main`, `high`) (default: `baseline`)
+- `--embed-timestamps`: Append an 8-byte capture timestamp (µs since epoch,
+  `uint64` LE) to each `FRAME_START` packet. This extends the packet from
+  35 to 43 bytes and enables true end-to-end latency measurement in
+  `lan_validate.py` (requires NTP-synchronised clocks on both endpoints,
+  typically ≤ 5 ms accuracy on a home LAN). Off by default.
 
 ### Client Examples
 

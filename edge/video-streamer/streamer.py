@@ -80,10 +80,11 @@ class VideoStreamer:
 class UDPVideoStreamer(VideoStreamer):
     """Stream video over UDP (fast but no reliability guarantee)"""
     
-    def __init__(self, host='0.0.0.0', port=9999, **kwargs):
+    def __init__(self, host='0.0.0.0', port=9999, embed_timestamps=False, **kwargs):
         super().__init__(**kwargs)
         self.host = host
         self.port = port
+        self.embed_timestamps = embed_timestamps
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.socket.bind((self.host, self.port))
@@ -219,9 +220,14 @@ class UDPVideoStreamer(VideoStreamer):
     def send_frame_to_client(self, data, client_addr, frame_id):
         """Send a frame to a specific client using small UDP chunks to avoid fragmentation.
 
-        Protocol:
-        - FRAME_START + [frame_id:uint32][frame_size:uint32][chunk_count:uint32]
-        - CHUNK + [frame_id:uint32][chunk_index:uint32] + chunk_payload (<= chunk_payload_size)
+        Protocol (64-bit platform):
+        - FRAME_START + [frame_id:uint64][frame_size:uint64][chunk_count:uint64]
+          Optionally + [capture_timestamp_us:uint64] when embed_timestamps=True
+        - CHUNK + [frame_id:uint64][chunk_index:uint64] + chunk_payload (<= chunk_payload_size)
+
+        FRAME_START packet sizes:
+          35 bytes  — without timestamp (default)
+          43 bytes  — with 8-byte uint64 capture timestamp (--embed-timestamps flag)
         """
         size = len(data)
         payload_size = self.chunk_payload_size
@@ -231,8 +237,11 @@ class UDPVideoStreamer(VideoStreamer):
         # Compute chunk count
         chunk_count = (size + payload_size - 1) // payload_size
 
-        # Send frame start header
+        # Build FRAME_START header; optionally append capture timestamp for latency measurement
         frame_header = struct.pack("LLL", frame_id, size, chunk_count)
+        if self.embed_timestamps:
+            capture_ts_us = int(time.time() * 1_000_000)
+            frame_header += struct.pack("Q", capture_ts_us)
         self.socket.sendto(b"FRAME_START" + frame_header, client_addr)
 
         # Send chunk packets
@@ -488,6 +497,7 @@ if __name__ == "__main__":
             streamer = UDPVideoStreamer(
                 host='0.0.0.0',
                 port=9999,
+                embed_timestamps=config.embed_timestamps,
                 resolution=config.resolution,
                 framerate=config.fps,
                 bitrate=config.bitrate,
