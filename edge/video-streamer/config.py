@@ -1,7 +1,9 @@
 import argparse
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from security import TLSConfig
 
 
 @dataclass(frozen=True)
@@ -12,6 +14,7 @@ class StreamConfig:
     bitrate: int
     gop: int
     profile: str
+    tls: TLSConfig | None = field(default=None, compare=True, hash=True)
 
     @property
     def resolution(self) -> tuple[int, int]:
@@ -36,6 +39,27 @@ def parse_stream_config(argv: list[str] | None = None) -> StreamConfig:
         type=str,
         default=None,
         help="H.264 profile (baseline, main, high)",
+    )
+    parser.add_argument(
+        "--tls-cert",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to TLS certificate file (PEM). Requires --tls-key.",
+    )
+    parser.add_argument(
+        "--tls-key",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to TLS private key file (PEM). Requires --tls-cert.",
+    )
+    parser.add_argument(
+        "--tls-min-version",
+        type=str,
+        default="TLSv1.2",
+        metavar="VERSION",
+        help="Minimum TLS version for HTTPS (TLSv1.2 or TLSv1.3). Default: TLSv1.2.",
     )
     args = parser.parse_args(argv)
 
@@ -79,6 +103,19 @@ def parse_stream_config(argv: list[str] | None = None) -> StreamConfig:
     if profile not in allowed_profiles:
         raise ValueError("profile must be one of: baseline, main, high")
 
+    # Build TLS config when cert and key are both supplied
+    tls: TLSConfig | None = None
+    tls_cert = args.tls_cert
+    tls_key = args.tls_key
+    if bool(tls_cert) != bool(tls_key):
+        raise ValueError("--tls-cert and --tls-key must both be provided together")
+    if tls_cert and tls_key:
+        tls = TLSConfig(
+            cert_path=tls_cert,
+            key_path=tls_key,
+            min_tls_version=args.tls_min_version,
+        )
+
     return StreamConfig(
         width=width,
         height=height,
@@ -86,4 +123,5 @@ def parse_stream_config(argv: list[str] | None = None) -> StreamConfig:
         bitrate=bitrate,
         gop=gop,
         profile=profile,
+        tls=tls,
     )
