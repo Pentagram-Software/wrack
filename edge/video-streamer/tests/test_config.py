@@ -11,6 +11,7 @@ def test_defaults_used_when_no_args_and_no_config(tmp_path):
     assert config.bitrate == 2_000_000
     assert config.gop == 30
     assert config.profile == "baseline"
+    assert config.health_port == 9000
 
 
 def test_json_config_used_when_present(tmp_path):
@@ -79,3 +80,41 @@ def test_invalid_values_raise(args):
 def test_invalid_profile_raises():
     with pytest.raises(ValueError):
         parse_stream_config(["--profile", "unsupported"])
+
+
+# ---------------------------------------------------------------------------
+# health_port tests
+# ---------------------------------------------------------------------------
+
+
+def test_default_health_port(tmp_path):
+    config = parse_stream_config(["--config", str(tmp_path / "missing.json")])
+    assert config.health_port == 9000
+
+
+def test_health_port_from_json(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"health_port": 8888}')
+    config = parse_stream_config(["--config", str(config_path)])
+    assert config.health_port == 8888
+
+
+def test_health_port_from_cli(tmp_path):
+    config = parse_stream_config([
+        "--config", str(tmp_path / "missing.json"),
+        "--health-port", "7777",
+    ])
+    assert config.health_port == 7777
+
+
+def test_cli_health_port_overrides_json(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"health_port": 8888}')
+    config = parse_stream_config(["--config", str(config_path), "--health-port", "7777"])
+    assert config.health_port == 7777
+
+
+@pytest.mark.parametrize("port", [0, -1, 65536, 99999])
+def test_invalid_health_port_raises(port):
+    with pytest.raises(ValueError):
+        parse_stream_config(["--health-port", str(port)])
