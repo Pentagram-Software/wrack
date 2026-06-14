@@ -118,6 +118,8 @@ def printIn(x,y,text):
 # is opened regardless of which slot the kernel assigned.
 class PS4Controller(EventHandler, threading.Thread):
 
+    _controller_type = "ps4"
+
     # A flag for stopping the main loop of handling PlayStation controller events
     stopped = False;
     connected = False;  # Track connection status

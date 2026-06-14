@@ -7,6 +7,8 @@ from time import sleep, time
 
 # Purpose: A class for handling commands sent from the network remote controller (from Google Cloud Functions or mobile apps)
 class RemoteController(EventHandler, threading.Thread):
+    _controller_type = "network_remote"
+
     # A flag for stopping the main loop of handling network controller events
     stopped = False
     connected = False
