@@ -10,6 +10,7 @@ Verifies that:
 """
 
 import pytest
+from unittest.mock import MagicMock, call
 
 from event_handler import EventHandler
 from telemetry.collector import TelemetryCollector
@@ -204,3 +205,123 @@ class TestCollectorExceptionIsolation:
         eh.on("move", lambda s: fired.append(True))
         eh.trigger("move")
         assert fired == [True]
+
+
+# ---------------------------------------------------------------------------
+# Exact collect() call-argument verification (MagicMock isolation tests)
+# ---------------------------------------------------------------------------
+
+
+class TestCollectCallArguments:
+    """Isolation tests using MagicMock to verify the exact arguments forwarded
+    to ``collector.collect()`` on each ``trigger()`` call."""
+
+    @pytest.mark.parametrize("event_name", ["forward", "reverse", "turn", "stop", "drive"])
+    def test_collect_called_with_command_received_event_type(self, event_name):
+        eh = EventHandler()
+        mock_collector = MagicMock()
+        eh.set_telemetry_collector(mock_collector)
+        eh.trigger(event_name)
+        mock_collector.collect.assert_called_once_with(
+            "command_received",
+            command=event_name,
+            controller_type="unknown",
+        )
+
+    @pytest.mark.parametrize("event_name", ["forward", "stop", "left_joystick"])
+    def test_collect_receives_controller_type_unknown(self, event_name):
+        eh = EventHandler()
+        mock_collector = MagicMock()
+        eh.set_telemetry_collector(mock_collector)
+        eh.trigger(event_name)
+        _, kwargs = mock_collector.collect.call_args
+        assert kwargs.get("controller_type") == "unknown"
+
+    @pytest.mark.parametrize("event_name", ["forward", "stop", "left_joystick"])
+    def test_collect_receives_correct_command_kwarg(self, event_name):
+        eh = EventHandler()
+        mock_collector = MagicMock()
+        eh.set_telemetry_collector(mock_collector)
+        eh.trigger(event_name)
+        _, kwargs = mock_collector.collect.call_args
+        assert kwargs.get("command") == event_name
+
+    def test_collect_not_called_without_collector(self):
+        """No collector → collect() must never be invoked; callbacks still fire."""
+        eh = EventHandler()
+        fired = []
+        eh.on("click", lambda s: fired.append(True))
+        eh.trigger("click")
+        assert fired == [True]
+
+    def test_collect_not_called_after_detach(self):
+        eh = EventHandler()
+        mock_collector = MagicMock()
+        eh.set_telemetry_collector(mock_collector)
+        eh.set_telemetry_collector(None)
+        eh.trigger("forward")
+        mock_collector.collect.assert_not_called()
+
+    @pytest.mark.parametrize("non_filtered_event", ["fire", "scan", "spin"])
+    def test_collect_not_called_for_non_filtered_events(self, non_filtered_event):
+        eh = EventHandler()
+        mock_collector = MagicMock()
+        eh.set_telemetry_collector(mock_collector, event_filter=["drive", "stop"])
+        eh.trigger(non_filtered_event)
+        mock_collector.collect.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Multiple callbacks + telemetry interaction
+# ---------------------------------------------------------------------------
+
+
+class TestMultipleCallbacks:
+    """Verifies that multiple registered callbacks all fire and that telemetry
+    is emitted exactly once per ``trigger()`` call regardless of how many
+    callbacks are registered."""
+
+    def test_all_multiple_callbacks_fire_with_collector(self):
+        eh = EventHandler()
+        c = TelemetryCollector()
+        eh.set_telemetry_collector(c)
+        fired = []
+        eh.on("go", lambda s: fired.append("cb1"))
+        eh.on("go", lambda s: fired.append("cb2"))
+        eh.on("go", lambda s: fired.append("cb3"))
+        eh.trigger("go")
+        assert fired == ["cb1", "cb2", "cb3"]
+
+    def test_telemetry_called_once_per_trigger_with_multiple_callbacks(self):
+        eh = EventHandler()
+        mock_collector = MagicMock()
+        eh.set_telemetry_collector(mock_collector)
+        eh.on("go", lambda s: None)
+        eh.on("go", lambda s: None)
+        eh.on("go", lambda s: None)
+        eh.trigger("go")
+        mock_collector.collect.assert_called_once()
+
+    def test_all_callbacks_execute_before_single_telemetry_call(self):
+        """Ordering guarantee: all callbacks precede the single telemetry call."""
+        order = []
+        eh = EventHandler()
+        mock_collector = MagicMock()
+        mock_collector.collect.side_effect = lambda *a, **kw: order.append("telemetry")
+        eh.on("go", lambda s: order.append("cb1"))
+        eh.on("go", lambda s: order.append("cb2"))
+        eh.on("go", lambda s: order.append("cb3"))
+        eh.set_telemetry_collector(mock_collector)
+        eh.trigger("go")
+        assert order == ["cb1", "cb2", "cb3", "telemetry"]
+
+    def test_multiple_triggers_each_produce_one_telemetry_event(self):
+        """N trigger calls → exactly N collect() calls."""
+        eh = EventHandler()
+        mock_collector = MagicMock()
+        eh.set_telemetry_collector(mock_collector)
+        eh.on("go", lambda s: None)
+        eh.on("go", lambda s: None)
+        for _ in range(5):
+            eh.trigger("go")
+        assert mock_collector.collect.call_count == 5
