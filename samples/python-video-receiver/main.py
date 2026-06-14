@@ -6,6 +6,7 @@ UDP Video Client - receives UDP video streams
 import argparse
 import cv2
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 import socket
 import struct
@@ -13,11 +14,48 @@ import pickle
 import sys
 import time
 import threading
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 import zlib
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = SCRIPT_DIR / "config" / "config.json"
+
+
+@dataclass
+class ReconnectConfig:
+    """Parameters for automatic reconnect with exponential backoff.
+
+    Set ``max_attempts`` to 0 to disable automatic reconnect entirely.
+    """
+
+    max_attempts: int = 10
+    """Maximum number of reconnect tries before giving up (0 = disabled)."""
+
+    initial_delay_seconds: float = 1.0
+    """Delay before the first reconnect attempt."""
+
+    max_delay_seconds: float = 30.0
+    """Upper bound on the computed inter-attempt delay."""
+
+    backoff_factor: float = 2.0
+    """Multiplicative factor applied to the delay after each failed attempt."""
+
+    registration_timeout_seconds: float = 10.0
+    """How long to wait for a REGISTERED acknowledgement before retrying."""
+
+
+def compute_backoff_delay(
+    attempt: int,
+    initial_seconds: float,
+    max_seconds: float,
+    factor: float,
+) -> float:
+    """Return the delay (in seconds) for the given zero-based *attempt* index.
+
+    Applies exponential backoff capped at *max_seconds*.
+    """
+    delay = initial_seconds * (factor ** attempt)
+    return min(delay, max_seconds)
 
 DEFAULT_SETTINGS = {
     "mode": None,
@@ -231,7 +269,7 @@ class H264FrameDecoder:
         return frames[-1].to_ndarray(format="bgr24")
 
 class UDPVideoClient:
-    """Client for client-server UDP streaming"""
+    """Client for client-server UDP streaming with optional automatic reconnect."""
     
     def __init__(
         self,
@@ -239,17 +277,20 @@ class UDPVideoClient:
         server_port=9999,
         client_port=9999,
         stream_format="jpeg",
+        reconnect: Optional[ReconnectConfig] = None,
     ):
         """Initialize UDP client runtime state.
 
         Purpose: Configure socket/state for client-server UDP reception.
-        Inputs: server_host/port, client_port, and stream_format ('jpeg'|'h264').
+        Inputs: server_host/port, client_port, stream_format ('jpeg'|'h264'),
+                and an optional ReconnectConfig.
         Outputs: None. Initializes instance fields and binds UDP socket.
         """
         self.server_host = server_host
         self.server_port = server_port
         self.client_port = client_port  # 0 = auto-assign
         self.stream_format = stream_format
+        self.reconnect_config = reconnect if reconnect is not None else ReconnectConfig()
         self.running = False
 
         # Socket setup
@@ -305,30 +346,158 @@ class UDPVideoClient:
             except:
                 break
                 
-    def start_receiving(self):
-        """Start receiving video stream"""
-        self.running = True
-        
+    def _register_with_server(self) -> bool:
+        """Send REGISTER_CLIENT and wait for REGISTERED acknowledgement.
+
+        Returns True on success, False on failure (timeout or wrong response).
+        """
+        self.socket.settimeout(self.reconnect_config.registration_timeout_seconds)
         try:
-            # Get client's actual port
-            client_ip, client_port = self.socket.getsockname()
-            
-            # Request stream start with client info
-            print(f"Requesting stream from {self.server_host}:{self.server_port}")
-            print(f"Client listening on port {client_port}")
-            
-            # Send client registration request (single-socket NAT-friendly)
-            print("Registering with server...")
             self.socket.sendto(b"REGISTER_CLIENT", (self.server_host, self.server_port))
-            
-            # Wait for acknowledgment
             ack_data, server_addr = self.socket.recvfrom(1024)
             if ack_data == b"REGISTERED":
                 print(f"Successfully registered with server {server_addr}")
-            else:
-                print(f"Registration failed. Server response: {ack_data}")
-                return
+                self.socket.settimeout(5.0)
+                return True
+            print(f"Registration failed. Server response: {ack_data}")
+        except socket.timeout:
+            print("Registration timed out — server did not respond")
+        except Exception as exc:
+            print(f"Registration error: {exc}")
+        self.socket.settimeout(5.0)
+        return False
+
+    def _receive_loop(self) -> None:
+        """Inner receive loop — runs until self.running is False or a fatal error."""
+        while self.running:
+            try:
+                data, addr = self.socket.recvfrom(65536)
                 
+                # Skip registration acknowledgment
+                if data == b"REGISTERED":
+                    continue
+                
+                # Protocol v1.1: Always-chunked format with frame_id
+                if data.startswith(b"FRAME_START"):
+                    # Server uses struct.pack("LLL", frame_id, size, chunk_count)
+                    # On Pi, L might be 64-bit, making packet 35 bytes: 11 + 8 + 8 + 8 = 35
+                    if len(data) == 35:  # 64-bit L format
+                        try:
+                            frame_id, frame_size, chunk_count = struct.unpack("LLL", data[11:35])
+                            if frame_size > 0:
+                                self.pending_frames[frame_id] = bytearray(frame_size)
+                                self.expected_chunks[frame_id] = chunk_count
+                                self.received_chunks[frame_id] = set()
+                                continue
+                        except Exception:
+                            pass
+                    
+                    # Fallback: try 32-bit format
+                    elif len(data) >= 23:  # 32-bit format
+                        try:
+                            frame_id, frame_size, chunk_count = struct.unpack("III", data[11:23])
+                            if frame_size > 0:
+                                self.pending_frames[frame_id] = bytearray(frame_size)
+                                self.expected_chunks[frame_id] = chunk_count
+                                self.received_chunks[frame_id] = set()
+                                continue
+                        except Exception:
+                            pass
+                    
+                elif data.startswith(b"CHUNK"):
+                    # Server uses struct.pack("LL", frame_id, chunk_index)
+                    # Need to determine the header size based on L size
+                    header_size = 5 + (8 * 2)  # "CHUNK" + 2 * sizeof(L) - assume 64-bit L
+                    if len(data) >= header_size:
+                        try:
+                            frame_id, chunk_index = struct.unpack("LL", data[5:header_size])
+                            payload = data[header_size:]
+                            
+                            if frame_id in self.pending_frames:
+                                # Avoid duplicate chunks
+                                if chunk_index not in self.received_chunks[frame_id]:
+                                    offset = chunk_index * self.payload_size
+                                    buf = self.pending_frames[frame_id]
+                                    
+                                    if offset < len(buf):
+                                        end = min(offset + len(payload), len(buf))
+                                        buf[offset:end] = payload[:end - offset]
+                                        self.received_chunks[frame_id].add(chunk_index)
+                                        
+                                        # Check if frame is complete
+                                        if len(self.received_chunks[frame_id]) >= self.expected_chunks[frame_id]:
+                                            # Frame complete - process it
+                                            frame_data = bytes(self.pending_frames.pop(frame_id))
+                                            self.expected_chunks.pop(frame_id, None)
+                                            self.received_chunks.pop(frame_id, None)
+                                            self.process_frame_data(frame_data)
+                        except Exception:
+                            # Try 32-bit fallback
+                            try:
+                                frame_id, chunk_index = struct.unpack("II", data[5:13])
+                                payload = data[13:]
+                                
+                                if frame_id in self.pending_frames:
+                                    if chunk_index not in self.received_chunks[frame_id]:
+                                        offset = chunk_index * self.payload_size
+                                        buf = self.pending_frames[frame_id]
+                                        
+                                        if offset < len(buf):
+                                            end = min(offset + len(payload), len(buf))
+                                            buf[offset:end] = payload[:end - offset]
+                                            self.received_chunks[frame_id].add(chunk_index)
+                                            
+                                            if len(self.received_chunks[frame_id]) >= self.expected_chunks[frame_id]:
+                                                frame_data = bytes(self.pending_frames.pop(frame_id))
+                                                self.expected_chunks.pop(frame_id, None)
+                                                self.received_chunks.pop(frame_id, None)
+                                                self.process_frame_data(frame_data)
+                            except Exception:
+                                pass
+                                
+            except socket.timeout:
+                print("Timeout waiting for data...")
+                return  # Signal outer loop to attempt reconnect
+
+            except Exception as e:
+                print(f"Receive error: {e}")
+                return  # Signal outer loop to attempt reconnect
+
+    def start_receiving(self):
+        """Start receiving video stream, with automatic reconnect on failure."""
+        self.running = True
+
+        cfg = self.reconnect_config
+        attempt = 0
+
+        # Get client's actual port
+        client_ip, client_port = self.socket.getsockname()
+        print(f"Requesting stream from {self.server_host}:{self.server_port}")
+        print(f"Client listening on port {client_port}")
+
+        while self.running:
+            print("Registering with server...")
+            if not self._register_with_server():
+                if cfg.max_attempts == 0:
+                    print("Registration failed and reconnect is disabled. Exiting.")
+                    break
+                if attempt >= cfg.max_attempts:
+                    print(f"Exceeded maximum reconnect attempts ({cfg.max_attempts}). Giving up.")
+                    break
+                delay = compute_backoff_delay(
+                    attempt,
+                    cfg.initial_delay_seconds,
+                    cfg.max_delay_seconds,
+                    cfg.backoff_factor,
+                )
+                print(f"Reconnect attempt {attempt + 1}/{cfg.max_attempts} in {delay:.1f}s…")
+                time.sleep(delay)
+                attempt += 1
+                continue
+
+            # Registered successfully; reset attempt counter
+            attempt = 0
+
             # Start keep-alive thread
             keepalive_thread = threading.Thread(target=self.send_keepalive)
             keepalive_thread.daemon = True
@@ -340,113 +509,29 @@ class UDPVideoClient:
             stats_thread.start()
             
             # Initialize statistics
-            self.start_time = time.time()
+            if self.start_time is None:
+                self.start_time = time.time()
             
-            print("Receiving video stream... Press 'q' to quit")
-            
-            while self.running:
-                try:
-                    data, addr = self.socket.recvfrom(65536)
-                    
-                    # Skip registration acknowledgment
-                    if data == b"REGISTERED":
-                        continue
-                    
-                    # Protocol v1.1: Always-chunked format with frame_id
-                    if data.startswith(b"FRAME_START"):
-                        # Server uses struct.pack("LLL", frame_id, size, chunk_count)
-                        # On Pi, L might be 64-bit, making packet 35 bytes: 11 + 8 + 8 + 8 = 35
-                        if len(data) == 35:  # 64-bit L format
-                            try:
-                                frame_id, frame_size, chunk_count = struct.unpack("LLL", data[11:35])
-                                if frame_size > 0:
-                                    self.pending_frames[frame_id] = bytearray(frame_size)
-                                    self.expected_chunks[frame_id] = chunk_count
-                                    self.received_chunks[frame_id] = set()
-                                    continue
-                            except Exception:
-                                pass
-                        
-                        # Fallback: try 32-bit format
-                        elif len(data) >= 23:  # 32-bit format
-                            try:
-                                frame_id, frame_size, chunk_count = struct.unpack("III", data[11:23])
-                                if frame_size > 0:
-                                    self.pending_frames[frame_id] = bytearray(frame_size)
-                                    self.expected_chunks[frame_id] = chunk_count
-                                    self.received_chunks[frame_id] = set()
-                                    continue
-                            except Exception:
-                                pass
-                        
-                    elif data.startswith(b"CHUNK"):
-                        # Server uses struct.pack("LL", frame_id, chunk_index)
-                        # Need to determine the header size based on L size
-                        header_size = 5 + (8 * 2)  # "CHUNK" + 2 * sizeof(L) - assume 64-bit L
-                        if len(data) >= header_size:
-                            try:
-                                frame_id, chunk_index = struct.unpack("LL", data[5:header_size])
-                                payload = data[header_size:]
-                                
-                                if frame_id in self.pending_frames:
-                                    # Avoid duplicate chunks
-                                    if chunk_index not in self.received_chunks[frame_id]:
-                                        offset = chunk_index * self.payload_size
-                                        buf = self.pending_frames[frame_id]
-                                        
-                                        if offset < len(buf):
-                                            end = min(offset + len(payload), len(buf))
-                                            buf[offset:end] = payload[:end - offset]
-                                            self.received_chunks[frame_id].add(chunk_index)
-                                            
-                                            # Check if frame is complete
-                                            if len(self.received_chunks[frame_id]) >= self.expected_chunks[frame_id]:
-                                                # Frame complete - process it
-                                                frame_data = bytes(self.pending_frames.pop(frame_id))
-                                                self.expected_chunks.pop(frame_id, None)
-                                                self.received_chunks.pop(frame_id, None)
-                                                self.process_frame_data(frame_data)
-                            except Exception:
-                                # Try 32-bit fallback
-                                try:
-                                    frame_id, chunk_index = struct.unpack("II", data[5:13])
-                                    payload = data[13:]
-                                    
-                                    if frame_id in self.pending_frames:
-                                        if chunk_index not in self.received_chunks[frame_id]:
-                                            offset = chunk_index * self.payload_size
-                                            buf = self.pending_frames[frame_id]
-                                            
-                                            if offset < len(buf):
-                                                end = min(offset + len(payload), len(buf))
-                                                buf[offset:end] = payload[:end - offset]
-                                                self.received_chunks[frame_id].add(chunk_index)
-                                                
-                                                if len(self.received_chunks[frame_id]) >= self.expected_chunks[frame_id]:
-                                                    frame_data = bytes(self.pending_frames.pop(frame_id))
-                                                    self.expected_chunks.pop(frame_id, None)
-                                                    self.received_chunks.pop(frame_id, None)
-                                                    self.process_frame_data(frame_data)
-                                except Exception:
-                                    pass
-                                    
-                except socket.timeout:
-                    print("Timeout waiting for data...")
-                    continue
-                except Exception as e:
-                    print(f"Receive error: {e}")
-                    break
-                    
-        except Exception as e:
-            print(f"Connection error: {e}")
-        finally:
-            # Send disconnect message to server
-            try:
-                print("Disconnecting from server...")
-                self.socket.sendto(b"DISCONNECT", (self.server_host, self.server_port))
-            except:
-                pass
-            self.cleanup()
+            print("Receiving video stream… Press 'q' to quit")
+            self._receive_loop()
+
+            if not self.running:
+                break
+
+            # _receive_loop returned due to timeout/error — consider reconnecting
+            if cfg.max_attempts == 0:
+                print("Stream interrupted and reconnect is disabled. Exiting.")
+                break
+
+            print("Stream interrupted. Attempting to reconnect…")
+
+        # Send disconnect message to server
+        try:
+            print("Disconnecting from server...")
+            self.socket.sendto(b"DISCONNECT", (self.server_host, self.server_port))
+        except Exception:
+            pass
+        self.cleanup()
 
     def process_frame_data(self, frame_data):
         """Process reassembled frame payload by stream format.

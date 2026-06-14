@@ -19,6 +19,7 @@ import io
 import socketserver
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from config import parse_stream_config
+from health import StreamHealthMonitor, HealthServer
 
 LOGGER = logging.getLogger("streamer")
 
@@ -80,7 +81,7 @@ class VideoStreamer:
 class UDPVideoStreamer(VideoStreamer):
     """Stream video over UDP (fast but no reliability guarantee)"""
     
-    def __init__(self, host='0.0.0.0', port=9999, **kwargs):
+    def __init__(self, host='0.0.0.0', port=9999, health_port=8090, **kwargs):
         super().__init__(**kwargs)
         self.host = host
         self.port = port
@@ -96,6 +97,8 @@ class UDPVideoStreamer(VideoStreamer):
         self.fixed_client_port = 9999  # Use same port for frames as registration
         self.chunk_payload_size = 1200  # Bytes per UDP chunk payload to avoid IP fragmentation
         self.next_frame_id = 0  # Monotonically increasing frame identifier (uint32 wraparound)
+        self.health_monitor = StreamHealthMonitor(target_fps=kwargs.get("framerate", 30))
+        self._health_server = HealthServer(self.health_monitor, host=host, port=health_port) if health_port else None
         
     def start_streaming(self):
         """Start UDP video server - wait for clients and then stream"""
@@ -103,6 +106,9 @@ class UDPVideoStreamer(VideoStreamer):
         print(f"Starting UDP video server on {self.host}:{self.port}")
         print("Frames will be sent back to exact client source address (NAT-friendly)")
         print("Waiting for client connections...")
+
+        if self._health_server is not None:
+            self._health_server.start()
         
         # Start client listener thread
         listener_thread = threading.Thread(target=self.listen_for_clients)
@@ -192,6 +198,7 @@ class UDPVideoStreamer(VideoStreamer):
                         self.send_frame_to_client(data, client_addr, frame_id)
                     except Exception as e:
                         print(f"Error sending to client {client_addr}: {e}")
+                        self.health_monitor.record_error()
                         disconnected_clients.append(client_addr)
                 
                 # Remove clients that failed to receive
@@ -200,6 +207,10 @@ class UDPVideoStreamer(VideoStreamer):
                         del self.clients[client_addr]
                         print(f"Removed unresponsive client: {client_addr}")
                 
+                # Update health metrics
+                self.health_monitor.record_frame()
+                self.health_monitor.update_client_count(len(self.clients))
+
                 # Increment frame counter and show periodic status
                 self.next_frame_id = (self.next_frame_id + 1) & 0xFFFFFFFF
                 self.frames_sent += 1
@@ -214,6 +225,7 @@ class UDPVideoStreamer(VideoStreamer):
                 
             except Exception as e:
                 print(f"UDP streaming error: {e}")
+                self.health_monitor.record_error()
                 break
     
     def send_frame_to_client(self, data, client_addr, frame_id):
@@ -257,6 +269,8 @@ class UDPVideoStreamer(VideoStreamer):
                 for client_addr in inactive_clients:
                     del self.clients[client_addr]
                     print(f"Removed inactive client: {client_addr}")
+
+                self.health_monitor.update_client_count(len(self.clients))
                 
                 time.sleep(5)  # Check every 5 seconds
                 
@@ -267,6 +281,8 @@ class UDPVideoStreamer(VideoStreamer):
                 
     def stop(self):
         self.running = False
+        if self._health_server is not None:
+            self._health_server.stop()
         self.socket.close()
         self.picam2.stop()
 
@@ -488,6 +504,7 @@ if __name__ == "__main__":
             streamer = UDPVideoStreamer(
                 host='0.0.0.0',
                 port=9999,
+                health_port=8090,
                 resolution=config.resolution,
                 framerate=config.fps,
                 bitrate=config.bitrate,
