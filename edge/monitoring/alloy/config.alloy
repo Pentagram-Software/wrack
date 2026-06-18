@@ -1,0 +1,140 @@
+// Grafana Alloy configuration for Wrack edge monitoring on Raspberry Pi.
+//
+// This file is deployed to the Raspberry Pi alongside the video streamer.
+// Alloy scrapes Prometheus metrics from two sources:
+//   1. The unix/node exporter with textfile collector (video streamer metrics)
+//   2. Node-level metrics (CPU, memory, temperature) for Pi health
+//
+// Prerequisites (see PEN-191):
+//   - Grafana Alloy installed at /usr/local/bin/alloy
+//   - Textfile directory created: /var/lib/grafana-alloy/textfile/
+//   - Environment variable GRAFANA_CLOUD_PROMETHEUS_URL set
+//   - Environment variable GRAFANA_CLOUD_PROM_USER set
+//   - Environment variable GRAFANA_CLOUD_API_KEY set
+//
+// The video streamer writes metrics to:
+//   /var/lib/grafana-alloy/textfile/video_stream.prom
+// Updated every 10 s inside the UDPVideoStreamer status_interval loop.
+//
+// Metrics exposed:
+//   wrack_stream_alive            gauge   1 = streaming, 0 = stopped
+//   wrack_stream_fps_recent       gauge   FPS over last 10 s window
+//   wrack_stream_frame_drop_total counter cumulative failed client sends
+//   wrack_stream_client_count     gauge   current connected clients
+//   wrack_stream_uptime_seconds   gauge   uptime in seconds
+
+// ---------------------------------------------------------------------------
+// Prometheus remote_write — Grafana Cloud
+// ---------------------------------------------------------------------------
+
+prometheus.remote_write "grafana_cloud" {
+  endpoint {
+    url = env("GRAFANA_CLOUD_PROMETHEUS_URL")
+
+    basic_auth {
+      username = env("GRAFANA_CLOUD_PROM_USER")
+      password = env("GRAFANA_CLOUD_API_KEY")
+    }
+  }
+
+  queue_config {
+    capacity             = 10000
+    max_shards           = 4
+    max_samples_per_send = 2000
+    batch_send_deadline  = "5s"
+  }
+
+  metadata_config {
+    send         = true
+    send_interval = "1m"
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Unix / node exporter — system metrics + textfile collector
+// ---------------------------------------------------------------------------
+// The textfile collector directory is shared with the video streamer.
+// All *.prom files written there are automatically picked up and exposed.
+
+prometheus.exporter.unix "rpi" {
+  include_exporter_metrics = false
+
+  textfile {
+    directory = "/var/lib/grafana-alloy/textfile"
+  }
+
+  // Collectors relevant to Raspberry Pi edge health
+  enable_collectors = [
+    "cpu",
+    "loadavg",
+    "meminfo",
+    "filesystem",
+    "thermal_zone",   // CPU temperature on Pi
+    "textfile",
+  ]
+
+  disable_collectors = [
+    "arp",
+    "bcache",
+    "bonding",
+    "btrfs",
+    "conntrack",
+    "dmi",
+    "edac",
+    "entropy",
+    "fibrechannel",
+    "hwmon",
+    "infiniband",
+    "ipvs",
+    "mdadm",
+    "mountstats",
+    "netclass",
+    "nfs",
+    "nfsd",
+    "nvme",
+    "os",
+    "powersupplyclass",
+    "pressure",
+    "rapl",
+    "schedstat",
+    "sockstat",
+    "softnet",
+    "stat",
+    "tapestats",
+    "timex",
+    "udp_queues",
+    "uname",
+    "vmstat",
+    "xfs",
+    "zfs",
+    "zoneinfo",
+  ]
+}
+
+// ---------------------------------------------------------------------------
+// Scrape — node exporter (includes textfile collector output)
+// ---------------------------------------------------------------------------
+
+prometheus.scrape "rpi_node" {
+  targets    = prometheus.exporter.unix.rpi.targets
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+
+  scrape_interval = "10s"
+  scrape_timeout  = "8s"
+
+  job_name = "wrack_rpi_node"
+
+  extra_metrics = false
+
+  relabel_configs = [
+    {
+      // Tag all metrics with the Pi's hostname for multi-node filtering
+      target_label = "instance"
+      replacement  = env("HOSTNAME")
+    },
+    {
+      target_label = "job"
+      replacement  = "wrack_rpi_node"
+    },
+  ]
+}
