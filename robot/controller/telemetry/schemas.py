@@ -58,6 +58,9 @@ VALID_EVENT_TYPES: List[str] = [
     "sensor_reading",
     "terrain_scan",
     "connection_status",
+    "video_stream_start",
+    "video_stream_stop",
+    "video_stream_health",
 ]
 
 #: P0-priority event types that have mandatory payload validation.
@@ -68,6 +71,9 @@ P0_EVENT_TYPES: List[str] = [
     "device_status",
     "error",
     "api_request",
+    "video_stream_start",
+    "video_stream_stop",
+    "video_stream_health",
 ]
 
 VALID_DEVICE_STATUSES: List[str] = [
@@ -125,6 +131,9 @@ _SCHEMA_FILENAME_MAP: Dict[str, str] = {
     "device_status": "device_status.json",
     "error": "error.json",
     "api_request": "api_request.json",
+    "video_stream_start": "video_stream_start.json",
+    "video_stream_stop": "video_stream_stop.json",
+    "video_stream_health": "video_stream_health.json",
 }
 
 # ---------------------------------------------------------------------------
@@ -329,6 +338,77 @@ def _validate_api_request_payload(payload: Any) -> List[str]:
     return errors
 
 
+VALID_STREAM_PROTOCOLS: List[str] = ["udp", "tcp", "http"]
+
+
+def _validate_video_stream_start_payload(payload: Any) -> List[str]:
+    errors: List[str] = []
+    if not isinstance(payload, dict):
+        return ["video_stream_start payload must be a dict"]
+
+    protocol = payload.get("protocol")
+    if protocol not in VALID_STREAM_PROTOCOLS:
+        errors.append(
+            f"payload.protocol must be one of: {', '.join(VALID_STREAM_PROTOCOLS)}"
+        )
+
+    port = payload.get("port")
+    if not isinstance(port, int) or not (1 <= port <= 65535):
+        errors.append("payload.port must be an integer between 1 and 65535")
+
+    for dim in ("resolution_width", "resolution_height"):
+        val = payload.get(dim)
+        if not isinstance(val, int) or val < 1:
+            errors.append(f"payload.{dim} must be a positive integer")
+
+    target_fps = payload.get("target_fps")
+    if not isinstance(target_fps, (int, float)) or target_fps < 0:
+        errors.append("payload.target_fps must be a non-negative number")
+
+    return errors
+
+
+def _validate_video_stream_stop_payload(payload: Any) -> List[str]:
+    errors: List[str] = []
+    if not isinstance(payload, dict):
+        return ["video_stream_stop payload must be a dict"]
+
+    reason = payload.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        errors.append("payload.reason must be a non-empty string")
+
+    if "uptime_seconds" in payload and payload["uptime_seconds"] is not None:
+        uptime = payload["uptime_seconds"]
+        if not isinstance(uptime, (int, float)) or uptime < 0:
+            errors.append("payload.uptime_seconds must be a non-negative number")
+
+    return errors
+
+
+def _validate_video_stream_health_payload(payload: Any) -> List[str]:
+    errors: List[str] = []
+    if not isinstance(payload, dict):
+        return ["video_stream_health payload must be a dict"]
+
+    fps_recent = payload.get("fps_recent")
+    if not isinstance(fps_recent, (int, float)) or fps_recent < 0:
+        errors.append("payload.fps_recent must be a non-negative number")
+
+    client_count = payload.get("client_count")
+    if not isinstance(client_count, int) or client_count < 0:
+        errors.append("payload.client_count must be a non-negative integer")
+
+    frame_drop_total = payload.get("frame_drop_total")
+    if not isinstance(frame_drop_total, int) or frame_drop_total < 0:
+        errors.append("payload.frame_drop_total must be a non-negative integer")
+
+    uptime_seconds = payload.get("uptime_seconds")
+    if not isinstance(uptime_seconds, (int, float)) or uptime_seconds < 0:
+        errors.append("payload.uptime_seconds must be a non-negative number")
+
+    return errors
+
+
 _PAYLOAD_VALIDATORS = {
     "battery_status": _validate_battery_status_payload,
     "command_received": _validate_command_received_payload,
@@ -336,6 +416,9 @@ _PAYLOAD_VALIDATORS = {
     "device_status": _validate_device_status_payload,
     "error": _validate_error_payload,
     "api_request": _validate_api_request_payload,
+    "video_stream_start": _validate_video_stream_start_payload,
+    "video_stream_stop": _validate_video_stream_stop_payload,
+    "video_stream_health": _validate_video_stream_health_payload,
 }
 
 # ---------------------------------------------------------------------------

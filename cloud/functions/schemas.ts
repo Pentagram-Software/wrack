@@ -28,7 +28,10 @@ export type EventType =
   | 'motor_status'
   | 'sensor_reading'
   | 'terrain_scan'
-  | 'connection_status';
+  | 'connection_status'
+  | 'video_stream_start'
+  | 'video_stream_stop'
+  | 'video_stream_health';
 
 export interface TelemetryEventEnvelope {
   event_id: string;
@@ -115,6 +118,32 @@ export interface ApiRequestPayload {
   error_message?: string | null;
 }
 
+export type StreamProtocol = 'udp' | 'tcp' | 'http';
+
+export interface VideoStreamStartPayload {
+  protocol: StreamProtocol;
+  port: number;
+  resolution_width: number;
+  resolution_height: number;
+  target_fps: number;
+  bitrate?: number;
+}
+
+export interface VideoStreamStopPayload {
+  reason: string;
+  uptime_seconds?: number;
+  total_frames_sent?: number;
+  total_frame_drops?: number;
+}
+
+export interface VideoStreamHealthPayload {
+  fps_recent: number;
+  client_count: number;
+  frame_drop_total: number;
+  uptime_seconds: number;
+  interval_seconds?: number;
+}
+
 // ---------------------------------------------------------------------------
 // Validation infrastructure
 // ---------------------------------------------------------------------------
@@ -141,11 +170,13 @@ export const VALID_EVENT_TYPES: readonly EventType[] = [
   'battery_status', 'command_received', 'command_executed',
   'device_status', 'error', 'api_request',
   'motor_status', 'sensor_reading', 'terrain_scan', 'connection_status',
+  'video_stream_start', 'video_stream_stop', 'video_stream_health',
 ] as const;
 
 export const P0_EVENT_TYPES: readonly EventType[] = [
   'battery_status', 'command_received', 'command_executed',
   'device_status', 'error', 'api_request',
+  'video_stream_start', 'video_stream_stop', 'video_stream_health',
 ] as const;
 
 const VALID_DEVICE_STATUSES: readonly DeviceStatusValue[] = [
@@ -167,6 +198,8 @@ const VALID_CONTROLLER_TYPES: readonly ControllerType[] = [
 const VALID_HTTP_METHODS: readonly HttpMethod[] = [
   'GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS',
 ] as const;
+
+const VALID_STREAM_PROTOCOLS: readonly StreamProtocol[] = ['udp', 'tcp', 'http'] as const;
 
 const ISO_8601_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -437,6 +470,76 @@ export function validateApiRequestPayload(payload: unknown): ValidationResult {
   return { valid: errors.length === 0, errors };
 }
 
+/** Validates a `video_stream_start` payload. */
+export function validateVideoStreamStartPayload(payload: unknown): ValidationResult {
+  const errors: ValidationError[] = [];
+  if (typeof payload !== 'object' || payload === null) {
+    return { valid: false, errors: [{ field: 'payload', message: 'Must be a non-null object' }] };
+  }
+  const p = payload as Record<string, unknown>;
+
+  if (typeof p.protocol !== 'string' || !(VALID_STREAM_PROTOCOLS as readonly string[]).includes(p.protocol)) {
+    errors.push({ field: 'payload.protocol', message: `Must be one of: ${VALID_STREAM_PROTOCOLS.join(', ')}` });
+  }
+  if (typeof p.port !== 'number' || !Number.isInteger(p.port) || p.port < 1 || p.port > 65535) {
+    errors.push({ field: 'payload.port', message: 'Must be an integer between 1 and 65535' });
+  }
+  if (typeof p.resolution_width !== 'number' || !Number.isInteger(p.resolution_width) || p.resolution_width < 1) {
+    errors.push({ field: 'payload.resolution_width', message: 'Must be a positive integer' });
+  }
+  if (typeof p.resolution_height !== 'number' || !Number.isInteger(p.resolution_height) || p.resolution_height < 1) {
+    errors.push({ field: 'payload.resolution_height', message: 'Must be a positive integer' });
+  }
+  if (typeof p.target_fps !== 'number' || p.target_fps < 0) {
+    errors.push({ field: 'payload.target_fps', message: 'Must be a non-negative number' });
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+/** Validates a `video_stream_stop` payload. */
+export function validateVideoStreamStopPayload(payload: unknown): ValidationResult {
+  const errors: ValidationError[] = [];
+  if (typeof payload !== 'object' || payload === null) {
+    return { valid: false, errors: [{ field: 'payload', message: 'Must be a non-null object' }] };
+  }
+  const p = payload as Record<string, unknown>;
+
+  if (typeof p.reason !== 'string' || p.reason.trim() === '') {
+    errors.push({ field: 'payload.reason', message: 'Must be a non-empty string' });
+  }
+  if (p.uptime_seconds !== undefined && p.uptime_seconds !== null &&
+      (typeof p.uptime_seconds !== 'number' || p.uptime_seconds < 0)) {
+    errors.push({ field: 'payload.uptime_seconds', message: 'Must be a non-negative number' });
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+/** Validates a `video_stream_health` payload. */
+export function validateVideoStreamHealthPayload(payload: unknown): ValidationResult {
+  const errors: ValidationError[] = [];
+  if (typeof payload !== 'object' || payload === null) {
+    return { valid: false, errors: [{ field: 'payload', message: 'Must be a non-null object' }] };
+  }
+  const p = payload as Record<string, unknown>;
+
+  if (typeof p.fps_recent !== 'number' || p.fps_recent < 0) {
+    errors.push({ field: 'payload.fps_recent', message: 'Must be a non-negative number' });
+  }
+  if (typeof p.client_count !== 'number' || !Number.isInteger(p.client_count) || p.client_count < 0) {
+    errors.push({ field: 'payload.client_count', message: 'Must be a non-negative integer' });
+  }
+  if (typeof p.frame_drop_total !== 'number' || !Number.isInteger(p.frame_drop_total) || p.frame_drop_total < 0) {
+    errors.push({ field: 'payload.frame_drop_total', message: 'Must be a non-negative integer' });
+  }
+  if (typeof p.uptime_seconds !== 'number' || p.uptime_seconds < 0) {
+    errors.push({ field: 'payload.uptime_seconds', message: 'Must be a non-negative number' });
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch table
 // ---------------------------------------------------------------------------
@@ -450,6 +553,9 @@ const PAYLOAD_VALIDATORS: Partial<Record<EventType, PayloadValidator>> = {
   device_status: validateDeviceStatusPayload,
   error: validateErrorPayload,
   api_request: validateApiRequestPayload,
+  video_stream_start: validateVideoStreamStartPayload,
+  video_stream_stop: validateVideoStreamStopPayload,
+  video_stream_health: validateVideoStreamHealthPayload,
 };
 
 // ---------------------------------------------------------------------------
