@@ -1,0 +1,42 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://wrack.io/schemas/telemetry/payload/video_stream_start",
+  "title": "VideoStreamStartPayload",
+  "description": "Payload for video_stream_start events emitted when the Raspberry Pi video streamer starts",
+  "type": "object",
+  "required": ["protocol", "port", "resolution_width", "resolution_height", "target_fps"],
+  "additionalProperties": false,
+  "properties": {
+    "protocol": {
+      "type": "string",
+      "enum": ["udp", "tcp", "http"],
+      "description": "Streaming protocol in use"
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "description": "UDP/TCP/HTTP port the streamer is listening on"
+    },
+    "resolution_width": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Capture resolution width in pixels"
+    },
+    "resolution_height": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Capture resolution height in pixels"
+    },
+    "target_fps": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Target frames per second configured for the stream"
+    },
+    "bitrate": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Target encoding bitrate in bits per second"
+    }
+  }
+}

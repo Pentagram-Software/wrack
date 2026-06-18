@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://wrack.io/schemas/telemetry/payload/video_stream_health",
+  "title": "VideoStreamHealthPayload",
+  "description": "Payload for video_stream_health events emitted periodically (every 10 s) while the streamer is running",
+  "type": "object",
+  "required": ["fps_recent", "client_count", "frame_drop_total", "uptime_seconds"],
+  "additionalProperties": false,
+  "properties": {
+    "fps_recent": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Observed frames per second over the most recent status interval"
+    },
+    "client_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of currently connected streaming clients"
+    },
+    "frame_drop_total": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Cumulative count of failed client frame sends since streamer start"
+    },
+    "uptime_seconds": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Seconds elapsed since the streamer started"
+    },
+    "interval_seconds": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Length of the observation window for fps_recent (typically 10 s)"
+    }
+  }
+}

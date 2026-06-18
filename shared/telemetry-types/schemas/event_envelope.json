@@ -24,7 +24,10 @@
         "motor_status",
         "sensor_reading",
         "terrain_scan",
-        "connection_status"
+        "connection_status",
+        "video_stream_start",
+        "video_stream_stop",
+        "video_stream_health"
       ],
       "description": "Discriminator field identifying the event kind"
     },
