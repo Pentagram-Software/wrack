@@ -1,6 +1,7 @@
 name: Deploy to EV3
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
