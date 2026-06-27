@@ -389,3 +389,100 @@ class TestPostAsync:
                 time.sleep(0.05)
 
         assert any("telemetry-" in n for n in thread_names)
+
+
+# ---------------------------------------------------------------------------
+# emit_stream_stop — blocking / non-daemon behaviour
+# ---------------------------------------------------------------------------
+
+class TestEmitStreamStopBlocking:
+    """emit_stream_stop must use a non-daemon thread and join it so that the
+    stop event is not lost when the Python process exits immediately after
+    UDPVideoStreamer.stop() returns."""
+
+    def _make_enabled(self):
+        return VideoTelemetry(
+            endpoint_url="https://example.com/tel",
+            api_key="k",
+            telemetry_enabled=True,
+        )
+
+    def test_emit_stream_stop_spawns_non_daemon_thread(self):
+        tel = self._make_enabled()
+        spawned: list[threading.Thread] = []
+
+        original_init = threading.Thread.__init__
+
+        def capture_init(self_thread, *args, **kwargs):
+            original_init(self_thread, *args, **kwargs)
+            spawned.append(self_thread)
+
+        with patch.object(tel, "_post_async"):
+            with patch.object(threading.Thread, "__init__", capture_init):
+                tel.emit_stream_stop("keyboard_interrupt")
+
+        stop_threads = [t for t in spawned if "video_stream_stop" in t.name]
+        assert stop_threads, "No thread named 'telemetry-video_stream_stop' was created"
+        assert not stop_threads[0].daemon, "emit_stream_stop thread must be non-daemon"
+
+    def test_emit_stream_start_still_uses_daemon_thread(self):
+        tel = self._make_enabled()
+        spawned: list[threading.Thread] = []
+
+        original_init = threading.Thread.__init__
+
+        def capture_init(self_thread, *args, **kwargs):
+            original_init(self_thread, *args, **kwargs)
+            spawned.append(self_thread)
+
+        with patch.object(tel, "_post_async"):
+            with patch.object(threading.Thread, "__init__", capture_init):
+                tel.emit_stream_start("udp", 9999, 1280, 720, 30.0)
+
+        start_threads = [t for t in spawned if "video_stream_start" in t.name]
+        assert start_threads, "No thread named 'telemetry-video_stream_start' was created"
+        assert start_threads[0].daemon, "emit_stream_start thread must be daemon (fire-and-forget)"
+
+    def test_emit_stream_health_still_uses_daemon_thread(self):
+        tel = self._make_enabled()
+        spawned: list[threading.Thread] = []
+
+        original_init = threading.Thread.__init__
+
+        def capture_init(self_thread, *args, **kwargs):
+            original_init(self_thread, *args, **kwargs)
+            spawned.append(self_thread)
+
+        with patch.object(tel, "_post_async"):
+            with patch.object(threading.Thread, "__init__", capture_init):
+                tel.emit_stream_health(29.5, 2, 3, 120.0)
+
+        health_threads = [t for t in spawned if "video_stream_health" in t.name]
+        assert health_threads, "No thread named 'telemetry-video_stream_health' was created"
+        assert health_threads[0].daemon, "emit_stream_health thread must be daemon (fire-and-forget)"
+
+    def test_emit_stream_stop_joins_thread_within_timeout(self):
+        """emit_stream_stop must block until the send thread completes (or times out)."""
+        tel = self._make_enabled()
+        join_called = []
+
+        original_join = threading.Thread.join
+
+        def capture_join(self_thread, timeout=None):
+            join_called.append(timeout)
+            return original_join(self_thread, timeout=timeout)
+
+        with patch.object(tel, "_post_async"):
+            with patch.object(threading.Thread, "join", capture_join):
+                tel.emit_stream_stop("stop_called")
+
+        assert join_called, "Thread.join was never called — stop event may be lost at shutdown"
+        assert join_called[0] == tel.timeout_seconds, (
+            f"join timeout {join_called[0]!r} != timeout_seconds {tel.timeout_seconds!r}"
+        )
+
+    def test_emit_stream_stop_disabled_is_noop(self):
+        tel = VideoTelemetry(telemetry_enabled=False)
+        with patch.object(tel, "_post_async") as mock_post:
+            tel.emit_stream_stop("keyboard_interrupt")
+            mock_post.assert_not_called()

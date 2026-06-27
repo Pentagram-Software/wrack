@@ -135,7 +135,13 @@ class VideoTelemetry:
         total_frames_sent: Optional[int] = None,
         total_frame_drops: Optional[int] = None,
     ) -> None:
-        """Emit a ``video_stream_stop`` event."""
+        """Emit a ``video_stream_stop`` event.
+
+        Unlike other emit methods this call blocks up to ``timeout_seconds``
+        while waiting for the HTTP POST to complete.  This prevents the event
+        from being dropped when the Python process exits immediately after
+        ``stop()`` returns (daemon threads are killed at interpreter shutdown).
+        """
         payload: Dict[str, Any] = {"reason": reason}
         if uptime_seconds is not None:
             payload["uptime_seconds"] = uptime_seconds
@@ -144,7 +150,7 @@ class VideoTelemetry:
         if total_frame_drops is not None:
             payload["total_frame_drops"] = total_frame_drops
 
-        self._emit("video_stream_stop", payload)
+        self._emit_blocking("video_stream_stop", payload)
 
     def emit_stream_health(
         self,
@@ -171,10 +177,28 @@ class VideoTelemetry:
     # ------------------------------------------------------------------
 
     def _emit(self, event_type: str, payload: Dict[str, Any]) -> None:
-        """Build the event envelope and dispatch via a background thread."""
+        """Build the event envelope and dispatch via a background daemon thread."""
         if not self.telemetry_enabled:
             return
+        self._start_send_thread(event_type, payload, daemon=True)
 
+    def _emit_blocking(self, event_type: str, payload: Dict[str, Any]) -> None:
+        """Build the event envelope and dispatch via a non-daemon thread, then
+        join with ``timeout_seconds``.
+
+        Used for lifecycle-critical events (e.g. ``video_stream_stop``) where
+        the process may exit immediately after this call.  Non-daemon threads
+        are waited on by the Python interpreter at shutdown, so joining with a
+        timeout ensures the HTTP POST is not killed mid-flight.
+        """
+        if not self.telemetry_enabled:
+            return
+        t = self._start_send_thread(event_type, payload, daemon=False)
+        t.join(timeout=self.timeout_seconds)
+
+    def _start_send_thread(
+        self, event_type: str, payload: Dict[str, Any], *, daemon: bool
+    ) -> threading.Thread:
         event = {
             "event_id": str(uuid.uuid4()),
             "event_type": event_type,
@@ -188,10 +212,11 @@ class VideoTelemetry:
         t = threading.Thread(
             target=self._post_async,
             args=(event,),
-            daemon=True,
+            daemon=daemon,
             name=f"telemetry-{event_type}",
         )
         t.start()
+        return t
 
     def _post_async(self, event: Dict[str, Any]) -> None:
         """Perform the HTTP POST in a background thread (fire-and-forget)."""

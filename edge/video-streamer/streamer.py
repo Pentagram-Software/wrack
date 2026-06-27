@@ -204,11 +204,44 @@ class UDPVideoStreamer(VideoStreamer):
         """Stream video frames to registered clients"""
         while self.running:
             try:
+                # Periodic status tick runs unconditionally so that metrics and
+                # health events are emitted every status_interval even when no
+                # clients are connected (fps_recent=0, client_count=0 while idle).
+                current_time = time.time()
+                elapsed_interval = current_time - self.last_status_time
+                if elapsed_interval >= self.status_interval:
+                    client_count = len(self.clients)
+                    fps = self.interval_frames_sent / elapsed_interval if elapsed_interval > 0 else 0.0
+                    uptime = current_time - self.start_time
+
+                    print(
+                        f"Status: {self.frames_sent} frames sent to {client_count} client(s) "
+                        f"| FPS: {fps:.1f} | drops: {self.frame_drop_total} | "
+                        f"uptime: {uptime:.0f}s"
+                    )
+
+                    # Update Prometheus textfile
+                    self._write_metrics(fps_recent=fps)
+
+                    # Emit periodic health telemetry event
+                    if self._telemetry is not None:
+                        self._telemetry.emit_stream_health(
+                            fps_recent=fps,
+                            client_count=client_count,
+                            frame_drop_total=self.frame_drop_total,
+                            uptime_seconds=uptime,
+                            interval_seconds=elapsed_interval,
+                        )
+
+                    # Reset interval counter for next tick
+                    self.interval_frames_sent = 0
+                    self.last_status_time = current_time
+
                 if not self.clients:
-                    # No clients connected, wait
+                    # No clients connected, wait briefly then re-check tick
                     time.sleep(0.1)
                     continue
-                
+
                 frame = self.capture_frame()
                 
                 # Encode frame as JPEG
@@ -237,38 +270,6 @@ class UDPVideoStreamer(VideoStreamer):
                 self.frames_sent += 1
                 self.interval_frames_sent += 1
 
-                # Periodic status tick (every status_interval seconds)
-                current_time = time.time()
-                elapsed_interval = current_time - self.last_status_time
-                if elapsed_interval >= self.status_interval:
-                    client_count = len(self.clients)
-                    # FPS measured over the actual elapsed interval (not cumulative average)
-                    fps = self.interval_frames_sent / elapsed_interval if elapsed_interval > 0 else 0.0
-                    uptime = current_time - self.start_time
-
-                    print(
-                        f"Status: {self.frames_sent} frames sent to {client_count} client(s) "
-                        f"| FPS: {fps:.1f} | drops: {self.frame_drop_total} | "
-                        f"uptime: {uptime:.0f}s"
-                    )
-
-                    # Update Prometheus textfile
-                    self._write_metrics(fps_recent=fps)
-
-                    # Emit periodic health telemetry event
-                    if self._telemetry is not None:
-                        self._telemetry.emit_stream_health(
-                            fps_recent=fps,
-                            client_count=client_count,
-                            frame_drop_total=self.frame_drop_total,
-                            uptime_seconds=uptime,
-                            interval_seconds=elapsed_interval,
-                        )
-
-                    # Reset interval counter for next tick
-                    self.interval_frames_sent = 0
-                    self.last_status_time = current_time
-                    
                 time.sleep(1/self.framerate)
                 
             except Exception as e:
