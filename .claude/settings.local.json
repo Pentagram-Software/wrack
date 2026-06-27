@@ -3,7 +3,20 @@
     "allow": [
       "Bash(gh api:*)",
       "Bash(node:*)",
-      "Bash(gh pr:*)"
+      "Bash(gh pr:*)",
+      "Bash(git fetch *)",
+      "Bash(git checkout *)",
+      "Bash(git merge *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git -C \"C:/Users/ravku/Development/Pentagram/wrack\" add robot/controller/event_handler/tests/test_event_handler_telemetry.py)",
+      "Bash(git -C \"C:/Users/ravku/Development/Pentagram/wrack\" status)",
+      "Bash(git *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\ravku\\\\Development\\\\Pentagram\\\\wrack\" -Directory)",
+      "Bash(Select-Object -ExpandProperty Name)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\ravku\\\\Development\\\\Pentagram\\\\wrack\\\\robot\\\\controller\\\\telemetry\" -Recurse | Where-Object { $_.Extension -match '\\\\.\\(py|json|yaml\\)$' } | Select-Object -ExpandProperty FullName)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\ravku\\\\Development\\\\Pentagram\\\\wrack\\\\shared\\\\telemetry-types\" -Recurse | Where-Object { $_.Extension -match '\\\\.\\(ts|js|json\\)$' } | Select-Object -ExpandProperty FullName)",
+      "Bash(gh run *)"
     ]
   }
 }
