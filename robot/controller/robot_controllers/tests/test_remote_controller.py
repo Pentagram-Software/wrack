@@ -283,4 +283,84 @@ class TestRemoteController:
         # Should be able to simulate network operations
         assert mock_socket.called or True  # Basic connectivity test
 
+class TestRemoteControllerTelemetry:
+    """Telemetry tests for RemoteController (PEN-165)."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        self.controller = RemoteController()
+        from telemetry.collector import TelemetryCollector
+        self.collector = TelemetryCollector()
+        self.controller.set_telemetry_collector(self.collector)
+
+    def test_controller_type_attribute_is_network_remote(self):
+        assert self.controller._controller_type == "network_remote"
+
+    @pytest.mark.parametrize("event_name", [
+        "forward",
+        "backward",
+        "left",
+        "right",
+        "stop",
+        "fire",
+        "left_joystick",
+        "right_joystick",
+    ])
+    def test_trigger_produces_command_received_with_network_remote_controller_type(
+        self, event_name
+    ):
+        self.controller.trigger(event_name)
+        received = next(
+            e for e in self.collector.peek() if e["event_type"] == "command_received"
+        )
+        assert received["payload"]["controller_type"] == "network_remote"
+
+    @pytest.mark.parametrize("event_name", [
+        "forward",
+        "stop",
+        "fire",
+    ])
+    def test_trigger_produces_command_executed_with_network_remote_controller_type(
+        self, event_name
+    ):
+        self.controller.trigger(event_name)
+        executed = next(
+            e for e in self.collector.peek() if e["event_type"] == "command_executed"
+        )
+        assert executed["payload"]["controller_type"] == "network_remote"
+
+    def test_command_received_and_command_executed_both_emitted(self):
+        self.controller.trigger("forward")
+        types = {e["event_type"] for e in self.collector.peek()}
+        assert "command_received" in types
+        assert "command_executed" in types
+
+    def test_joystick_command_triggers_multiple_pairs(self):
+        """joystick action calls trigger() twice (left + right), producing 4 events."""
+        self.controller.handle_json_command(
+            {"action": "joystick", "l_left": 0, "l_forward": 500, "r_left": 0, "r_forward": 0}
+        )
+        # 2 trigger() calls × 2 events each = 4
+        assert self.collector.buffer_size == 4
+        executed_events = [
+            e for e in self.collector.peek() if e["event_type"] == "command_executed"
+        ]
+        for ev in executed_events:
+            assert ev["payload"]["controller_type"] == "network_remote"
+
+    def test_command_executed_success_true_with_no_raising_callback(self):
+        self.controller.on("stop", lambda s: None)
+        self.controller.trigger("stop")
+        executed = next(
+            e for e in self.collector.peek() if e["event_type"] == "command_executed"
+        )
+        assert executed["payload"]["success"] is True
+
+    def test_events_pass_schema_validation(self):
+        from telemetry.schemas import validate_event
+        self.controller.trigger("forward")
+        for event in self.collector.peek():
+            validate_event(event)
+
+
 # Tests can be run with: pytest tests/test_remote_controller.py
