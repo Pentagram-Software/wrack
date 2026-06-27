@@ -78,3 +78,45 @@ SELECT
   JSON_VALUE(payload, '$.error_message') AS error_message
 FROM `wrack_telemetry.events`
 WHERE event_type = 'device_status';
+
+-- View: Video stream start events
+CREATE OR REPLACE VIEW `wrack_telemetry.video_stream_start_events` AS
+SELECT
+  timestamp,
+  device_id,
+  session_id,
+  JSON_VALUE(payload, '$.protocol') AS protocol,
+  CAST(JSON_VALUE(payload, '$.port') AS INT64) AS port,
+  CAST(JSON_VALUE(payload, '$.resolution_width') AS INT64) AS resolution_width,
+  CAST(JSON_VALUE(payload, '$.resolution_height') AS INT64) AS resolution_height,
+  CAST(JSON_VALUE(payload, '$.target_fps') AS FLOAT64) AS target_fps,
+  CAST(JSON_VALUE(payload, '$.bitrate') AS INT64) AS bitrate
+FROM `wrack_telemetry.events`
+WHERE event_type = 'video_stream_start';
+
+-- View: Video stream stop events
+CREATE OR REPLACE VIEW `wrack_telemetry.video_stream_stop_events` AS
+SELECT
+  timestamp,
+  device_id,
+  session_id,
+  JSON_VALUE(payload, '$.reason') AS reason,
+  CAST(JSON_VALUE(payload, '$.uptime_seconds') AS FLOAT64) AS uptime_seconds,
+  CAST(JSON_VALUE(payload, '$.total_frames_sent') AS INT64) AS total_frames_sent,
+  CAST(JSON_VALUE(payload, '$.total_frame_drops') AS INT64) AS total_frame_drops
+FROM `wrack_telemetry.events`
+WHERE event_type = 'video_stream_stop';
+
+-- View: Video stream health events (periodic 10-s snapshots)
+CREATE OR REPLACE VIEW `wrack_telemetry.video_stream_health_events` AS
+SELECT
+  timestamp,
+  device_id,
+  session_id,
+  CAST(JSON_VALUE(payload, '$.fps_recent') AS FLOAT64) AS fps_recent,
+  CAST(JSON_VALUE(payload, '$.client_count') AS INT64) AS client_count,
+  CAST(JSON_VALUE(payload, '$.frame_drop_total') AS INT64) AS frame_drop_total,
+  CAST(JSON_VALUE(payload, '$.uptime_seconds') AS FLOAT64) AS uptime_seconds,
+  CAST(JSON_VALUE(payload, '$.interval_seconds') AS FLOAT64) AS interval_seconds
+FROM `wrack_telemetry.events`
+WHERE event_type = 'video_stream_health';

@@ -183,6 +183,63 @@ Simply navigate to: `http://raspberry_pi_ip:8080`
 - **Bandwidth**: ~600KB - 2.4MB/s (depends on scene complexity)
 - **Latency**: <100ms (UDP), ~200-500ms (TCP/HTTP)
 
+## 📡 Monitoring & Telemetry (PEN-167)
+
+The streamer exposes health metrics in two forms: real-time Prometheus metrics for Grafana, and BigQuery analytics events.
+
+### Real-time Prometheus metrics (via Grafana Alloy)
+
+`UDPVideoStreamer` writes a Prometheus textfile every 10 s to:
+
+```
+/var/lib/grafana-alloy/textfile/video_stream.prom
+```
+
+Scraped by Grafana Alloy's `prometheus.exporter.unix` textfile collector (see `edge/monitoring/alloy/config.alloy`).
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `wrack_stream_alive` | gauge | 1 = streaming, 0 = stopped |
+| `wrack_stream_fps_recent` | gauge | FPS over the last 10 s window |
+| `wrack_stream_frame_drop_total` | counter | Cumulative failed client sends |
+| `wrack_stream_client_count` | gauge | Currently connected clients |
+| `wrack_stream_uptime_seconds` | gauge | Seconds since streamer start |
+
+`wrack_stream_alive` switches to 0 within 10 s of the streamer stopping (the next scrape after `stop()` is called).
+
+### BigQuery telemetry events (optional)
+
+Three event types are emitted when `telemetry_enabled=True` (off by default):
+
+| Event | When |
+|-------|------|
+| `video_stream_start` | On `start_streaming()` |
+| `video_stream_health` | Every 10 s status tick |
+| `video_stream_stop` | On `stop()` |
+
+Enable and configure via the `VideoTelemetry` class (see `telemetry.py`):
+
+```python
+from telemetry import VideoTelemetry
+
+tel = VideoTelemetry(
+    endpoint_url="https://<region>-<project>.cloudfunctions.net/telemetryIngestion",
+    api_key="your-api-key",
+    device_id="rpi-camera-01",
+    telemetry_enabled=True,   # off by default
+)
+
+streamer = UDPVideoStreamer(
+    host='0.0.0.0',
+    port=9999,
+    telemetry=tel,
+    # monitoring_path="/custom/path/video_stream.prom",  # optional override
+)
+streamer.start_streaming()
+```
+
+BigQuery views for querying video stream events are defined in `cloud/bigquery/schemas/views.sql`.
+
 ## 🔧 Configuration
 
 ### Camera Settings

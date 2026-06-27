@@ -32,6 +32,9 @@ EventType = Literal[
     "sensor_reading",
     "terrain_scan",
     "connection_status",
+    "video_stream_start",
+    "video_stream_stop",
+    "video_stream_health",
 ]
 
 VALID_EVENT_TYPES: List[str] = [
@@ -45,6 +48,9 @@ VALID_EVENT_TYPES: List[str] = [
     "sensor_reading",
     "terrain_scan",
     "connection_status",
+    "video_stream_start",
+    "video_stream_stop",
+    "video_stream_health",
 ]
 
 BatteryType = Literal["rechargeable", "alkaline", "unknown"]
@@ -122,15 +128,39 @@ try:
         client_ip_hash: Optional[str]
         error_message: Optional[str]
 
+    class VideoStreamStartPayload(TypedDict, total=False):
+        protocol: str               # required — "udp", "tcp", or "http"
+        port: int                   # required
+        resolution_width: int       # required
+        resolution_height: int      # required
+        target_fps: float           # required
+        bitrate: Optional[int]
+
+    class VideoStreamStopPayload(TypedDict, total=False):
+        reason: str                 # required
+        uptime_seconds: Optional[float]
+        total_frames_sent: Optional[int]
+        total_frame_drops: Optional[int]
+
+    class VideoStreamHealthPayload(TypedDict, total=False):
+        fps_recent: float           # required
+        client_count: int           # required
+        frame_drop_total: int       # required
+        uptime_seconds: float       # required
+        interval_seconds: Optional[float]
+
 except ImportError:
     # MicroPython fallback — TypedDict is not available; use plain dicts
-    TelemetryEventEnvelope = dict  # type: ignore[misc, assignment]
-    BatteryStatusPayload = dict     # type: ignore[misc, assignment]
-    CommandReceivedPayload = dict   # type: ignore[misc, assignment]
-    CommandExecutedPayload = dict   # type: ignore[misc, assignment]
-    DeviceStatusPayload = dict      # type: ignore[misc, assignment]
-    ErrorPayload = dict             # type: ignore[misc, assignment]
-    ApiRequestPayload = dict        # type: ignore[misc, assignment]
+    TelemetryEventEnvelope = dict       # type: ignore[misc, assignment]
+    BatteryStatusPayload = dict         # type: ignore[misc, assignment]
+    CommandReceivedPayload = dict       # type: ignore[misc, assignment]
+    CommandExecutedPayload = dict       # type: ignore[misc, assignment]
+    DeviceStatusPayload = dict          # type: ignore[misc, assignment]
+    ErrorPayload = dict                 # type: ignore[misc, assignment]
+    ApiRequestPayload = dict            # type: ignore[misc, assignment]
+    VideoStreamStartPayload = dict      # type: ignore[misc, assignment]
+    VideoStreamStopPayload = dict       # type: ignore[misc, assignment]
+    VideoStreamHealthPayload = dict     # type: ignore[misc, assignment]
 
 
 # ---------------------------------------------------------------------------

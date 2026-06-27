@@ -24,7 +24,10 @@ export type EventType =
   | 'motor_status'
   | 'sensor_reading'
   | 'terrain_scan'
-  | 'connection_status';
+  | 'connection_status'
+  | 'video_stream_start'
+  | 'video_stream_stop'
+  | 'video_stream_health';
 
 /** Common envelope shared by every telemetry event. */
 export interface TelemetryEventEnvelope {
@@ -128,6 +131,42 @@ export interface ApiRequestPayload {
   error_message?: string | null;
 }
 
+export type StreamProtocol = 'udp' | 'tcp' | 'http';
+
+/** Payload for `video_stream_start` events. */
+export interface VideoStreamStartPayload {
+  /** Streaming protocol in use. */
+  protocol: StreamProtocol;
+  /** Port the streamer is listening on. */
+  port: number;
+  resolution_width: number;
+  resolution_height: number;
+  /** Target frames per second configured for the stream. */
+  target_fps: number;
+  bitrate?: number;
+}
+
+/** Payload for `video_stream_stop` events. */
+export interface VideoStreamStopPayload {
+  /** Why the stream stopped (e.g. 'keyboard_interrupt', 'error', 'stop_called'). */
+  reason: string;
+  uptime_seconds?: number;
+  total_frames_sent?: number;
+  total_frame_drops?: number;
+}
+
+/** Payload for `video_stream_health` events (emitted every 10 s). */
+export interface VideoStreamHealthPayload {
+  /** Observed FPS over the most recent status interval. */
+  fps_recent: number;
+  client_count: number;
+  /** Cumulative count of failed client frame sends since streamer start. */
+  frame_drop_total: number;
+  uptime_seconds: number;
+  /** Length of the observation window for fps_recent (typically 10 s). */
+  interval_seconds?: number;
+}
+
 // ---------------------------------------------------------------------------
 // Discriminated union — typed event wrappers
 // ---------------------------------------------------------------------------
@@ -162,6 +201,21 @@ export type ApiRequestEvent = TelemetryEventEnvelope & {
   payload: ApiRequestPayload;
 };
 
+export type VideoStreamStartEvent = TelemetryEventEnvelope & {
+  event_type: 'video_stream_start';
+  payload: VideoStreamStartPayload;
+};
+
+export type VideoStreamStopEvent = TelemetryEventEnvelope & {
+  event_type: 'video_stream_stop';
+  payload: VideoStreamStopPayload;
+};
+
+export type VideoStreamHealthEvent = TelemetryEventEnvelope & {
+  event_type: 'video_stream_health';
+  payload: VideoStreamHealthPayload;
+};
+
 /** Union of all typed telemetry events. */
 export type TelemetryEvent =
   | BatteryStatusEvent
@@ -169,7 +223,10 @@ export type TelemetryEvent =
   | CommandExecutedEvent
   | DeviceStatusEvent
   | ErrorEvent
-  | ApiRequestEvent;
+  | ApiRequestEvent
+  | VideoStreamStartEvent
+  | VideoStreamStopEvent
+  | VideoStreamHealthEvent;
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -194,6 +251,7 @@ const VALID_EVENT_TYPES: readonly EventType[] = [
   'battery_status', 'command_received', 'command_executed',
   'device_status', 'error', 'api_request',
   'motor_status', 'sensor_reading', 'terrain_scan', 'connection_status',
+  'video_stream_start', 'video_stream_stop', 'video_stream_health',
 ] as const;
 
 const ISO_8601_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
@@ -375,6 +433,78 @@ export function validateApiRequestPayload(payload: unknown): ValidationResult {
 // Convenience: validate envelope + payload together
 // ---------------------------------------------------------------------------
 
+const VALID_STREAM_PROTOCOLS = ['udp', 'tcp', 'http'] as const;
+
+/** Validates a `video_stream_start` payload. */
+export function validateVideoStreamStartPayload(payload: unknown): ValidationResult {
+  const errors: ValidationError[] = [];
+  if (typeof payload !== 'object' || payload === null) {
+    return { valid: false, errors: [{ field: 'payload', message: 'Must be a non-null object' }] };
+  }
+  const p = payload as Record<string, unknown>;
+
+  if (typeof p.protocol !== 'string' || !(VALID_STREAM_PROTOCOLS as readonly string[]).includes(p.protocol)) {
+    errors.push({ field: 'payload.protocol', message: `Must be one of: ${VALID_STREAM_PROTOCOLS.join(', ')}` });
+  }
+  if (typeof p.port !== 'number' || !Number.isInteger(p.port) || p.port < 1 || p.port > 65535) {
+    errors.push({ field: 'payload.port', message: 'Must be an integer between 1 and 65535' });
+  }
+  if (typeof p.resolution_width !== 'number' || !Number.isInteger(p.resolution_width) || p.resolution_width < 1) {
+    errors.push({ field: 'payload.resolution_width', message: 'Must be a positive integer' });
+  }
+  if (typeof p.resolution_height !== 'number' || !Number.isInteger(p.resolution_height) || p.resolution_height < 1) {
+    errors.push({ field: 'payload.resolution_height', message: 'Must be a positive integer' });
+  }
+  if (typeof p.target_fps !== 'number' || p.target_fps < 0) {
+    errors.push({ field: 'payload.target_fps', message: 'Must be a non-negative number' });
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+/** Validates a `video_stream_stop` payload. */
+export function validateVideoStreamStopPayload(payload: unknown): ValidationResult {
+  const errors: ValidationError[] = [];
+  if (typeof payload !== 'object' || payload === null) {
+    return { valid: false, errors: [{ field: 'payload', message: 'Must be a non-null object' }] };
+  }
+  const p = payload as Record<string, unknown>;
+
+  if (typeof p.reason !== 'string' || p.reason.trim() === '') {
+    errors.push({ field: 'payload.reason', message: 'Must be a non-empty string' });
+  }
+  if (p.uptime_seconds !== undefined && p.uptime_seconds !== null &&
+      (typeof p.uptime_seconds !== 'number' || p.uptime_seconds < 0)) {
+    errors.push({ field: 'payload.uptime_seconds', message: 'Must be a non-negative number' });
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+/** Validates a `video_stream_health` payload. */
+export function validateVideoStreamHealthPayload(payload: unknown): ValidationResult {
+  const errors: ValidationError[] = [];
+  if (typeof payload !== 'object' || payload === null) {
+    return { valid: false, errors: [{ field: 'payload', message: 'Must be a non-null object' }] };
+  }
+  const p = payload as Record<string, unknown>;
+
+  if (typeof p.fps_recent !== 'number' || p.fps_recent < 0) {
+    errors.push({ field: 'payload.fps_recent', message: 'Must be a non-negative number' });
+  }
+  if (typeof p.client_count !== 'number' || !Number.isInteger(p.client_count) || p.client_count < 0) {
+    errors.push({ field: 'payload.client_count', message: 'Must be a non-negative integer' });
+  }
+  if (typeof p.frame_drop_total !== 'number' || !Number.isInteger(p.frame_drop_total) || p.frame_drop_total < 0) {
+    errors.push({ field: 'payload.frame_drop_total', message: 'Must be a non-negative integer' });
+  }
+  if (typeof p.uptime_seconds !== 'number' || p.uptime_seconds < 0) {
+    errors.push({ field: 'payload.uptime_seconds', message: 'Must be a non-negative number' });
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
 const PAYLOAD_VALIDATORS: Partial<Record<EventType, (p: unknown) => ValidationResult>> = {
   battery_status: validateBatteryStatusPayload,
   command_received: validateCommandReceivedPayload,
@@ -382,6 +512,9 @@ const PAYLOAD_VALIDATORS: Partial<Record<EventType, (p: unknown) => ValidationRe
   device_status: validateDeviceStatusPayload,
   error: validateErrorPayload,
   api_request: validateApiRequestPayload,
+  video_stream_start: validateVideoStreamStartPayload,
+  video_stream_stop: validateVideoStreamStopPayload,
+  video_stream_health: validateVideoStreamHealthPayload,
 };
 
 /**

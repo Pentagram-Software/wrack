@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://wrack.io/schemas/telemetry/payload/video_stream_stop",
+  "title": "VideoStreamStopPayload",
+  "description": "Payload for video_stream_stop events emitted when the Raspberry Pi video streamer stops",
+  "type": "object",
+  "required": ["reason"],
+  "additionalProperties": false,
+  "properties": {
+    "reason": {
+      "type": "string",
+      "description": "Why the stream stopped (e.g. 'keyboard_interrupt', 'error', 'stop_called')"
+    },
+    "uptime_seconds": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Seconds the streamer was running before stopping"
+    },
+    "total_frames_sent": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total frames successfully sent during the session"
+    },
+    "total_frame_drops": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total frames that failed to send due to client errors"
+    }
+  }
+}

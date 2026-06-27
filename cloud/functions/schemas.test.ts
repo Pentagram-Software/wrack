@@ -16,6 +16,9 @@ import {
   validateDeviceStatusPayload,
   validateErrorPayload,
   validateApiRequestPayload,
+  validateVideoStreamStartPayload,
+  validateVideoStreamStopPayload,
+  validateVideoStreamHealthPayload,
 } from './schemas';
 
 // ---------------------------------------------------------------------------
@@ -620,5 +623,259 @@ describe('isValidTelemetryEvent', () => {
 
   test('returns false for null', () => {
     expect(isValidTelemetryEvent(null)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// VALID_EVENT_TYPES and P0_EVENT_TYPES include video stream types
+// ---------------------------------------------------------------------------
+
+describe('video stream event types in constants', () => {
+  test('VALID_EVENT_TYPES includes video_stream_start', () => {
+    expect(VALID_EVENT_TYPES).toContain('video_stream_start');
+  });
+
+  test('VALID_EVENT_TYPES includes video_stream_stop', () => {
+    expect(VALID_EVENT_TYPES).toContain('video_stream_stop');
+  });
+
+  test('VALID_EVENT_TYPES includes video_stream_health', () => {
+    expect(VALID_EVENT_TYPES).toContain('video_stream_health');
+  });
+
+  test('P0_EVENT_TYPES includes video_stream_start', () => {
+    expect(P0_EVENT_TYPES).toContain('video_stream_start');
+  });
+
+  test('P0_EVENT_TYPES includes video_stream_stop', () => {
+    expect(P0_EVENT_TYPES).toContain('video_stream_stop');
+  });
+
+  test('P0_EVENT_TYPES includes video_stream_health', () => {
+    expect(P0_EVENT_TYPES).toContain('video_stream_health');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateVideoStreamStartPayload
+// ---------------------------------------------------------------------------
+
+describe('validateVideoStreamStartPayload', () => {
+  const validPayload = () => ({
+    protocol: 'udp',
+    port: 9999,
+    resolution_width: 1280,
+    resolution_height: 720,
+    target_fps: 30,
+  });
+
+  test('valid minimal payload passes', () => {
+    expect(validateVideoStreamStartPayload(validPayload()).valid).toBe(true);
+  });
+
+  test('valid payload with optional bitrate passes', () => {
+    expect(validateVideoStreamStartPayload({ ...validPayload(), bitrate: 2000000 }).valid).toBe(true);
+  });
+
+  test('invalid protocol fails', () => {
+    const result = validateVideoStreamStartPayload({ ...validPayload(), protocol: 'ftp' });
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.field === 'payload.protocol')).toBe(true);
+  });
+
+  test('port below 1 fails', () => {
+    const result = validateVideoStreamStartPayload({ ...validPayload(), port: 0 });
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.field === 'payload.port')).toBe(true);
+  });
+
+  test('port above 65535 fails', () => {
+    const result = validateVideoStreamStartPayload({ ...validPayload(), port: 99999 });
+    expect(result.valid).toBe(false);
+  });
+
+  test('zero resolution_width fails', () => {
+    const result = validateVideoStreamStartPayload({ ...validPayload(), resolution_width: 0 });
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.field === 'payload.resolution_width')).toBe(true);
+  });
+
+  test('zero resolution_height fails', () => {
+    const result = validateVideoStreamStartPayload({ ...validPayload(), resolution_height: 0 });
+    expect(result.valid).toBe(false);
+  });
+
+  test('negative target_fps fails', () => {
+    const result = validateVideoStreamStartPayload({ ...validPayload(), target_fps: -1 });
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.field === 'payload.target_fps')).toBe(true);
+  });
+
+  test('tcp protocol is valid', () => {
+    expect(validateVideoStreamStartPayload({ ...validPayload(), protocol: 'tcp' }).valid).toBe(true);
+  });
+
+  test('http protocol is valid', () => {
+    expect(validateVideoStreamStartPayload({ ...validPayload(), protocol: 'http' }).valid).toBe(true);
+  });
+
+  test('null payload fails', () => {
+    expect(validateVideoStreamStartPayload(null).valid).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateVideoStreamStopPayload
+// ---------------------------------------------------------------------------
+
+describe('validateVideoStreamStopPayload', () => {
+  test('valid minimal payload passes', () => {
+    expect(validateVideoStreamStopPayload({ reason: 'keyboard_interrupt' }).valid).toBe(true);
+  });
+
+  test('valid payload with all optional fields passes', () => {
+    const result = validateVideoStreamStopPayload({
+      reason: 'error',
+      uptime_seconds: 300.5,
+      total_frames_sent: 9000,
+      total_frame_drops: 5,
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  test('empty reason fails', () => {
+    const result = validateVideoStreamStopPayload({ reason: '' });
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.field === 'payload.reason')).toBe(true);
+  });
+
+  test('missing reason fails', () => {
+    const result = validateVideoStreamStopPayload({});
+    expect(result.valid).toBe(false);
+  });
+
+  test('negative uptime_seconds fails', () => {
+    const result = validateVideoStreamStopPayload({ reason: 'test', uptime_seconds: -1 });
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.field === 'payload.uptime_seconds')).toBe(true);
+  });
+
+  test('null payload fails', () => {
+    expect(validateVideoStreamStopPayload(null).valid).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateVideoStreamHealthPayload
+// ---------------------------------------------------------------------------
+
+describe('validateVideoStreamHealthPayload', () => {
+  const validPayload = () => ({
+    fps_recent: 29.5,
+    client_count: 2,
+    frame_drop_total: 3,
+    uptime_seconds: 120.0,
+  });
+
+  test('valid minimal payload passes', () => {
+    expect(validateVideoStreamHealthPayload(validPayload()).valid).toBe(true);
+  });
+
+  test('valid payload with interval_seconds passes', () => {
+    expect(validateVideoStreamHealthPayload({ ...validPayload(), interval_seconds: 10.0 }).valid).toBe(true);
+  });
+
+  test('negative fps_recent fails', () => {
+    const result = validateVideoStreamHealthPayload({ ...validPayload(), fps_recent: -1 });
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.field === 'payload.fps_recent')).toBe(true);
+  });
+
+  test('negative client_count fails', () => {
+    const result = validateVideoStreamHealthPayload({ ...validPayload(), client_count: -1 });
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.field === 'payload.client_count')).toBe(true);
+  });
+
+  test('non-integer client_count fails', () => {
+    const result = validateVideoStreamHealthPayload({ ...validPayload(), client_count: 1.5 });
+    expect(result.valid).toBe(false);
+  });
+
+  test('negative frame_drop_total fails', () => {
+    const result = validateVideoStreamHealthPayload({ ...validPayload(), frame_drop_total: -1 });
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.field === 'payload.frame_drop_total')).toBe(true);
+  });
+
+  test('negative uptime_seconds fails', () => {
+    const result = validateVideoStreamHealthPayload({ ...validPayload(), uptime_seconds: -5 });
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.field === 'payload.uptime_seconds')).toBe(true);
+  });
+
+  test('zero fps_recent is valid (no clients)', () => {
+    expect(validateVideoStreamHealthPayload({ ...validPayload(), fps_recent: 0 }).valid).toBe(true);
+  });
+
+  test('zero client_count is valid', () => {
+    expect(validateVideoStreamHealthPayload({ ...validPayload(), client_count: 0 }).valid).toBe(true);
+  });
+
+  test('null payload fails', () => {
+    expect(validateVideoStreamHealthPayload(null).valid).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Full event validation for video stream types
+// ---------------------------------------------------------------------------
+
+describe('validateTelemetryEvent — video stream events', () => {
+  const streamStartEvent = () => makeEvent('video_stream_start', {
+    protocol: 'udp',
+    port: 9999,
+    resolution_width: 1280,
+    resolution_height: 720,
+    target_fps: 30,
+  }, { source: 'rpi' });
+
+  const streamStopEvent = () => makeEvent('video_stream_stop', {
+    reason: 'keyboard_interrupt',
+    uptime_seconds: 300,
+    total_frames_sent: 9000,
+    total_frame_drops: 3,
+  }, { source: 'rpi' });
+
+  const streamHealthEvent = () => makeEvent('video_stream_health', {
+    fps_recent: 29.5,
+    client_count: 2,
+    frame_drop_total: 3,
+    uptime_seconds: 120.0,
+    interval_seconds: 10.0,
+  }, { source: 'rpi' });
+
+  test('valid video_stream_start passes full validation', () => {
+    expect(validateTelemetryEvent(streamStartEvent()).valid).toBe(true);
+  });
+
+  test('valid video_stream_stop passes full validation', () => {
+    expect(validateTelemetryEvent(streamStopEvent()).valid).toBe(true);
+  });
+
+  test('valid video_stream_health passes full validation', () => {
+    expect(validateTelemetryEvent(streamHealthEvent()).valid).toBe(true);
+  });
+
+  test('video_stream_start with invalid protocol fails', () => {
+    const event = streamStartEvent();
+    (event.payload as Record<string, unknown>).protocol = 'ftp';
+    expect(validateTelemetryEvent(event).valid).toBe(false);
+  });
+
+  test('video_stream_health with negative fps_recent fails', () => {
+    const event = streamHealthEvent();
+    (event.payload as Record<string, unknown>).fps_recent = -1;
+    expect(validateTelemetryEvent(event).valid).toBe(false);
   });
 });
