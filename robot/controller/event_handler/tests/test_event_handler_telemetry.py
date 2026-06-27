@@ -224,7 +224,6 @@ class TestCollectorExceptionIsolation:
         assert fired == [True]
 
 
-# ---------------------------------------------------------------------------
 # controller_type propagation (PEN-165)
 # ---------------------------------------------------------------------------
 
