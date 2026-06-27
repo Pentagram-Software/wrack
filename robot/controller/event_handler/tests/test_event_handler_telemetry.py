@@ -10,7 +10,7 @@ Verifies that:
 """
 
 import pytest
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 from event_handler import EventHandler
 from telemetry.collector import TelemetryCollector
