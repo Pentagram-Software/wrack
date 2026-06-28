@@ -83,6 +83,23 @@ except ImportError as e:
     print("Telemetry module not available: {} - telemetry collection will be disabled".format(e))
 except Exception as e:
     print("Error importing telemetry module: {} - telemetry collection will be disabled".format(e))
+    try:
+        import sys
+        sys.print_exception(e)
+    except Exception:
+        pass
+    # Isolate which submodule has the syntax error
+    for _submod in ('telemetry.schemas', 'telemetry.collector', 'telemetry.sender', 'telemetry.status_collector'):
+        try:
+            __import__(_submod)
+            print("  OK: " + _submod)
+        except Exception as _e:
+            print("  FAIL: " + _submod + " -> " + str(_e))
+            try:
+                import sys as _sys
+                _sys.print_exception(_e)
+            except Exception:
+                pass
 
 # Load telemetry runtime config (see telemetry_config.py.example for setup instructions)
 _TELEMETRY_ENDPOINT = None
