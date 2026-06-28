@@ -91,7 +91,7 @@ DEFAULT_RETRY_BASE_S = 1.0  # first retry wait; doubles each attempt
 # ---------------------------------------------------------------------------
 
 
-class PartialFailureError(IOError):
+class PartialFailureError(OSError):
     """HTTP 207 Multi-Status — some events in the batch were not stored.
 
     Surfaced via the ``on_error`` callback when, after all retries, one or
@@ -368,7 +368,7 @@ class TelemetrySender:
 
         Raises
         ------
-        IOError
+        OSError
             Any non-2xx, non-207, non-400 HTTP status.
         Exception
             Transport errors from the underlying HTTP library.
@@ -419,7 +419,7 @@ class TelemetrySender:
             # errors have none.  Either way no event can succeed on retry.
             return [], list(batch), []
 
-        raise IOError(
+        raise OSError(
             "HTTP {} from telemetry endpoint: {}".format(status, str(body_text)[:200])
         )
 
