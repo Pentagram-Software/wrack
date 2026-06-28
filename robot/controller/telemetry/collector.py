@@ -47,10 +47,14 @@ try:
 except ImportError:
     _HAS_UUID = False
 
+# Some MicroPython builds ship a partial ``datetime`` whose import raises
+# ``AttributeError`` (e.g. "type object 'tzinfo' has no attribute '__new__'")
+# rather than ``ImportError``; catch broadly so the module still loads and
+# falls back to the ``time``-based timestamp path on the EV3.
 try:
     from datetime import datetime, timezone
     _HAS_DATETIME = True
-except ImportError:
+except Exception:  # pragma: no cover - MicroPython partial-datetime path
     _HAS_DATETIME = False
 
 try:
