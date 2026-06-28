@@ -44,10 +44,10 @@ except ImportError:  # pragma: no cover - MicroPython runtime path
 # ---------------------------------------------------------------------------
 
 #: All recognised event sources.
-VALID_SOURCES: List[str] = ["ev3", "rpi", "cloud_functions", "web", "ios"]
+VALID_SOURCES = ["ev3", "rpi", "cloud_functions", "web", "ios"]
 
 #: All recognised event types.
-VALID_EVENT_TYPES: List[str] = [
+VALID_EVENT_TYPES = [
     "battery_status",
     "command_received",
     "command_executed",
@@ -64,7 +64,7 @@ VALID_EVENT_TYPES: List[str] = [
 ]
 
 #: P0-priority event types that have mandatory payload validation.
-P0_EVENT_TYPES: List[str] = [
+P0_EVENT_TYPES = [
     "battery_status",
     "command_received",
     "command_executed",
@@ -76,17 +76,17 @@ P0_EVENT_TYPES: List[str] = [
     "video_stream_health",
 ]
 
-VALID_DEVICE_STATUSES: List[str] = [
+VALID_DEVICE_STATUSES = [
     "connected", "disconnected", "error", "stalled", "initializing"
 ]
 
-VALID_DEVICE_TYPES: List[str] = ["motor", "sensor", "controller", "unknown"]
+VALID_DEVICE_TYPES = ["motor", "sensor", "controller", "unknown"]
 
-VALID_BATTERY_TYPES: List[str] = ["rechargeable", "alkaline", "unknown"]
+VALID_BATTERY_TYPES = ["rechargeable", "alkaline", "unknown"]
 
-VALID_CONTROLLER_TYPES: List[str] = ["ps4", "ps5", "network_remote", "unknown"]
+VALID_CONTROLLER_TYPES = ["ps4", "ps5", "network_remote", "unknown"]
 
-VALID_HTTP_METHODS: List[str] = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+VALID_HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 
 # UUID v4 pattern
 _UUID_RE = re.compile(
@@ -124,7 +124,7 @@ def _load_json_schema(schema_filename: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-_SCHEMA_FILENAME_MAP: Dict[str, str] = {
+_SCHEMA_FILENAME_MAP = {
     "battery_status": "battery_status.json",
     "command_received": "command_received.json",
     "command_executed": "command_executed.json",
@@ -169,13 +169,13 @@ def _validate_envelope(event: Any) -> List[str]:
     event_type = event.get("event_type")
     if event_type not in VALID_EVENT_TYPES:
         errors.append(
-            f"event_type must be one of: {', '.join(VALID_EVENT_TYPES)}"
+            "event_type must be one of: " + ", ".join(VALID_EVENT_TYPES)
         )
 
     # source
     source = event.get("source")
     if source not in VALID_SOURCES:
-        errors.append(f"source must be one of: {', '.join(VALID_SOURCES)}")
+        errors.append("source must be one of: " + ", ".join(VALID_SOURCES))
 
     # timestamp
     ts = event.get("timestamp")
@@ -221,7 +221,7 @@ def _validate_battery_status_payload(payload: Any) -> List[str]:
     if "battery_type" in payload and payload["battery_type"] is not None:
         if payload["battery_type"] not in VALID_BATTERY_TYPES:
             errors.append(
-                f"payload.battery_type must be one of: {', '.join(VALID_BATTERY_TYPES)}"
+                "payload.battery_type must be one of: " + ", ".join(VALID_BATTERY_TYPES)
             )
 
     return errors
@@ -236,11 +236,11 @@ def _validate_command_received_payload(payload: Any) -> List[str]:
     if not isinstance(command, str) or not command.strip():
         errors.append("payload.command must be a non-empty string")
 
-    if "controller_type" in payload and payload["controller_type"] is not None:
-        if payload["controller_type"] not in VALID_CONTROLLER_TYPES:
-            errors.append(
-                f"payload.controller_type must be one of: {', '.join(VALID_CONTROLLER_TYPES)}"
-            )
+        if "controller_type" in payload and payload["controller_type"] is not None:
+            if payload["controller_type"] not in VALID_CONTROLLER_TYPES:
+                errors.append(
+                    "payload.controller_type must be one of: " + ", ".join(VALID_CONTROLLER_TYPES)
+                )
 
     return errors
 
@@ -266,7 +266,7 @@ def _validate_command_executed_payload(payload: Any) -> List[str]:
     if "controller_type" in payload and payload["controller_type"] is not None:
         if payload["controller_type"] not in VALID_CONTROLLER_TYPES:
             errors.append(
-                f"payload.controller_type must be one of: {', '.join(VALID_CONTROLLER_TYPES)}"
+                "payload.controller_type must be one of: " + ", ".join(VALID_CONTROLLER_TYPES)
             )
 
     return errors
@@ -284,13 +284,13 @@ def _validate_device_status_payload(payload: Any) -> List[str]:
     status = payload.get("status")
     if status not in VALID_DEVICE_STATUSES:
         errors.append(
-            f"payload.status must be one of: {', '.join(VALID_DEVICE_STATUSES)}"
+            "payload.status must be one of: " + ", ".join(VALID_DEVICE_STATUSES)
         )
 
     if "device_type" in payload and payload["device_type"] is not None:
         if payload["device_type"] not in VALID_DEVICE_TYPES:
             errors.append(
-                f"payload.device_type must be one of: {', '.join(VALID_DEVICE_TYPES)}"
+                "payload.device_type must be one of: " + ", ".join(VALID_DEVICE_TYPES)
             )
 
     return errors
@@ -332,13 +332,13 @@ def _validate_api_request_payload(payload: Any) -> List[str]:
     if "method" in payload and payload["method"] is not None:
         if payload["method"] not in VALID_HTTP_METHODS:
             errors.append(
-                f"payload.method must be one of: {', '.join(VALID_HTTP_METHODS)}"
+                "payload.method must be one of: " + ", ".join(VALID_HTTP_METHODS)
             )
 
     return errors
 
 
-VALID_STREAM_PROTOCOLS: List[str] = ["udp", "tcp", "http"]
+VALID_STREAM_PROTOCOLS = ["udp", "tcp", "http"]
 
 
 def _validate_video_stream_start_payload(payload: Any) -> List[str]:
@@ -348,9 +348,9 @@ def _validate_video_stream_start_payload(payload: Any) -> List[str]:
 
     protocol = payload.get("protocol")
     if protocol not in VALID_STREAM_PROTOCOLS:
-        errors.append(
-            f"payload.protocol must be one of: {', '.join(VALID_STREAM_PROTOCOLS)}"
-        )
+            errors.append(
+                "payload.protocol must be one of: " + ", ".join(VALID_STREAM_PROTOCOLS)
+            )
 
     port = payload.get("port")
     if not isinstance(port, int) or not (1 <= port <= 65535):
@@ -359,7 +359,7 @@ def _validate_video_stream_start_payload(payload: Any) -> List[str]:
     for dim in ("resolution_width", "resolution_height"):
         val = payload.get(dim)
         if not isinstance(val, int) or val < 1:
-            errors.append(f"payload.{dim} must be a positive integer")
+            errors.append("payload." + dim + " must be a positive integer")
 
     target_fps = payload.get("target_fps")
     if not isinstance(target_fps, (int, float)) or target_fps < 0:

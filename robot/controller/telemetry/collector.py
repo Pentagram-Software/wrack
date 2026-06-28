@@ -110,7 +110,7 @@ def _generate_event_id() -> str:
     _counter += 1
     # Produce a deterministic UUID-shaped string for MicroPython
     hex_str = format(_counter, "032x")
-    return f"{hex_str[0:8]}-{hex_str[8:12]}-{hex_str[12:16]}-{hex_str[16:20]}-{hex_str[20:32]}"
+    return "{}-{}-{}-{}-{}".format(hex_str[0:8], hex_str[8:12], hex_str[12:16], hex_str[16:20], hex_str[20:32])
 
 
 def _utc_now_iso() -> str:
@@ -123,8 +123,9 @@ def _utc_now_iso() -> str:
             if hasattr(_time, "gmtime"):
                 tm = _time.gmtime(epoch)
                 return (
-                    f"{tm[0]:04d}-{tm[1]:02d}-{tm[2]:02d}T"
-                    f"{tm[3]:02d}:{tm[4]:02d}:{tm[5]:02d}Z"
+                    "%04d-%02d-%02dT%02d:%02d:%02dZ" % (
+                        tm[0], tm[1], tm[2], tm[3], tm[4], tm[5]
+                    )
                 )
         except Exception:
             pass
