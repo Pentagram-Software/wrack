@@ -273,9 +273,8 @@ class TelemetrySender:
                 had_permanent = True
                 self._fire_error(
                     NonRetryablePartialFailureError(
-                        f"telemetry endpoint permanently rejected "
-                        f"{len(permanent)} event(s) (validation failure, "
-                        f"not retried)"
+                        "telemetry endpoint permanently rejected "
+                        "{} event(s) (validation failure, not retried)".format(len(permanent))
                     )
                 )
 
@@ -291,8 +290,9 @@ class TelemetrySender:
 
             self._fire_error(
                 PartialFailureError(
-                    f"HTTP 207 partial failure: {len(retryable)} event(s) "
-                    f"still failing after {self.max_retries} retries"
+                    "HTTP 207 partial failure: {} event(s) still failing after {} retries".format(
+                        len(retryable), self.max_retries
+                    )
                 )
             )
             return False, list(retryable)
@@ -416,7 +416,7 @@ class TelemetrySender:
             return [], list(batch), []
 
         raise IOError(
-            f"HTTP {status} from telemetry endpoint: {str(body_text)[:200]}"
+            "HTTP {} from telemetry endpoint: {}".format(status, str(body_text)[:200])
         )
 
     def _async_worker(
@@ -434,7 +434,7 @@ class TelemetrySender:
         if self.on_error:
             self.on_error(exc)
         else:
-            print(f"[TelemetrySender] ERROR: {exc}")
+            print("[TelemetrySender] ERROR: {}".format(exc))
 
     def _classify_207(
         self, batch: List[Dict[str, Any]], response_text: str

@@ -40,8 +40,8 @@ except ImportError:
 
 
 # Default collection intervals (seconds)
-DEFAULT_BATTERY_INTERVAL: int = 60
-DEFAULT_MOTOR_INTERVAL: int = 10
+DEFAULT_BATTERY_INTERVAL = 60
+DEFAULT_MOTOR_INTERVAL = 10
 
 
 class StatusCollector:
