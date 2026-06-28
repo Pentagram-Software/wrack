@@ -356,7 +356,8 @@ def deploy_to_ev3_via_tar(
     prepare_remote_cmd = f"rm -rf {tmp_path} && mkdir -p {tmp_path}"
     extract_remote_cmd = f"tar xzf - -C {tmp_path}"
     swap_remote_cmd = (
-        f"mv {remote_path} {remote_path}.bak 2>/dev/null || true"
+        f"rm -rf {remote_path}.bak"
+        f" && mv {remote_path} {remote_path}.bak 2>/dev/null || true"
         f" && mv {tmp_path} {remote_path}"
     )
 
