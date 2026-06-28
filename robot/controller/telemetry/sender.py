@@ -218,10 +218,11 @@ class TelemetrySender:
             # than dropping the events.
             self._async_worker(list(events), collector)
             return
+        # Pybricks MicroPython's Thread() accepts only ``target``/``args`` —
+        # passing ``daemon`` raises TypeError (PEN-188).
         t = _threading.Thread(
             target=self._async_worker,
             args=(list(events), collector),
-            daemon=True,
         )
         t.start()
 

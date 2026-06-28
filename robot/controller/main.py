@@ -683,7 +683,9 @@ def main():
     # Start background telemetry flush thread (sends buffered events every 2 minutes)
     if _telemetry_sender:
         import threading as _t
-        _flush_thread = _t.Thread(target=_telemetry_send_loop, daemon=True, name="TelemetryFlush")
+        # Pybricks MicroPython's Thread() accepts only ``target`` — passing
+        # ``daemon``/``name`` raises TypeError (PEN-188).
+        _flush_thread = _t.Thread(target=_telemetry_send_loop)
         _flush_thread.start()
         print("Telemetry flush thread started")
 
