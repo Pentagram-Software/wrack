@@ -1,0 +1,68 @@
+version: "3.9"
+
+# LL-HLS delivery stack
+#
+# Services
+# --------
+# llhls   – Python LL-HLS server (edge/video-streamer hls/server.py)
+#           Listens on port 8888 internally; not exposed on the host.
+# nginx   – Nginx reverse proxy; exposed on host port 8080 (or NGINX_PORT).
+#
+# The Pi camera streamer (edge/video-streamer/streamer.py) is NOT included here;
+# it runs directly on the Raspberry Pi hardware.  When the HLS segmenter writes
+# .ts files it uses the llhls service's output directory at /var/hls, which is
+# shared between both services via the hls_segments named volume.
+#
+# Quick start
+# -----------
+#   docker compose up
+#   curl http://localhost:8080/health        # → "OK"
+#   curl http://localhost:8080/index.m3u8    # → master playlist
+
+services:
+
+  llhls:
+    build:
+      context: ../video-streamer
+      dockerfile: Dockerfile
+    image: wrack-llhls-server:latest
+    environment:
+      - LLHLS_HOST=0.0.0.0
+      - LLHLS_PORT=8888
+      - LLHLS_OUTPUT_DIR=/var/hls
+    volumes:
+      - hls_segments:/var/hls
+    expose:
+      - "8888"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  nginx:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: wrack-nginx-hls:latest
+    environment:
+      - NGINX_UPSTREAM_HOST=llhls
+      - NGINX_UPSTREAM_PORT=8888
+      - NGINX_LISTEN_PORT=80
+      - NGINX_CORS_ORIGIN=${NGINX_CORS_ORIGIN:-*}
+    ports:
+      - "${NGINX_PORT:-8080}:80"
+    depends_on:
+      llhls:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  hls_segments:
+    driver: local
