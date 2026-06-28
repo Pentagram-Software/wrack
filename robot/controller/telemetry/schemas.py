@@ -155,7 +155,7 @@ class ValidationError(Exception):
 
 def _validate_envelope(event: Any) -> List[str]:
     """Return a list of error messages for the event envelope fields."""
-    errors: List[str] = []
+    errors = []
 
     if not isinstance(event, dict):
         return ["event must be a dict (JSON object)"]
@@ -198,7 +198,7 @@ def _validate_envelope(event: Any) -> List[str]:
 # ---------------------------------------------------------------------------
 
 def _validate_battery_status_payload(payload: Any) -> List[str]:
-    errors: List[str] = []
+    errors = []
     if not isinstance(payload, dict):
         return ["battery_status payload must be a dict"]
 
@@ -228,7 +228,7 @@ def _validate_battery_status_payload(payload: Any) -> List[str]:
 
 
 def _validate_command_received_payload(payload: Any) -> List[str]:
-    errors: List[str] = []
+    errors = []
     if not isinstance(payload, dict):
         return ["command_received payload must be a dict"]
 
@@ -246,7 +246,7 @@ def _validate_command_received_payload(payload: Any) -> List[str]:
 
 
 def _validate_command_executed_payload(payload: Any) -> List[str]:
-    errors: List[str] = []
+    errors = []
     if not isinstance(payload, dict):
         return ["command_executed payload must be a dict"]
 
@@ -273,7 +273,7 @@ def _validate_command_executed_payload(payload: Any) -> List[str]:
 
 
 def _validate_device_status_payload(payload: Any) -> List[str]:
-    errors: List[str] = []
+    errors = []
     if not isinstance(payload, dict):
         return ["device_status payload must be a dict"]
 
@@ -297,7 +297,7 @@ def _validate_device_status_payload(payload: Any) -> List[str]:
 
 
 def _validate_error_payload(payload: Any) -> List[str]:
-    errors: List[str] = []
+    errors = []
     if not isinstance(payload, dict):
         return ["error payload must be a dict"]
 
@@ -313,7 +313,7 @@ def _validate_error_payload(payload: Any) -> List[str]:
 
 
 def _validate_api_request_payload(payload: Any) -> List[str]:
-    errors: List[str] = []
+    errors = []
     if not isinstance(payload, dict):
         return ["api_request payload must be a dict"]
 
@@ -342,7 +342,7 @@ VALID_STREAM_PROTOCOLS = ["udp", "tcp", "http"]
 
 
 def _validate_video_stream_start_payload(payload: Any) -> List[str]:
-    errors: List[str] = []
+    errors = []
     if not isinstance(payload, dict):
         return ["video_stream_start payload must be a dict"]
 
@@ -369,7 +369,7 @@ def _validate_video_stream_start_payload(payload: Any) -> List[str]:
 
 
 def _validate_video_stream_stop_payload(payload: Any) -> List[str]:
-    errors: List[str] = []
+    errors = []
     if not isinstance(payload, dict):
         return ["video_stream_stop payload must be a dict"]
 
@@ -386,7 +386,7 @@ def _validate_video_stream_stop_payload(payload: Any) -> List[str]:
 
 
 def _validate_video_stream_health_payload(payload: Any) -> List[str]:
-    errors: List[str] = []
+    errors = []
     if not isinstance(payload, dict):
         return ["video_stream_health payload must be a dict"]
 
@@ -434,7 +434,7 @@ def validate_payload(event_type: str, payload: Any) -> None:
     If ``jsonschema`` is installed the validation is additionally checked
     against the canonical JSON Schema file.
     """
-    errors: List[str] = []
+    errors = []
 
     py_validator = _PAYLOAD_VALIDATORS.get(event_type)
     if py_validator:

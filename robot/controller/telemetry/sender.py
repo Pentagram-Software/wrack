@@ -322,7 +322,7 @@ class TelemetrySender:
             return False, list(events)
 
         all_ok = True
-        unsent: List[Dict[str, Any]] = []
+        unsent = []
         batch_start = 0
         total = len(events)
 
@@ -475,9 +475,9 @@ class TelemetrySender:
             if event_id:
                 retryable_ids.add(event_id)
 
-        accepted: List[Dict[str, Any]] = []
-        permanent: List[Dict[str, Any]] = []
-        retryable: List[Dict[str, Any]] = []
+        accepted = []
+        permanent = []
+        retryable = []
         for i, event in enumerate(batch):
             if i in permanent_indices:
                 permanent.append(event)
