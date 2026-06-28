@@ -234,7 +234,7 @@ class TelemetrySender:
 
     def _send_batch_with_retry(
         self, batch: List[Dict[str, Any]]
-    ) -> tuple[bool, List[Dict[str, Any]]]:
+    ):
         """Send *batch* with retries, returning ``(fully_ok, unsent_events)``.
 
         ``fully_ok`` is ``True`` only when every event in *batch* was stored
@@ -302,7 +302,7 @@ class TelemetrySender:
     def _send_events_with_unsent(
         self,
         events: List[Dict[str, Any]],
-    ) -> tuple[bool, List[Dict[str, Any]]]:
+    ):
         """Send *events* in batches, returning ``(all_ok, unsent_events)``.
 
         ``unsent_events`` holds only the events that still need to be retried
@@ -345,7 +345,7 @@ class TelemetrySender:
 
     def _post_batch(
         self, batch: List[Dict[str, Any]]
-    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    ):
         """Execute a single HTTP POST for *batch*.
 
         Returns a ``(accepted, permanent, retryable)`` tuple of event lists:
@@ -438,7 +438,7 @@ class TelemetrySender:
 
     def _classify_207(
         self, batch: List[Dict[str, Any]], response_text: str
-    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    ):
         """Split a 207 batch into ``(accepted, permanent, retryable)``.
 
         The Cloud Function (``telemetry.js``) reports each failed event in an
