@@ -105,11 +105,10 @@ class StatusCollector:
         self._running = True
 
         if _THREADING_AVAILABLE:
-            self._thread = _threading.Thread(
-                target=self._run,
-                daemon=True,
-                name="StatusCollector",
-            )
+            # Pybricks MicroPython's Thread() accepts only ``target`` — passing
+            # ``daemon`` or ``name`` raises TypeError (PEN-188).  The loop exits
+            # on the ``_running`` flag, so a daemon thread is unnecessary.
+            self._thread = _threading.Thread(target=self._run)
             self._thread.start()
 
     def stop(self, timeout: float = 5.0) -> None:
@@ -122,7 +121,20 @@ class StatusCollector:
         """
         self._running = False
         if self._thread is not None and _THREADING_AVAILABLE:
-            self._thread.join(timeout=timeout)
+            # ``join`` is unavailable on some Pybricks MicroPython builds; the
+            # ``_running`` flag already tells the loop to exit, so treat join as
+            # best-effort and fall back to a plain/absent join on the EV3.
+            join = getattr(self._thread, "join", None)
+            if callable(join):
+                try:
+                    join(timeout=timeout)
+                except TypeError:
+                    try:
+                        join()
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
             self._thread = None
 
     @property

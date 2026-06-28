@@ -341,6 +341,29 @@ class TestSendEventsAsync:
             s.send_events_async([])
         mock_thread.assert_not_called()
 
+    def test_async_thread_omits_daemon_kwarg(self):
+        """Regression (PEN-188): Thread() must omit the daemon kwarg.
+
+        Pybricks MicroPython's threading.Thread accepts only ``target``/``args``;
+        passing ``daemon`` raises TypeError and crashes the app on the EV3.
+        """
+        s = _make_sender()
+        created_kwargs = []
+
+        def capturing_thread(*args, **kwargs):
+            created_kwargs.append(kwargs)
+            t = MagicMock()
+            t.start = MagicMock()
+            return t
+
+        with patch("telemetry.sender._threading.Thread", side_effect=capturing_thread):
+            s.send_events_async([_make_event()])
+
+        assert len(created_kwargs) == 1, "Expected exactly one Thread to be created"
+        assert "daemon" not in created_kwargs[0], (
+            "daemon kwarg is unsupported by Pybricks MicroPython Thread()"
+        )
+
     def test_success_callback_called_in_background(self):
         results = []
         s = _make_sender(on_success=lambda n: results.append(n))

@@ -351,6 +351,39 @@ class TestLifecycle:
         assert sc.is_running
         sc.stop()
 
+    def test_start_does_not_use_daemon_or_name_kwargs(self):
+        """Regression (PEN-188): Thread() must omit daemon/name kwargs.
+
+        Pybricks MicroPython's threading.Thread accepts only ``target`` —
+        passing ``daemon`` or ``name`` raises TypeError and crashes the app on
+        the EV3.
+        """
+        c = TelemetryCollector()
+        dm = _make_device_manager()
+        sc = StatusCollector(c, dm)
+
+        original_thread = threading.Thread
+        created_kwargs = []
+
+        def capturing_thread(*args, **kwargs):
+            created_kwargs.append(kwargs)
+            return original_thread(*args, **kwargs)
+
+        with patch(
+            "telemetry.status_collector._threading.Thread",
+            side_effect=capturing_thread,
+        ):
+            sc.start()
+        sc.stop()
+
+        assert len(created_kwargs) == 1, "Expected exactly one Thread to be created"
+        assert "daemon" not in created_kwargs[0], (
+            "daemon kwarg is unsupported by Pybricks MicroPython Thread()"
+        )
+        assert "name" not in created_kwargs[0], (
+            "name kwarg is unsupported by Pybricks MicroPython Thread()"
+        )
+
     def test_stop_sets_running_false(self):
         c = TelemetryCollector()
         dm = _make_device_manager()
