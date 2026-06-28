@@ -176,9 +176,9 @@ class TelemetryCollector:
         self.max_disk_bytes = max_disk_bytes
         self.validate = validate
 
-        self._buffer: List[Dict[str, Any]] = []
-        self._dropped_count: int = 0
-        self._invalid_count: int = 0
+        self._buffer = []
+        self._dropped_count = 0
+        self._invalid_count = 0
 
     # ------------------------------------------------------------------
     # Core factory method
@@ -290,7 +290,7 @@ class TelemetryCollector:
         battery_type:
             One of ``"rechargeable"``, ``"alkaline"``, or ``"unknown"``.
         """
-        payload: Dict[str, Any] = {
+        payload = {
             "voltage_mv": voltage_mv,
             "percentage": percentage,
         }
@@ -313,7 +313,7 @@ class TelemetryCollector:
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create and buffer a ``command_received`` event."""
-        payload: Dict[str, Any] = {"command": command}
+        payload = {"command": command}
         if controller_type is not None:
             payload["controller_type"] = controller_type
         if params is not None:
@@ -333,7 +333,7 @@ class TelemetryCollector:
         error_message: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create and buffer a ``command_executed`` event."""
-        payload: Dict[str, Any] = {"command": command, "success": success}
+        payload = {"command": command, "success": success}
         if duration_ms is not None:
             payload["duration_ms"] = duration_ms
         if controller_type is not None:
@@ -355,7 +355,7 @@ class TelemetryCollector:
         error_message: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create and buffer a ``device_status`` event."""
-        payload: Dict[str, Any] = {
+        payload = {
             "device_name": device_name,
             "status": status,
         }
@@ -379,7 +379,7 @@ class TelemetryCollector:
         context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create and buffer an ``error`` event."""
-        payload: Dict[str, Any] = {
+        payload = {
             "error_type": error_type,
             "message": message,
         }
@@ -400,7 +400,7 @@ class TelemetryCollector:
         error_message: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create and buffer a ``connection_status`` event."""
-        payload: Dict[str, Any] = {"connected": connected}
+        payload = {"connected": connected}
         if host is not None:
             payload["host"] = host
         if error_message is not None:
@@ -496,7 +496,7 @@ class TelemetryCollector:
         """
         if not self.overflow_path or not os.path.exists(self.overflow_path):
             return []
-        events: List[Dict[str, Any]] = []
+        events = []
         try:
             with _open_text(self.overflow_path, "r") as fh:
                 for line in fh:

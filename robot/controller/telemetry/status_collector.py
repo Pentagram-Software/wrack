@@ -77,8 +77,8 @@ class StatusCollector:
         self.battery_interval = battery_interval
         self.motor_interval = motor_interval
 
-        self._running: bool = False
-        self._thread: Optional[Any] = None
+        self._running = False
+        self._thread = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -159,8 +159,8 @@ class StatusCollector:
 
     def _run(self) -> None:
         """Main loop — runs in a daemon thread."""
-        last_battery: float = 0.0
-        last_motor: float = 0.0
+        last_battery = 0.0
+        last_motor = 0.0
 
         while self._running:
             now = time.time()
@@ -178,7 +178,7 @@ class StatusCollector:
     def _collect_battery_status(self) -> Optional[Dict[str, Any]]:
         """Read battery info from DeviceManager and buffer a ``battery_status`` event."""
         try:
-            info: Dict[str, Any] = self.device_manager.get_battery_info()
+            info = self.device_manager.get_battery_info()
         except Exception:
             return None
 
@@ -200,7 +200,7 @@ class StatusCollector:
     def _collect_motor_status(self) -> Optional[Dict[str, Any]]:
         """Read motor status from DeviceManager and buffer a ``motor_status`` event."""
         try:
-            motors: Dict[str, Any] = self.device_manager.get_motor_status()
+            motors = self.device_manager.get_motor_status()
         except Exception:
             return None
 
