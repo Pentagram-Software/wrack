@@ -20,18 +20,22 @@ Usage::
     events = collector.flush()   # returns list of event dicts, clears buffer
 """
 
-from __future__ import annotations
-
 import json
 import os
 
-# ``typing`` is unavailable on Pybricks/MicroPython.  Annotations are strings
-# (``from __future__ import annotations``) so the names are never evaluated at
-# runtime; the fallback simply lets the module import on the EV3.
+# ``typing`` and ``from __future__ import annotations`` are unavailable on
+# Pybricks/MicroPython.  Without the future import, function-signature
+# annotations are evaluated at import time, so the fallback below provides a
+# subscriptable stub (``Optional[str]`` etc. resolve to the stub harmlessly)
+# that lets the module import on the EV3.
 try:
     from typing import Any, Dict, List, Optional
 except ImportError:  # pragma: no cover - MicroPython runtime path
-    Any = Dict = List = Optional = None  # type: ignore[assignment,misc]
+    class _TypingStub:
+        def __getitem__(self, item):
+            return self
+
+    Any = Dict = List = Optional = _TypingStub()  # type: ignore[assignment,misc]
 
 # ---------------------------------------------------------------------------
 # Optional standard-library imports (not available on MicroPython)

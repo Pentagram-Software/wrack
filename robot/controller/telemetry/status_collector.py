@@ -24,13 +24,21 @@ Usage::
     events = collector.flush()
 """
 
-from __future__ import annotations
-
 import time
+
+# ``typing`` and ``from __future__ import annotations`` are unavailable on
+# Pybricks/MicroPython.  Without the future import, function-signature
+# annotations are evaluated at import time, so the fallback below provides a
+# subscriptable stub (``Optional[str]`` etc. resolve to the stub harmlessly)
+# that lets the module import on the EV3.
 try:
     from typing import Any, Dict, Optional
 except ImportError:  # pragma: no cover - MicroPython runtime path
-    Any = Dict = Optional = None  # type: ignore[assignment,misc]
+    class _TypingStub:
+        def __getitem__(self, item):
+            return self
+
+    Any = Dict = Optional = _TypingStub()  # type: ignore[assignment,misc]
 
 try:
     import threading as _threading
