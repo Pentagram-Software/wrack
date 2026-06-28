@@ -27,7 +27,10 @@ Usage::
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional
+try:
+    from typing import Any, Dict, Optional
+except ImportError:  # pragma: no cover - MicroPython runtime path
+    Any = Dict = Optional = None  # type: ignore[assignment,misc]
 
 try:
     import threading as _threading
