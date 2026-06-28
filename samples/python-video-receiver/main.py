@@ -16,6 +16,8 @@ import threading
 from typing import Any, Dict
 import zlib
 
+from latency_metrics import FrameLatencyTracker
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = SCRIPT_DIR / "config" / "config.json"
 
@@ -276,6 +278,7 @@ class UDPVideoClient:
         self.h264_decoder = None
         if self.stream_format == "h264":
             self.h264_decoder = H264FrameDecoder()
+        self.latency_tracker = FrameLatencyTracker(expected_fps=30.0)
         
     def send_keepalive(self):
         """Send periodic keep-alive messages"""
@@ -295,14 +298,24 @@ class UDPVideoClient:
                     current_time = time.time()
                     elapsed = current_time - self.start_time
                     fps = self.frames_received / elapsed if elapsed > 0 else 0
-                    
+
+                    latency_stats = self.latency_tracker.compute_stats()
+
                     print(f"\n--- Video Stats ---")
                     print(f"Frames received: {self.frames_received}")
                     print(f"Decode failures: {self.decode_failures}")
                     print(f"Runtime: {elapsed:.1f}s")
                     print(f"Average FPS: {fps:.1f}")
+                    if latency_stats.sample_count > 0:
+                        print(
+                            f"Assembly latency p50/p95: "
+                            f"{latency_stats.median_assembly_ms:.1f} / "
+                            f"{latency_stats.p95_assembly_ms:.1f} ms"
+                        )
+                        print(f"Frame loss (est): {latency_stats.frame_loss_pct:.1f}%")
+                        print(f"Jitter (mean): {latency_stats.mean_jitter_ms:.1f} ms")
                     print(f"------------------\n")
-            except:
+            except Exception:
                 break
                 
     def start_receiving(self):
@@ -363,6 +376,7 @@ class UDPVideoClient:
                                     self.pending_frames[frame_id] = bytearray(frame_size)
                                     self.expected_chunks[frame_id] = chunk_count
                                     self.received_chunks[frame_id] = set()
+                                    self.latency_tracker.record_first_chunk(frame_id, chunk_count, frame_size)
                                     continue
                             except Exception:
                                 pass
@@ -375,6 +389,7 @@ class UDPVideoClient:
                                     self.pending_frames[frame_id] = bytearray(frame_size)
                                     self.expected_chunks[frame_id] = chunk_count
                                     self.received_chunks[frame_id] = set()
+                                    self.latency_tracker.record_first_chunk(frame_id, chunk_count, frame_size)
                                     continue
                             except Exception:
                                 pass
@@ -405,6 +420,7 @@ class UDPVideoClient:
                                                 frame_data = bytes(self.pending_frames.pop(frame_id))
                                                 self.expected_chunks.pop(frame_id, None)
                                                 self.received_chunks.pop(frame_id, None)
+                                                self.latency_tracker.record_complete(frame_id)
                                                 self.process_frame_data(frame_data)
                             except Exception:
                                 # Try 32-bit fallback
@@ -426,6 +442,7 @@ class UDPVideoClient:
                                                     frame_data = bytes(self.pending_frames.pop(frame_id))
                                                     self.expected_chunks.pop(frame_id, None)
                                                     self.received_chunks.pop(frame_id, None)
+                                                    self.latency_tracker.record_complete(frame_id)
                                                     self.process_frame_data(frame_data)
                                 except Exception:
                                     pass
@@ -568,6 +585,16 @@ class UDPVideoClient:
             print(f"Decode failures: {self.decode_failures}")
             print(f"Total runtime: {elapsed:.1f}s")
             print(f"Average FPS: {fps:.1f}")
+            latency_stats = self.latency_tracker.compute_stats()
+            if latency_stats.sample_count > 0:
+                print(
+                    f"Assembly latency p50/p95/p99: "
+                    f"{latency_stats.median_assembly_ms:.1f} / "
+                    f"{latency_stats.p95_assembly_ms:.1f} / "
+                    f"{latency_stats.p99_assembly_ms:.1f} ms"
+                )
+                print(f"Frame loss (est): {latency_stats.frame_loss_pct:.1f}%")
+                print(f"Jitter (mean): {latency_stats.mean_jitter_ms:.1f} ms")
             print(f"========================\n")
                 
         cv2.destroyAllWindows()
