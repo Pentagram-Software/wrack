@@ -29,6 +29,41 @@ def _uid() -> str:
 
 
 # ---------------------------------------------------------------------------
+# schemas import guard — must degrade gracefully on non-ImportError failures
+# ---------------------------------------------------------------------------
+
+class TestSchemasImportGuard:
+    def test_non_importerror_schemas_failure_is_handled(self):
+        """Regression: ``schemas.py`` builds regexes at module scope
+        (``re.compile(..., re.IGNORECASE)``), which could raise
+        ``AttributeError`` (not ``ImportError``) on a MicroPython build with a
+        partial ``re`` module — the same failure mode already hit for
+        ``datetime`` elsewhere in this file. ``collector.py`` must degrade to
+        "validation unavailable" rather than fail its own import.
+        """
+        class _BrokenSchemasModule(types.ModuleType):
+            def __getattr__(self, name):
+                raise RuntimeError("simulated partial-module failure")
+
+        fake_schemas = _BrokenSchemasModule("telemetry.schemas")
+        real_schemas = sys.modules.get("telemetry.schemas")
+        sys.modules["telemetry.schemas"] = fake_schemas
+        try:
+            importlib.reload(collector_module)
+            assert collector_module._HAS_SCHEMAS is False
+
+            c = collector_module.TelemetryCollector()
+            event = c.collect("battery_status", voltage_mv=7000, percentage=50.0)
+            assert event is not None
+        finally:
+            if real_schemas is not None:
+                sys.modules["telemetry.schemas"] = real_schemas
+            else:
+                sys.modules.pop("telemetry.schemas", None)
+            importlib.reload(collector_module)
+
+
+# ---------------------------------------------------------------------------
 # _generate_event_id
 # ---------------------------------------------------------------------------
 

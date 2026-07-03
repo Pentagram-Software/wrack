@@ -195,6 +195,20 @@ class StatusCollector:
 
             time.sleep(1)
 
+    def _safe_collect(self, event_type: str, **payload: Any) -> Optional[Dict[str, Any]]:
+        """Call ``collector.collect()``, isolating exceptions.
+
+        A bug in the collector (e.g. a MicroPython API gap in event-ID or
+        timestamp generation) must never be allowed to kill the periodic
+        background thread or crash whatever thread a device-manager callback
+        runs on — it should just drop this one event.
+        """
+        try:
+            return self.collector.collect(event_type, **payload)
+        except Exception as exc:  # noqa: BLE001 — one bad event must never kill the caller
+            print("StatusCollector: {} collection failed: {}".format(event_type, exc))
+            return None
+
     def _collect_battery_status(self) -> Optional[Dict[str, Any]]:
         """Read battery info from DeviceManager and buffer a ``battery_status`` event."""
         try:
@@ -209,7 +223,7 @@ class StatusCollector:
         if voltage_mv is None or percentage is None or not info.get("available", True):
             return None
 
-        return self.collector.collect(
+        return self._safe_collect(
             "battery_status",
             voltage_mv=voltage_mv,
             percentage=percentage,
@@ -224,11 +238,11 @@ class StatusCollector:
         except Exception:
             return None
 
-        return self.collector.collect("motor_status", motors=motors)
+        return self._safe_collect("motor_status", motors=motors)
 
     def _on_device_disconnect(self, device_name: str, status_dict: Dict[str, Any]) -> None:
         """Called immediately when a device disconnects."""
-        self.collector.collect(
+        self._safe_collect(
             "device_status",
             device_name=device_name,
             status="disconnected",
@@ -239,7 +253,7 @@ class StatusCollector:
 
     def _on_device_reconnect(self, device_name: str, status_dict: Dict[str, Any]) -> None:
         """Called immediately when a device reconnects."""
-        self.collector.collect(
+        self._safe_collect(
             "device_status",
             device_name=device_name,
             status="connected",
