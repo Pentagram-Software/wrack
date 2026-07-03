@@ -185,6 +185,71 @@ class TestSendEventsSuccess:
 
 
 # ---------------------------------------------------------------------------
+# HTTP POST — urequests lacks a `timeout` kwarg (MicroPython compatibility)
+# ---------------------------------------------------------------------------
+
+class TestHttpPostTimeoutFallback:
+    """Regression: Pybricks MicroPython's bundled ``urequests`` — unlike
+    CPython's ``requests`` — does not accept ``timeout`` on ``post()``,
+    raising ``TypeError: unexpected keyword argument 'timeout'`` the first
+    time telemetry actually sends on-device. Same "unsupported kwarg" shape
+    as the ``Thread(daemon=...)`` issue (PEN-188).
+    """
+
+    def _mock_response(self, status_code=200):
+        resp = MagicMock()
+        resp.status_code = status_code
+        return resp
+
+    def test_falls_back_without_timeout_on_typeerror(self):
+        s = _make_sender()
+        events = [_make_event()]
+        with patch("telemetry.sender._http") as mock_http:
+            mock_http.post.side_effect = [
+                TypeError("post() got an unexpected keyword argument 'timeout'"),
+                self._mock_response(200),
+            ]
+            result = s.send_events(events)
+        assert result is True
+        assert mock_http.post.call_count == 2
+
+    def test_first_attempt_includes_timeout_second_does_not(self):
+        s = _make_sender(timeout=7)
+        events = [_make_event()]
+        with patch("telemetry.sender._http") as mock_http:
+            mock_http.post.side_effect = [
+                TypeError("unexpected keyword argument 'timeout'"),
+                self._mock_response(200),
+            ]
+            s.send_events(events)
+        first_kwargs = mock_http.post.call_args_list[0][1]
+        second_kwargs = mock_http.post.call_args_list[1][1]
+        assert first_kwargs.get("timeout") == 7
+        assert "timeout" not in second_kwargs
+
+    def test_normal_http_lib_never_triggers_fallback(self):
+        """When the HTTP library accepts ``timeout`` (e.g. ``requests``),
+        only one call is made — no unnecessary retry."""
+        s = _make_sender()
+        events = [_make_event()]
+        with patch("telemetry.sender._http") as mock_http:
+            mock_http.post.return_value = self._mock_response(200)
+            s.send_events(events)
+        assert mock_http.post.call_count == 1
+
+    def test_typeerror_on_both_attempts_is_treated_as_transient_failure(self):
+        """If the fallback call also raises TypeError (e.g. a genuinely
+        broken HTTP lib), the batch is treated as an ordinary transient
+        failure rather than crashing the sender."""
+        s = _make_sender(max_retries=0)
+        events = [_make_event()]
+        with patch("telemetry.sender._http") as mock_http:
+            mock_http.post.side_effect = TypeError("still broken")
+            result = s.send_events(events)
+        assert result is False
+
+
+# ---------------------------------------------------------------------------
 # send_events — batching
 # ---------------------------------------------------------------------------
 

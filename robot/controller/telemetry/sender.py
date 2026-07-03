@@ -380,12 +380,7 @@ class TelemetrySender:
         }
         body = json.dumps({"events": batch})
 
-        response = _http.post(  # type: ignore[union-attr]
-            self.endpoint,
-            data=body,
-            headers=headers,
-            timeout=self.timeout,
-        )
+        response = self._http_post(body, headers)
 
         # Read everything we need from the response, then always close it.
         try:
@@ -423,6 +418,26 @@ class TelemetrySender:
         raise OSError(
             "HTTP {} from telemetry endpoint: {}".format(status, str(body_text)[:200])
         )
+
+    def _http_post(self, body: str, headers: Dict[str, str]):
+        """POST *body* to :attr:`endpoint`, tolerant of HTTP libraries that
+        don't accept a ``timeout`` kwarg.
+
+        Pybricks MicroPython's bundled ``urequests`` — unlike CPython's
+        ``requests`` — does not accept ``timeout`` on ``post()``; passing it
+        raises ``TypeError: unexpected keyword argument 'timeout'`` (the same
+        "unsupported kwarg" shape as the ``Thread(daemon=...)`` issue,
+        PEN-188). Try with ``timeout`` first — needed so ``requests`` doesn't
+        hang forever — and fall back without it.
+        """
+        try:
+            return _http.post(  # type: ignore[union-attr]
+                self.endpoint, data=body, headers=headers, timeout=self.timeout
+            )
+        except TypeError:
+            return _http.post(  # type: ignore[union-attr]
+                self.endpoint, data=body, headers=headers
+            )
 
     def _async_worker(
         self,
