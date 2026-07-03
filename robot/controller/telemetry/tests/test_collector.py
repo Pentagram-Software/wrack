@@ -33,7 +33,7 @@ def _uid() -> str:
 # ---------------------------------------------------------------------------
 
 class TestSchemasImportGuard:
-    def test_non_importerror_schemas_failure_is_handled(self):
+    def test_attributeerror_schemas_failure_is_handled(self):
         """Regression: ``schemas.py`` builds regexes at module scope
         (``re.compile(..., re.IGNORECASE)``), which could raise
         ``AttributeError`` (not ``ImportError``) on a MicroPython build with a
@@ -43,7 +43,7 @@ class TestSchemasImportGuard:
         """
         class _BrokenSchemasModule(types.ModuleType):
             def __getattr__(self, name):
-                raise RuntimeError("simulated partial-module failure")
+                raise AttributeError("simulated partial-module failure")
 
         fake_schemas = _BrokenSchemasModule("telemetry.schemas")
         real_schemas = sys.modules.get("telemetry.schemas")
@@ -55,6 +55,29 @@ class TestSchemasImportGuard:
             c = collector_module.TelemetryCollector()
             event = c.collect("battery_status", voltage_mv=7000, percentage=50.0)
             assert event is not None
+        finally:
+            if real_schemas is not None:
+                sys.modules["telemetry.schemas"] = real_schemas
+            else:
+                sys.modules.pop("telemetry.schemas", None)
+            importlib.reload(collector_module)
+
+    def test_unexpected_schemas_failure_is_not_swallowed(self):
+        """A genuine bug in schemas.py (e.g. a NameError from a typo) must
+        fail loudly, not be silently absorbed into "validation unavailable"
+        — the guard exists for known MicroPython compatibility gaps, not as
+        a blanket safety net for real defects.
+        """
+        class _BrokenSchemasModule(types.ModuleType):
+            def __getattr__(self, name):
+                raise RuntimeError("simulated real bug, not a compat issue")
+
+        fake_schemas = _BrokenSchemasModule("telemetry.schemas")
+        real_schemas = sys.modules.get("telemetry.schemas")
+        sys.modules["telemetry.schemas"] = fake_schemas
+        try:
+            with pytest.raises(RuntimeError):
+                importlib.reload(collector_module)
         finally:
             if real_schemas is not None:
                 sys.modules["telemetry.schemas"] = real_schemas

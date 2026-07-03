@@ -66,16 +66,18 @@ except ImportError:
 # Schema validation is optional so the collector still imports on MicroPython
 # (or any environment where ``telemetry.schemas`` cannot be loaded).  When it
 # is unavailable the generic :meth:`TelemetryCollector.collect` simply skips
-# validation regardless of the ``validate`` flag.  Caught broadly (not just
-# ``ImportError``): ``schemas`` imports ``re`` and builds regexes at module
-# scope, and some MicroPython builds ship partial standard-library modules
-# that raise ``AttributeError`` rather than ``ImportError`` (see the
-# ``datetime`` guard above) — that must degrade gracefully here too, not take
-# down this module's own import.
+# validation regardless of the ``validate`` flag.  Also catches
+# ``AttributeError``, not just ``ImportError``: ``schemas`` imports ``re`` and
+# builds regexes at module scope, and some MicroPython builds ship partial
+# standard-library modules that raise ``AttributeError`` rather than
+# ``ImportError`` (see the ``datetime`` guard above). Deliberately narrow
+# (not a bare ``except Exception``) so a real bug in ``schemas.py`` (e.g. a
+# ``NameError`` from a typo) still fails loudly instead of silently disabling
+# validation.
 try:
     from .schemas import ValidationError, validate_event
     _HAS_SCHEMAS = True
-except Exception:  # pragma: no cover - MicroPython / missing-schema / partial-module path
+except (ImportError, AttributeError):  # pragma: no cover - MicroPython / missing-schema / partial-module path
     _HAS_SCHEMAS = False
 
     class ValidationError(Exception):  # type: ignore[no-redef]
