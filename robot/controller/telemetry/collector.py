@@ -43,7 +43,7 @@ except ImportError:  # pragma: no cover - MicroPython runtime path
 
 try:
     import uuid as _uuid_mod
-    _HAS_UUID = True
+    _HAS_UUID = hasattr(_uuid_mod, "uuid4")
 except ImportError:
     _HAS_UUID = False
 
