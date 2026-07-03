@@ -1,14 +1,18 @@
 """Unit tests for telemetry/collector.py."""
 
+import importlib
 import json
 import os
+import sys
 import tempfile
+import types
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
 
+import telemetry.collector as collector_module
 from telemetry.collector import TelemetryCollector, _generate_event_id, _utc_now_iso
 
 
@@ -22,6 +26,64 @@ def _ts() -> str:
 
 def _uid() -> str:
     return str(uuid.uuid4())
+
+
+# ---------------------------------------------------------------------------
+# schemas import guard — must degrade gracefully on non-ImportError failures
+# ---------------------------------------------------------------------------
+
+class TestSchemasImportGuard:
+    def test_attributeerror_schemas_failure_is_handled(self):
+        """Regression: ``schemas.py`` builds regexes at module scope
+        (``re.compile(..., re.IGNORECASE)``), which could raise
+        ``AttributeError`` (not ``ImportError``) on a MicroPython build with a
+        partial ``re`` module — the same failure mode already hit for
+        ``datetime`` elsewhere in this file. ``collector.py`` must degrade to
+        "validation unavailable" rather than fail its own import.
+        """
+        class _BrokenSchemasModule(types.ModuleType):
+            def __getattr__(self, name):
+                raise AttributeError("simulated partial-module failure")
+
+        fake_schemas = _BrokenSchemasModule("telemetry.schemas")
+        real_schemas = sys.modules.get("telemetry.schemas")
+        sys.modules["telemetry.schemas"] = fake_schemas
+        try:
+            importlib.reload(collector_module)
+            assert collector_module._HAS_SCHEMAS is False
+
+            c = collector_module.TelemetryCollector()
+            event = c.collect("battery_status", voltage_mv=7000, percentage=50.0)
+            assert event is not None
+        finally:
+            if real_schemas is not None:
+                sys.modules["telemetry.schemas"] = real_schemas
+            else:
+                sys.modules.pop("telemetry.schemas", None)
+            importlib.reload(collector_module)
+
+    def test_unexpected_schemas_failure_is_not_swallowed(self):
+        """A genuine bug in schemas.py (e.g. a NameError from a typo) must
+        fail loudly, not be silently absorbed into "validation unavailable"
+        — the guard exists for known MicroPython compatibility gaps, not as
+        a blanket safety net for real defects.
+        """
+        class _BrokenSchemasModule(types.ModuleType):
+            def __getattr__(self, name):
+                raise RuntimeError("simulated real bug, not a compat issue")
+
+        fake_schemas = _BrokenSchemasModule("telemetry.schemas")
+        real_schemas = sys.modules.get("telemetry.schemas")
+        sys.modules["telemetry.schemas"] = fake_schemas
+        try:
+            with pytest.raises(RuntimeError):
+                importlib.reload(collector_module)
+        finally:
+            if real_schemas is not None:
+                sys.modules["telemetry.schemas"] = real_schemas
+            else:
+                sys.modules.pop("telemetry.schemas", None)
+            importlib.reload(collector_module)
 
 
 # ---------------------------------------------------------------------------
@@ -49,6 +111,28 @@ class TestGenerateEventId:
             assert isinstance(eid, str)
             parts = eid.split("-")
             assert len(parts) == 5, f"Expected UUID shape, got {eid!r}"
+
+    def test_import_time_detection_treats_missing_uuid4_as_unavailable(self):
+        # Exercise the actual detection in collector.py (``_HAS_UUID =
+        # hasattr(_uuid_mod, "uuid4")``) rather than just the runtime
+        # fallback: install a fake ``uuid`` module lacking ``uuid4`` in
+        # ``sys.modules`` and reload the collector against it, the way a
+        # MicroPython build with a partial ``uuid`` module would behave.
+        fake_uuid = types.ModuleType("uuid")  # deliberately has no uuid4
+        real_uuid = sys.modules.get("uuid")
+        sys.modules["uuid"] = fake_uuid
+        try:
+            importlib.reload(collector_module)
+            assert collector_module._HAS_UUID is False
+            eid = collector_module._generate_event_id()
+            assert isinstance(eid, str)
+            assert len(eid.split("-")) == 5, f"Expected UUID shape, got {eid!r}"
+        finally:
+            if real_uuid is not None:
+                sys.modules["uuid"] = real_uuid
+            else:
+                sys.modules.pop("uuid", None)
+            importlib.reload(collector_module)
 
 
 # ---------------------------------------------------------------------------

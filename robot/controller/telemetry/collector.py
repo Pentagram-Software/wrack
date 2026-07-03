@@ -66,11 +66,18 @@ except ImportError:
 # Schema validation is optional so the collector still imports on MicroPython
 # (or any environment where ``telemetry.schemas`` cannot be loaded).  When it
 # is unavailable the generic :meth:`TelemetryCollector.collect` simply skips
-# validation regardless of the ``validate`` flag.
+# validation regardless of the ``validate`` flag.  Also catches
+# ``AttributeError``, not just ``ImportError``: ``schemas`` imports ``re`` and
+# builds regexes at module scope, and some MicroPython builds ship partial
+# standard-library modules that raise ``AttributeError`` rather than
+# ``ImportError`` (see the ``datetime`` guard above). Deliberately narrow
+# (not a bare ``except Exception``) so a real bug in ``schemas.py`` (e.g. a
+# ``NameError`` from a typo) still fails loudly instead of silently disabling
+# validation.
 try:
     from .schemas import ValidationError, validate_event
     _HAS_SCHEMAS = True
-except ImportError:  # pragma: no cover - MicroPython / missing-schema path
+except (ImportError, AttributeError):  # pragma: no cover - MicroPython / missing-schema / partial-module path
     _HAS_SCHEMAS = False
 
     class ValidationError(Exception):  # type: ignore[no-redef]
@@ -116,8 +123,10 @@ def _generate_event_id() -> str:
         return str(_uuid_mod.uuid4())
     global _counter
     _counter += 1
-    # Produce a deterministic UUID-shaped string for MicroPython
-    hex_str = format(_counter, "032x")
+    # Produce a deterministic UUID-shaped string for MicroPython. Uses ``%``
+    # formatting rather than the ``format()`` builtin, which some MicroPython
+    # builds omit entirely.
+    hex_str = "%032x" % _counter
     return "{}-{}-{}-{}-{}".format(hex_str[0:8], hex_str[8:12], hex_str[12:16], hex_str[16:20], hex_str[20:32])
 
 
