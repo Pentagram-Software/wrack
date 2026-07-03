@@ -116,8 +116,10 @@ def _generate_event_id() -> str:
         return str(_uuid_mod.uuid4())
     global _counter
     _counter += 1
-    # Produce a deterministic UUID-shaped string for MicroPython
-    hex_str = format(_counter, "032x")
+    # Produce a deterministic UUID-shaped string for MicroPython. Uses ``%``
+    # formatting rather than the ``format()`` builtin, which some MicroPython
+    # builds omit entirely.
+    hex_str = "%032x" % _counter
     return "{}-{}-{}-{}-{}".format(hex_str[0:8], hex_str[8:12], hex_str[12:16], hex_str[16:20], hex_str[20:32])
 
 

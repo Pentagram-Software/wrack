@@ -1,14 +1,18 @@
 """Unit tests for telemetry/collector.py."""
 
+import importlib
 import json
 import os
+import sys
 import tempfile
+import types
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
 
+import telemetry.collector as collector_module
 from telemetry.collector import TelemetryCollector, _generate_event_id, _utc_now_iso
 
 
@@ -49,6 +53,28 @@ class TestGenerateEventId:
             assert isinstance(eid, str)
             parts = eid.split("-")
             assert len(parts) == 5, f"Expected UUID shape, got {eid!r}"
+
+    def test_import_time_detection_treats_missing_uuid4_as_unavailable(self):
+        # Exercise the actual detection in collector.py (``_HAS_UUID =
+        # hasattr(_uuid_mod, "uuid4")``) rather than just the runtime
+        # fallback: install a fake ``uuid`` module lacking ``uuid4`` in
+        # ``sys.modules`` and reload the collector against it, the way a
+        # MicroPython build with a partial ``uuid`` module would behave.
+        fake_uuid = types.ModuleType("uuid")  # deliberately has no uuid4
+        real_uuid = sys.modules.get("uuid")
+        sys.modules["uuid"] = fake_uuid
+        try:
+            importlib.reload(collector_module)
+            assert collector_module._HAS_UUID is False
+            eid = collector_module._generate_event_id()
+            assert isinstance(eid, str)
+            assert len(eid.split("-")) == 5, f"Expected UUID shape, got {eid!r}"
+        finally:
+            if real_uuid is not None:
+                sys.modules["uuid"] = real_uuid
+            else:
+                sys.modules.pop("uuid", None)
+            importlib.reload(collector_module)
 
 
 # ---------------------------------------------------------------------------
