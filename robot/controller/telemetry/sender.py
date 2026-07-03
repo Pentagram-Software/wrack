@@ -170,6 +170,10 @@ class TelemetrySender:
         self.threaded = threaded
         self.on_success = on_success
         self.on_error = on_error
+        # Per-event error detail from the most recent 207 response, keyed by
+        # event_id — used only to enrich the final give-up log message with
+        # *why* the endpoint is rejecting events, not just how many.
+        self._last_207_errors: Dict[str, List[str]] = {}
 
     # ------------------------------------------------------------------
     # Public send interface
@@ -295,8 +299,9 @@ class TelemetrySender:
 
             self._fire_error(
                 PartialFailureError(
-                    "HTTP 207 partial failure: {} event(s) still failing after {} retries".format(
-                        len(retryable), self.max_retries
+                    "HTTP 207 partial failure: {} event(s) still failing after {} retries. "
+                    "Sample errors: {}".format(
+                        len(retryable), self.max_retries, self._sample_207_errors(retryable)
                     )
                 )
             )
@@ -484,16 +489,24 @@ class TelemetrySender:
 
         permanent_indices = set()
         retryable_ids = set()
+        last_207_errors = {}
         for err in errors:
             if not isinstance(err, dict):
                 continue
             idx = err.get("index")
+            event_id = err.get("event_id")
+            reasons = err.get("errors")
+            key = event_id or (batch[idx].get("event_id") if isinstance(idx, int) and 0 <= idx < len(batch) else None)
+            if key and reasons:
+                last_207_errors[key] = reasons
             if isinstance(idx, int) and 0 <= idx < len(batch):
                 permanent_indices.add(idx)
                 continue
-            event_id = err.get("event_id")
             if event_id:
                 retryable_ids.add(event_id)
+        # Keep the most recent detail for diagnostics — surfaced in the
+        # give-up log message so operators can see *why*, not just how many.
+        self._last_207_errors = last_207_errors
 
         accepted = []
         permanent = []
@@ -517,6 +530,26 @@ class TelemetrySender:
             accepted = []
 
         return accepted, permanent, retryable
+
+    def _sample_207_errors(self, events: List[Dict[str, Any]], limit: int = 3) -> str:
+        """Return a short human-readable sample of the endpoint's per-event
+        error reasons for *events*, using the detail captured by the most
+        recent :meth:`_classify_207` call. Best-effort — falls back to a
+        placeholder when no detail is available (e.g. an unparsable body).
+        """
+        parts = []
+        for event in events[:limit]:
+            event_id = event.get("event_id")
+            reasons = self._last_207_errors.get(event_id)
+            if reasons:
+                parts.append("{}: {}".format(event_id, "; ".join(str(r) for r in reasons)))
+        if not parts:
+            return "(no detail available)"
+        remaining = len(events) - len(parts)
+        sample = "; ".join(parts)
+        if remaining > 0:
+            sample += "; ... and {} more".format(remaining)
+        return sample
 
     # ------------------------------------------------------------------
     # Convenience: flush collector and send
