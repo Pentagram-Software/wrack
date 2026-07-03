@@ -409,6 +409,61 @@ class TestLifecycle:
 
 
 # ---------------------------------------------------------------------------
+# Crash containment — a collector bug must never kill the caller
+# ---------------------------------------------------------------------------
+
+
+class TestCrashContainment:
+    """A bug inside ``TelemetryCollector.collect()`` (e.g. a MicroPython API
+    gap, like the ``uuid4``/``format()`` issues already hit in production)
+    must not propagate out of StatusCollector: it would permanently kill the
+    background collection thread, or crash whatever thread a device-manager
+    callback runs on.
+    """
+
+    def test_battery_collection_exception_does_not_propagate(self):
+        c = TelemetryCollector()
+        c.collect = MagicMock(side_effect=RuntimeError("boom"))
+        dm = _make_device_manager()
+        sc = StatusCollector(c, dm)
+        assert sc._collect_battery_status() is None
+
+    def test_motor_collection_exception_does_not_propagate(self):
+        c = TelemetryCollector()
+        c.collect = MagicMock(side_effect=RuntimeError("boom"))
+        dm = _make_device_manager()
+        sc = StatusCollector(c, dm)
+        assert sc._collect_motor_status() is None
+
+    def test_disconnect_callback_exception_does_not_propagate(self):
+        c = TelemetryCollector()
+        c.collect = MagicMock(side_effect=RuntimeError("boom"))
+        dm = _make_device_manager()
+        sc = StatusCollector(c, dm)
+        sc._on_device_disconnect("drive_L_motor", {"port": "A"})  # must not raise
+
+    def test_reconnect_callback_exception_does_not_propagate(self):
+        c = TelemetryCollector()
+        c.collect = MagicMock(side_effect=RuntimeError("boom"))
+        dm = _make_device_manager()
+        sc = StatusCollector(c, dm)
+        sc._on_device_reconnect("drive_L_motor", {"port": "A"})  # must not raise
+
+    def test_periodic_loop_survives_persistent_collection_failure(self):
+        """Even if every collection attempt fails, subsequent ticks must
+        still be attempted — the loop itself must never die."""
+        c = TelemetryCollector()
+        c.collect = MagicMock(side_effect=RuntimeError("boom"))
+        dm = _make_device_manager()
+        sc = StatusCollector(c, dm, battery_interval=10, motor_interval=10)
+
+        # Should complete all 30 ticks without raising, attempting collection
+        # at t=0, 10, 20 despite every call failing.
+        TestCollectionTiming()._run_fake_loop(sc, tick_seconds=1, ticks=30)
+        assert c.collect.call_count == 6  # battery + motor at each of 3 ticks
+
+
+# ---------------------------------------------------------------------------
 # _infer_device_type helper
 # ---------------------------------------------------------------------------
 
