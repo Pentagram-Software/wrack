@@ -706,6 +706,32 @@ class TestSendEvents207Partial:
         """PartialFailureError must be an IOError for API compatibility."""
         assert issubclass(PartialFailureError, IOError)
 
+    def test_retryable_207_give_up_message_includes_backend_error_detail(self):
+        """The final give-up message must surface *why* the endpoint is
+        rejecting events (e.g. the BigQuery error reason), not just a bare
+        count — otherwise persistent 207s are undiagnosable from the logs.
+        """
+        errors_received = []
+        s = _make_sender(max_retries=0, on_error=lambda e: errors_received.append(e))
+        event = _make_event()
+        with patch("telemetry.sender._http") as mock_http:
+            resp = MagicMock()
+            resp.status_code = 207
+            resp.text = json.dumps({
+                "success": False,
+                "inserted": 0,
+                "failed": 1,
+                "errors": [
+                    {"event_id": event["event_id"], "errors": ["no such field: current_ma"]}
+                ],
+            })
+            mock_http.post.return_value = resp
+            s.send_events([event])
+        assert errors_received
+        message = str(errors_received[0])
+        assert event["event_id"] in message
+        assert "no such field: current_ma" in message
+
     def test_retryable_207_recovers_on_subsequent_success(self):
         """If a retry after a transient 207 returns 200, the batch is sent."""
         s = _make_sender(max_retries=2)
