@@ -41,6 +41,15 @@ class TestGenerateEventId:
         ids = {_generate_event_id() for _ in range(50)}
         assert len(ids) == 50
 
+    def test_falls_back_to_counter_when_uuid4_unavailable(self):
+        # Some MicroPython builds ship a ``uuid`` module without ``uuid4``
+        # (import succeeds, but the module lacks the attribute).
+        with patch("telemetry.collector._HAS_UUID", False):
+            eid = _generate_event_id()
+            assert isinstance(eid, str)
+            parts = eid.split("-")
+            assert len(parts) == 5, f"Expected UUID shape, got {eid!r}"
+
 
 # ---------------------------------------------------------------------------
 # _utc_now_iso
