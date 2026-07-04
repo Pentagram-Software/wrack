@@ -67,7 +67,7 @@ function isEnabled() {
  * @returns {object}  Row data (not yet wrapped with insertId).
  */
 function _formatRow(event) {
-  return {
+  const row = {
     event_id: event.event_id,
     event_type: event.event_type,
     source: event.source,
@@ -77,10 +77,17 @@ function _formatRow(event) {
     ingested_at: new Date().toISOString(),
     payload: JSON.stringify(event.payload),
     version: event.version || null,
-    tags: event.tags || null,
     user_id: event.user_id || null,
     correlation_id: event.correlation_id || null,
   };
+  // `tags` is a REPEATED (ARRAY<STRING>) column. BigQuery's streaming insert
+  // API rejects an explicit `null` or `[]` for a REPEATED field ("Field value
+  // of tags cannot be empty") — the key must be omitted entirely unless there
+  // is a real, non-empty array to write.
+  if (Array.isArray(event.tags) && event.tags.length > 0) {
+    row.tags = event.tags;
+  }
+  return row;
 }
 
 /**

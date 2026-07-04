@@ -291,7 +291,9 @@ describe('TelemetrySender integration — event field mapping', () => {
     expect(row.json.session_id).toBeNull();
     expect(row.json.device_id).toBeNull();
     expect(row.json.version).toBeNull();
-    expect(row.json.tags).toBeNull();
+    // tags is REPEATED (ARRAY<STRING>) — BigQuery rejects null/empty for a
+    // REPEATED field, so the key is omitted entirely rather than set to null.
+    expect('tags' in row.json).toBe(false);
     expect(row.json.user_id).toBeNull();
     expect(row.json.correlation_id).toBeNull();
   });

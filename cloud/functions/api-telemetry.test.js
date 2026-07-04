@@ -253,6 +253,14 @@ describe('logApiRequest', () => {
     expect(typeof row.payload).toBe('string'); // BigQuery JSON column
   });
 
+  test('omits tags key from the inserted row (BigQuery rejects null for a REPEATED field)', async () => {
+    logApiRequest(baseData);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const [rows] = mockInsert.mock.calls[0];
+    expect('tags' in rows[0]).toBe(false);
+  });
+
   test('payload JSON contains expected fields', async () => {
     logApiRequest(baseData);
     await new Promise((resolve) => setImmediate(resolve));

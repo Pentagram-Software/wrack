@@ -110,6 +110,10 @@ function logApiRequest(data) {
     let row;
     try {
       const event = buildApiRequestEvent(data);
+      // `tags` (REPEATED/ARRAY<STRING>) is deliberately omitted rather than
+      // set to null — BigQuery's streaming insert API rejects an explicit
+      // null/empty value for a REPEATED field ("Field value of tags cannot
+      // be empty"); the key must be absent when there's nothing to write.
       row = {
         event_id: event.event_id,
         event_type: event.event_type,
@@ -120,7 +124,6 @@ function logApiRequest(data) {
         ingested_at: new Date().toISOString(),
         payload: JSON.stringify(event.payload),
         version: null,
-        tags: null,
         user_id: null,
         correlation_id: null,
       };
