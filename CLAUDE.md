@@ -122,8 +122,10 @@ explicitly on every change:
   `telemetry/collector.py` for the pattern).
 - **Partial module attributes**: a successful `import uuid` does not guarantee `uuid.uuid4` exists.
   Check `hasattr()` for the specific function/attribute you depend on before relying on it.
-- **No builtin `format()`**: some builds omit it entirely. Use `%`-style string formatting instead
-  (already used throughout `telemetry/`).
+- **No builtin `format()`**: some builds omit the builtin `format(value, spec)` function entirely
+  (hit generating a zero-padded hex string). This does **not** apply to the `str.format()` method
+  (e.g. `"{}-{}".format(a, b)`), which is fine on MicroPython and is the established pattern used
+  throughout `telemetry/` — prefer it, or `%`-style formatting, over the bare `format()` builtin.
 - **No `from __future__ import annotations`**: unavailable on MicroPython. Function-signature
   annotations are evaluated eagerly — use the `_TypingStub` fallback pattern already established
   in `telemetry/*.py` for `typing` imports.
