@@ -1,0 +1,40 @@
+name: Edge CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'edge/video-streamer/**'
+      - 'edge/vision/**'
+      - '.github/workflows/ci-edge.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'edge/video-streamer/**'
+      - 'edge/vision/**'
+      - '.github/workflows/ci-edge.yml'
+
+jobs:
+  ci:
+    name: Test edge/ (video-streamer + vision telemetry)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Only pytest is installed here — not edge/video-streamer/requirements.txt.
+      # picamera2/opencv-python need real Raspberry Pi hardware and libcamera,
+      # neither of which exist on a hosted runner. This is safe because no
+      # test file imports streamer.py directly (only config.py, monitoring.py,
+      # telemetry.py — all hardware-independent). Do not "fix" this by trying
+      # to install picamera2 here.
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run video-streamer tests
+        working-directory: edge/video-streamer
+        run: python -m pytest tests/ -q
+
+      - name: Run vision telemetry tests
+        working-directory: edge/vision/telemetry
+        run: python -m pytest tests/ -q

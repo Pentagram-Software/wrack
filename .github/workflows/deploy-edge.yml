@@ -1,0 +1,61 @@
+name: Deploy to Raspberry Pi
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'edge/**'
+      - '.github/workflows/deploy-edge.yml'
+
+jobs:
+  deploy:
+    name: Deploy edge/ to Raspberry Pi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # Determine whether the Pi is reachable via the configured secrets.
+      # The job skips gracefully when PI_IP is not set so that forks and
+      # contributors without hardware access can still push to main without
+      # failure — mirrors deploy-robot.yml's EV3 secret check.
+      # -----------------------------------------------------------------------
+      - name: Check Pi secrets
+        id: check
+        run: |
+          if [ -n "$PI_IP_SECRET" ]; then
+            echo "pi_configured=true" >> "$GITHUB_OUTPUT"
+            echo "Pi secrets configured — proceeding with deploy"
+          else
+            echo "pi_configured=false" >> "$GITHUB_OUTPUT"
+            echo "PI_IP secret not set — skipping Raspberry Pi deploy"
+          fi
+        env:
+          PI_IP_SECRET: ${{ secrets.PI_IP }}
+
+      - name: Setup SSH key
+        if: steps.check.outputs.pi_configured == 'true'
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PI_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p "${{ secrets.PI_SSH_PORT || '22' }}" -T 15 -H "${{ secrets.PI_IP }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy to Raspberry Pi
+        if: steps.check.outputs.pi_configured == 'true'
+        env:
+          PI_IP: ${{ secrets.PI_IP }}
+          PI_SSH_PORT: ${{ secrets.PI_SSH_PORT || '22' }}
+        run: make deploy-edge
+
+      - name: Tag successful deployment
+        if: steps.check.outputs.pi_configured == 'true' && success()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "deploy/edge/$(date -u +%Y%m%d-%H%M%S)-${GITHUB_SHA::8}"
+          git push origin --tags

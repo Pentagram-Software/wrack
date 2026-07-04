@@ -12,6 +12,17 @@ EV3_USER ?= robot
 EV3_SSH_PORT ?= 22
 EV3_REMOTE_PATH ?= /home/robot/controller
 
+# ---------------------------------------------------------------------------
+# Raspberry Pi rsync-based deployment configuration
+# Defaults match the previous hardcoded target for local/LAN use; override via
+# environment variables for CI or a non-default host:
+#   PI_IP=1.2.3.4 PI_SSH_PORT=2222 make deploy-edge
+# ---------------------------------------------------------------------------
+PI_IP ?= raspberrypi.local
+PI_USER ?= pi
+PI_SSH_PORT ?= 22
+PI_REMOTE_PATH ?= /home/pi/robot/edge/
+
 help:
 	@echo "Available commands:"
 	@echo "  make web                    - Start web dev server (http://localhost:3000)"
@@ -34,6 +45,11 @@ help:
 	@echo "EV3 legacy deployment (deploy-ev3):"
 	@echo "  make deploy-ev3 EV3_HOST=192.168.1.100"
 	@echo "  make deploy-ev3-debug EV3_HOST=192.168.1.100"
+	@echo ""
+	@echo "Raspberry Pi deployment (deploy-edge):"
+	@echo "  Defaults to pi@raspberrypi.local; override via env vars:"
+	@echo "  PI_IP=1.2.3.4 make deploy-edge"
+	@echo "  PI_IP=1.2.3.4 PI_SSH_PORT=2222 make deploy-edge"
 
 web:
 	cd clients/web && npm install && npm run dev
@@ -51,8 +67,11 @@ deploy-bigquery:
 	cd cloud/bigquery && ./deploy.sh
 
 deploy-edge:
+	@[ -n "$(PI_IP)" ] || { echo "Error: PI_IP is not set."; echo "  Run: PI_IP=<host> make deploy-edge"; exit 1; }
+	@echo "==> Deploying edge/ to $(PI_USER)@$(PI_IP):$(PI_REMOTE_PATH) (ssh port $(PI_SSH_PORT))"
 	rsync -av --exclude='__pycache__' --exclude='*.pyc' \
-		edge/ pi@raspberrypi.local:/home/pi/robot/edge/
+		-e "ssh -p $(PI_SSH_PORT) -o StrictHostKeyChecking=accept-new" \
+		edge/ $(PI_USER)@$(PI_IP):$(PI_REMOTE_PATH)
 
 # ---------------------------------------------------------------------------
 # Smart EV3 deployment: rsync --checksum (only transfers changed files)
