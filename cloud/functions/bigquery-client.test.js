@@ -140,14 +140,23 @@ describe('_formatRow()', () => {
     expect(JSON.parse(row.payload)).toEqual(baseEvent.payload);
   });
 
-  test('sets absent optional fields to null', () => {
+  test('sets absent optional scalar fields to null', () => {
     const row = _formatRow(baseEvent);
     expect(row.device_id).toBeNull();
     expect(row.session_id).toBeNull();
     expect(row.version).toBeNull();
-    expect(row.tags).toBeNull();
     expect(row.user_id).toBeNull();
     expect(row.correlation_id).toBeNull();
+  });
+
+  test('omits tags key when absent (BigQuery rejects null for a REPEATED field)', () => {
+    const row = _formatRow(baseEvent);
+    expect('tags' in row).toBe(false);
+  });
+
+  test('omits tags key when given an empty array', () => {
+    const row = _formatRow({ ...baseEvent, tags: [] });
+    expect('tags' in row).toBe(false);
   });
 
   test('preserves optional fields when present', () => {

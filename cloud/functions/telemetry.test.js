@@ -283,7 +283,7 @@ describe('prepareRow()', () => {
     expect(row.timestamp).toBe(new Date(event.timestamp).toISOString());
   });
 
-  test('sets optional absent fields to null', () => {
+  test('sets optional absent scalar fields to null', () => {
     const minimal = {
       event_id: 'e-1',
       event_type: 'test',
@@ -295,9 +295,30 @@ describe('prepareRow()', () => {
     expect(row.device_id).toBeNull();
     expect(row.session_id).toBeNull();
     expect(row.version).toBeNull();
-    expect(row.tags).toBeNull();
     expect(row.user_id).toBeNull();
     expect(row.correlation_id).toBeNull();
+  });
+
+  test('preserves a non-empty tags array', () => {
+    const row = prepareRow(event); // event has tags: ['test']
+    expect(row.tags).toEqual(['test']);
+  });
+
+  test('omits tags key when absent (BigQuery rejects null for a REPEATED field)', () => {
+    const minimal = {
+      event_id: 'e-1',
+      event_type: 'test',
+      source: 'ev3',
+      timestamp: '2024-01-15T00:00:00Z',
+      payload: {},
+    };
+    const row = prepareRow(minimal);
+    expect('tags' in row).toBe(false);
+  });
+
+  test('omits tags key when given an empty array', () => {
+    const row = prepareRow({ ...event, tags: [] });
+    expect('tags' in row).toBe(false);
   });
 });
 
