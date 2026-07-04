@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
@@ -340,10 +341,34 @@ class TestPartial207:
 # send_events_async
 # ---------------------------------------------------------------------------
 
+class _SyncThread:
+    """Test double for threading.Thread that runs the target synchronously
+    on construction instead of spawning a real thread.
+
+    send_events_async fires a background daemon thread that outlives the
+    calling test's `with patch(...)` block. Without this, the thread may
+    still be running (or not yet started) when the urlopen patch is torn
+    down, making the test either flaky or prone to issuing a real network
+    request to example.com. Running synchronously keeps the patch active
+    for the whole call and removes the race entirely.
+    """
+
+    def __init__(self, target=None, args=(), kwargs=None, **_ignored):
+        if target is not None:
+            target(*args, **(kwargs or {}))
+
+    def start(self):
+        pass
+
+    def join(self, *args, **kwargs):
+        pass
+
+
 class TestSendEventsAsync:
     def test_returns_immediately(self):
         s = _make_sender()
-        with patch("telemetry.sender.urllib_request.urlopen", return_value=_mock_response(200)):
+        with patch("telemetry.sender.urllib_request.urlopen", return_value=_mock_response(200)), \
+             patch("telemetry.sender.threading.Thread", _SyncThread):
             s.send_events_async([_make_event()])  # must not block/raise
 
     def test_noop_for_empty_list(self):
@@ -384,3 +409,69 @@ class TestFlushAndSend:
             result = s.flush_and_send(c)
         assert result is False
         assert c.buffer_size == 1
+
+    def test_overflow_file_cleared_only_after_confirmed_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "overflow.json")
+            c = RpiTelemetryCollector(max_buffer_size=1, overflow_path=path)
+            c.collect("connection_status", connected=True)  # evicted to disk
+            c.collect("connection_status", connected=True)  # stays buffered
+            assert os.path.exists(path)
+
+            s = _make_sender()
+            with patch("telemetry.sender.urllib_request.urlopen", return_value=_mock_response(200)):
+                result = s.flush_and_send(c)
+
+            assert result is True
+            assert not os.path.exists(path)
+
+    def test_overflow_events_preserved_on_send_failure(self):
+        """Regression: the overflow file used to be deleted unconditionally
+        before the send was even attempted, so a crash between the delete
+        and a confirmed successful send would lose those events permanently.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "overflow.json")
+            c = RpiTelemetryCollector(max_buffer_size=1, overflow_path=path)
+            c.collect("connection_status", connected=True)  # evicted to disk
+            c.collect("connection_status", connected=True)  # stays buffered
+            assert os.path.exists(path)
+
+            s = _make_sender(max_retries=0)
+            with patch("telemetry.sender.urllib_request.urlopen", side_effect=_http_error(500)), \
+                 patch("telemetry.sender._time"):
+                result = s.flush_and_send(c)
+
+            assert result is False
+            assert os.path.exists(path)
+            assert len(c.load_overflow()) == 1
+            assert c.buffer_size == 1
+
+    def test_partial_overflow_failure_keeps_only_the_failing_event_on_disk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "overflow.json")
+            c = RpiTelemetryCollector(max_buffer_size=1, overflow_path=path)
+            c.collect("connection_status", connected=True)  # evicted to disk
+            c.collect("connection_status", connected=True)  # evicted to disk
+            c.collect("connection_status", connected=True)  # stays buffered
+            c.clear()  # drop the buffered one so only the 2 on-disk events matter
+            overflow_events = c.load_overflow()
+            assert len(overflow_events) == 2
+            failing_id = overflow_events[0]["event_id"]
+            succeeding_id = overflow_events[1]["event_id"]
+
+            resp = _mock_response(207, json.dumps({
+                "success": False,
+                "inserted": 1,
+                "failed": 1,
+                "errors": [{"event_id": failing_id, "errors": ["backendError"]}],
+            }))
+            s = _make_sender(max_retries=0)
+            with patch("telemetry.sender.urllib_request.urlopen", return_value=resp):
+                result = s.flush_and_send(c)
+
+            assert result is False
+            remaining = c.load_overflow()
+            assert len(remaining) == 1
+            assert remaining[0]["event_id"] == failing_id
+            assert succeeding_id not in [e["event_id"] for e in remaining]

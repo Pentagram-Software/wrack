@@ -434,6 +434,11 @@ class RpiTelemetrySender:
         This drains both the on-disk overflow file (oldest events, persisted
         when the in-memory buffer overflowed) and the in-memory buffer,
         sending the overflow events first to preserve ordering.
+
+        The overflow file is only ever cleared or rewritten *after* the send
+        attempt completes (see :meth:`_reconcile_overflow`) — never deleted
+        up front — so a crash or kill between loading and sending can never
+        lose events that were sitting safely on disk.
         """
         overflow_events = self._drain_overflow(collector)
         events = overflow_events + collector.flush()
@@ -443,12 +448,24 @@ class RpiTelemetrySender:
             self.send_events_async(events, collector=collector)
             return None
         ok, unsent = self._send_events_with_unsent(events)
-        if not ok:
+        if overflow_events:
+            overflow_ids = {e.get("event_id") for e in overflow_events}
+            still_unsent_overflow = [e for e in unsent if e.get("event_id") in overflow_ids]
+            unsent = [e for e in unsent if e.get("event_id") not in overflow_ids]
+            self._reconcile_overflow(collector, still_unsent_overflow)
+        if unsent:
             self._restore_events_to_collector(collector, unsent)
         return ok
 
     def _drain_overflow(self, collector: Any) -> List[Dict[str, Any]]:
-        """Load persisted overflow events and clear the overflow file."""
+        """Load persisted overflow events without touching the file.
+
+        The file is deliberately left untouched here — it is only cleared or
+        rewritten once the send outcome is known, by
+        :meth:`_reconcile_overflow`. Clearing it up front (the previous
+        behavior) created a window where a crash between the clear and a
+        confirmed successful send would lose the events permanently.
+        """
         load = getattr(collector, "load_overflow", None)
         if not callable(load):
             return []
@@ -456,14 +473,39 @@ class RpiTelemetrySender:
             events = load() or []
         except Exception:  # noqa: BLE001 - overflow drain must never crash a send
             return []
-        if events:
-            clear = getattr(collector, "clear_overflow", None)
-            if callable(clear):
-                try:
-                    clear()
-                except Exception:  # noqa: BLE001
-                    pass
         return list(events)
+
+    def _reconcile_overflow(
+        self,
+        collector: Any,
+        still_unsent_overflow_events: List[Dict[str, Any]],
+    ) -> None:
+        """Rewrite the overflow file to contain only overflow-origin events
+        that are still unsent after the send attempt.
+
+        Called only after the send outcome is known, so the file is never
+        cleared or rewritten based on an assumption of success. If every
+        overflow-origin event was accepted, this clears the now-stale file;
+        if some are still failing, it rewrites the file to hold exactly
+        those, dropping only the ones confirmed sent.
+        """
+        clear = getattr(collector, "clear_overflow", None)
+        if not callable(clear):
+            return
+        try:
+            clear()
+        except Exception:  # noqa: BLE001 - overflow bookkeeping must never crash a send
+            return
+        if not still_unsent_overflow_events:
+            return
+        persist = getattr(collector, "_persist_to_disk", None)
+        if not callable(persist):
+            return
+        for event in still_unsent_overflow_events:
+            try:
+                persist(event)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _restore_events_to_collector(
         self,
