@@ -172,8 +172,11 @@ class TelemetrySender:
         self.on_error = on_error
         # Per-event error detail from the most recent 207 response, keyed by
         # event_id — used only to enrich the final give-up log message with
-        # *why* the endpoint is rejecting events, not just how many.
-        self._last_207_errors: Dict[str, List[str]] = {}
+        # *why* the endpoint is rejecting events, not just how many.  Not
+        # annotated (``self.x: Type = value``): MicroPython's parser only
+        # supports PEP 526 annotations on simple names, not attribute
+        # targets — annotating this raises SyntaxError at compile time.
+        self._last_207_errors = {}
 
     # ------------------------------------------------------------------
     # Public send interface
