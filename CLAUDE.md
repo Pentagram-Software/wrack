@@ -104,6 +104,47 @@ EV3 sensors ──► Raspberry Pi vision model ──► BigQuery (wrack_teleme
 - Motor ports: Drive L = Port A, Drive R = Port D, Turret = Port C; sensors: Ultrasonic = S2, Gyro = S3.
 - Run tests (desktop Python): `cd robot/controller && python -m pytest tests/`
 
+### MicroPython compatibility (mandatory check — always run for this repo)
+
+Every change that touches `robot/controller/` or its dependencies (anything imported into that
+tree, e.g. Python bits of `shared/telemetry-types/`) must be checked for Pybricks/MicroPython
+compatibility, not just validated against the desktop pytest suite. **The pytest suite runs on
+CPython and will not catch any MicroPython-only incompatibility below** — passing tests are
+necessary but not sufficient for a change in this tree. Production has repeatedly hit bugs where
+code was syntactically/semantically valid CPython but broke on-device; check for these classes
+explicitly on every change:
+
+- **Partial stdlib modules**: `import x` succeeding does not mean the whole module works. Some
+  MicroPython builds ship partial modules that import fine but raise `AttributeError` (not
+  `ImportError`) the moment a specific attribute is used (hit with `datetime`, `re`). Guard with
+  `try/except` and catch the specific exception types actually possible — not a bare
+  `except Exception`, which can silently mask real bugs (see the `schemas` import guard in
+  `telemetry/collector.py` for the pattern).
+- **Partial module attributes**: a successful `import uuid` does not guarantee `uuid.uuid4` exists.
+  Check `hasattr()` for the specific function/attribute you depend on before relying on it.
+- **No builtin `format()`**: some builds omit it entirely. Use `%`-style string formatting instead
+  (already used throughout `telemetry/`).
+- **No `from __future__ import annotations`**: unavailable on MicroPython. Function-signature
+  annotations are evaluated eagerly — use the `_TypingStub` fallback pattern already established
+  in `telemetry/*.py` for `typing` imports.
+- **No PEP 526 annotations on non-simple targets**: `self.x: Type = value` or `d[k]: Type = value`
+  raise `SyntaxError` at compile time — this is worse than a runtime bug because it takes down the
+  whole module before any `try/except` guard can run. Annotations are only supported on simple
+  names. Use a plain assignment.
+- **`threading.Thread()`**: only accepts `target`/`args` — passing `daemon` or `name` raises
+  `TypeError`. `Thread.join()` may not accept `timeout` — wrap in `try/except TypeError` with a
+  fallback (see `status_collector.py`).
+- **Minimal HTTP libraries** (`urequests`): don't assume parity with `requests` — e.g. `post()` may
+  not accept `timeout`. Try the full call first, catch `TypeError`, and retry with a reduced kwarg
+  set (see `telemetry/sender.py::_http_post`).
+- **`open()`**: no `encoding` kwarg — catch `TypeError` and retry without it (see
+  `telemetry/collector.py::_open_text`).
+
+When fixing one of these, add a regression test even though it runs on CPython and can't reproduce
+the MicroPython-specific failure directly — simulate the failure mode (e.g. inject a fake module
+into `sys.modules` missing the attribute, or patch the relevant `_HAS_*` flag) so the fallback path
+itself stays covered.
+
 ## Cloud Functions (`cloud/functions/`)
 
 - `index.js` — HTTP handler and command validation; emits `api_request` telemetry event on every request
