@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working in this
 |------|----------|---------|
 | `robot/controller/` | Python (pybricks-micropython) | EV3 firmware — PS4 + network remote |
 | `edge/video-streamer/` | Python | Raspberry Pi camera → UDP video stream |
+| `edge/vision/` | Python / Markdown | Vision/analytics architecture plan (`README.md`); `telemetry/` — standalone RPi telemetry module (PEN-166), no inference runtime yet |
 | `edge/monitoring/` | Alloy/River | Grafana Alloy config for RPi edge metrics (textfile scraping) |
 | `cloud/functions/` | Node.js | GCP Cloud Functions HTTP → EV3 TCP bridge |
 | `clients/ios/` | Swift | iPhone robot control + H.264 video |
