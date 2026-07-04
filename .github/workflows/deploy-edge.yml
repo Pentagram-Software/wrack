@@ -60,6 +60,7 @@ jobs:
       - name: Debug SSH connection
         if: steps.check.outputs.pi_configured == 'true'
         run: |
+          set -o pipefail
           echo "Key fingerprint being offered by this runner:"
           ssh-keygen -yf ~/.ssh/id_rsa < /dev/null | ssh-keygen -lf /dev/stdin
           ssh -vvv -o BatchMode=yes -o ConnectTimeout=10 \
