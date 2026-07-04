@@ -41,9 +41,31 @@ jobs:
         if: steps.check.outputs.pi_configured == 'true'
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.PI_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          # tr strips any \r characters — a GitHub secret containing an SSH
+          # private key pasted from a Windows clipboard can pick up CRLF line
+          # endings, which silently breaks the key format. This is a no-op
+          # for an already-correct LF-only key.
+          printf '%s' "${{ secrets.PI_SSH_PRIVATE_KEY }}" | tr -d '\r' > ~/.ssh/id_rsa
+          echo "" >> ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -p "${{ secrets.PI_SSH_PORT || '22' }}" -T 15 -H "${{ secrets.PI_IP }}" >> ~/.ssh/known_hosts
+
+      # -----------------------------------------------------------------------
+      # Diagnostic: verbose SSH auth check, run before the rsync deploy so a
+      # publickey rejection is easy to isolate from a network/reachability
+      # problem. BatchMode=yes disables any password/interactive fallback so
+      # this fails fast (no hang) and its exit code cleanly reflects auth
+      # success. Safe to remove once deploys are passing reliably.
+      # -----------------------------------------------------------------------
+      - name: Debug SSH connection
+        if: steps.check.outputs.pi_configured == 'true'
+        run: |
+          set -o pipefail
+          echo "Key fingerprint being offered by this runner:"
+          ssh-keygen -yf ~/.ssh/id_rsa < /dev/null | ssh-keygen -lf /dev/stdin
+          ssh -vvv -o BatchMode=yes -o ConnectTimeout=10 \
+            -p "${{ secrets.PI_SSH_PORT || '22' }}" \
+            "pi@${{ secrets.PI_IP }}" 'echo SSH_AUTH_OK' 2>&1 | tail -100
 
       - name: Deploy to Raspberry Pi
         if: steps.check.outputs.pi_configured == 'true'
