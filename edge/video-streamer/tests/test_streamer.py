@@ -88,6 +88,16 @@ def test_video_streamer_builds_encoder_with_valid_kwargs(fake_picamera2):
     assert "intra_period" not in stream.h264_encoder.kwargs
 
 
+def test_encoder_repeats_sps_pps_before_every_keyframe(fake_picamera2):
+    """repeat=True is what makes each IDR chunk self-contained (SPS/PPS + IDR together),
+    which the per-client keyframe sync gate in UDPVideoStreamer depends on — a client
+    let through on a keyframe with no inline SPS/PPS would still fail to decode."""
+    import streamer
+
+    stream = streamer.VideoStreamer()
+    assert stream.h264_encoder.kwargs["repeat"] is True
+
+
 # ---------------------------------------------------------------------------
 # ChunkQueueOutput
 # ---------------------------------------------------------------------------

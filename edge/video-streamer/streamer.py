@@ -107,11 +107,16 @@ class VideoStreamer:
         self.picam2.configure(config)
         self.picam2.start()
 
-        # Configure H.264 encoder
+        # Configure H.264 encoder. repeat=True (also the constructor default, made explicit
+        # here since the per-client keyframe sync in UDPVideoStreamer depends on it) makes the
+        # encoder re-insert SPS/PPS in-band before every IDR, not just once at stream start —
+        # without it, a client joining mid-stream would receive an IDR with no SPS/PPS to
+        # initialize its decoder from, even after the per-client sync gate lets it through.
         self.h264_encoder = H264Encoder(
             bitrate=bitrate,
             profile=profile,
             iperiod=gop,
+            repeat=True,
         )
         LOGGER.info(
             "Encoder config: bitrate=%s gop=%s profile=%s",
