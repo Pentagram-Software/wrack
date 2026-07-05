@@ -11,6 +11,8 @@ Two projects in this repo both touch "telemetry," and it is easy to route a new 
 
 This document is the single source of truth for which system owns a given metric or event. A reviewer unfamiliar with the project should be able to use it to make that call in under 2 minutes.
 
+> This document covers the conceptual **"which system owns this"** question. For the technical **"how does it actually get there"** picture — system context diagram, transport mechanisms, and the Grafana Cloud vs. BigQuery technology decision — see [docs/monitoring/architecture.md](architecture.md).
+
 ## What belongs in System Monitoring
 
 Real-time, short-horizon, operational data whose only job is to answer "is the system healthy *right now*, and if not, why?"

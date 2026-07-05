@@ -19,7 +19,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working in this
 | `cloud/bigquery/` | Bash / SQL / Python | BigQuery DDL, IAM setup, telemetry helpers |
 | `docs/data-tracking/` | Markdown | Telemetry architecture and IAM setup guides |
 | `cloud/monitoring/` | Bash | Grafana Cloud data-source/service-account setup scripts (System Monitoring project) |
-| `docs/monitoring/` | Markdown | System Monitoring setup guides and the [monitoring/analytics scope boundary](docs/monitoring/scope-boundary.md) |
+| `docs/monitoring/` | Markdown | System Monitoring architecture (`architecture.md`) and the [monitoring/analytics scope boundary](docs/monitoring/scope-boundary.md) |
 
 Sub-components `clients/web/` and `cloud/functions/` have their own `CLAUDE.md` files with additional detail.
 
@@ -92,11 +92,13 @@ EV3 sensors ──► Raspberry Pi vision model ──► BigQuery (wrack_teleme
 
 ### Monitoring Path (System Monitoring — real-time)
 ```
-EV3 / Raspberry Pi / Cloud Functions ──metrics + logs──► Grafana Alloy ──► Grafana Cloud (Prometheus/Loki) ──► Slack alerts
+EV3 / Raspberry Pi ──metrics + logs──► Grafana Alloy ──push──► Grafana Cloud (Prometheus/Loki) ──► Slack alerts
+Cloud Functions ──native GCP metrics──► GCP Cloud Monitoring ──pull (data source plugin)──► Grafana Cloud
 ```
 - Alloy config on the Pi in `edge/monitoring/`; setup scripts/data-source config in `cloud/monitoring/`.
 - 72-hour high-granularity retention only — this path is for live health/liveness, not historical analysis.
-- See `docs/monitoring/scope-boundary.md` for the explicit boundary between this path and the Telemetry Path above.
+- Several sources (e.g. the video streamer) emit to **both** this path and the Telemetry Path above from the same tick — see `edge/video-streamer/monitoring.py` (Grafana) vs `edge/video-streamer/telemetry.py` (BigQuery).
+- `docs/monitoring/scope-boundary.md` — which system owns a given metric/event. `docs/monitoring/architecture.md` — full system context, transport mechanisms, and the Grafana Cloud vs. BigQuery technology decision.
 
 ## Web Client (`clients/web/`)
 
