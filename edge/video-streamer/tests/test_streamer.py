@@ -194,6 +194,21 @@ def test_stop_encoder_if_started_stops_encoder_in_h264_mode(fake_picamera2):
     assert stream.picam2.stopped_encoders == [stream.h264_encoder]
 
 
+def test_drain_encoded_frames_quietly_empties_queue_without_overflow(fake_picamera2):
+    import streamer
+
+    stream = streamer.VideoStreamer(stream_format="h264")
+    stream._h264_output.outputframe(b"idr", keyframe=True)
+    stream._h264_output.outputframe(b"p-1", keyframe=False)
+    stream._h264_output.outputframe(b"p-2", keyframe=False)
+
+    stream.drain_encoded_frames_quietly()
+
+    assert stream.capture_encoded_frame(timeout=0) is None
+    # Draining quietly must not trip the overflow/resync path — this is idle time, not backpressure.
+    assert stream.h264_resync_needed() is False
+
+
 # ---------------------------------------------------------------------------
 # UDP send path: h264 payloads are sent raw, not pickled
 # ---------------------------------------------------------------------------
@@ -297,6 +312,51 @@ def test_resync_clears_synced_clients_after_queue_overflow(fake_picamera2, monke
     # After a resync signal, even a previously-synced client is withheld until the next IDR.
     assert client_addr not in stream.synced_h264_clients
     assert sent_to == []
+
+
+# ---------------------------------------------------------------------------
+# Idle draining: no clients connected shouldn't be treated as backpressure
+# ---------------------------------------------------------------------------
+
+def test_stream_to_clients_drains_quietly_while_idle_in_h264_mode(fake_picamera2, monkeypatch):
+    import streamer
+
+    stream = streamer.UDPVideoStreamer(port=0, stream_format="h264")
+    stream.clients = {}  # no clients connected
+
+    drained = {"called": False}
+
+    def fake_drain():
+        drained["called"] = True
+        stream.running = False  # stop after the first idle iteration
+
+    monkeypatch.setattr(stream, "drain_encoded_frames_quietly", fake_drain)
+
+    stream.running = True
+    stream.stream_to_clients()
+
+    assert drained["called"] is True
+
+
+def test_stream_to_clients_does_not_drain_in_jpeg_mode_while_idle(fake_picamera2, monkeypatch):
+    import streamer
+
+    stream = streamer.UDPVideoStreamer(port=0, stream_format="jpeg")
+    stream.clients = {}
+
+    def fake_drain():
+        raise AssertionError("drain_encoded_frames_quietly should not be called in jpeg mode")
+
+    monkeypatch.setattr(stream, "drain_encoded_frames_quietly", fake_drain)
+
+    def stop_after_one_tick(*args, **kwargs):
+        stream.running = False
+
+    # time.sleep(0.1) runs on every idle iteration; use it as the hook to end the loop.
+    monkeypatch.setattr(streamer.time, "sleep", stop_after_one_tick)
+
+    stream.running = True
+    stream.stream_to_clients()  # would raise via fake_drain if jpeg mode drained anyway
 
 
 # ---------------------------------------------------------------------------

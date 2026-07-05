@@ -157,6 +157,18 @@ class VideoStreamer:
         """True (once) if the encoder output was quarantined since the last check."""
         return self._h264_output is not None and self._h264_output.pop_resync_needed()
 
+    def drain_encoded_frames_quietly(self):
+        """Discard buffered encoder output without touching the resync/warning path.
+
+        The encoder runs continuously in h264 mode regardless of whether clients are
+        connected (see __init__). Without this, idle time with no clients would just let
+        the bounded queue fill up and hit ChunkQueueOutput's overflow path repeatedly,
+        logging "queue full" warnings and toggling resync state for no reason — normal
+        idle time isn't backpressure.
+        """
+        while self.capture_encoded_frame(timeout=0) is not None:
+            pass
+
     def stop_encoder_if_started(self):
         if self._h264_output is not None:
             self.picam2.stop_encoder(self.h264_encoder)
@@ -329,7 +341,12 @@ class UDPVideoStreamer(VideoStreamer):
                     self.last_status_time = current_time
 
                 if not self.clients:
-                    # No clients connected, wait briefly then re-check tick
+                    # No clients connected, wait briefly then re-check tick. In h264 mode the
+                    # encoder keeps running (see VideoStreamer.__init__), so drain its output
+                    # quietly here rather than letting the bounded queue fill up and hit the
+                    # overflow/warning path repeatedly — idle time isn't backpressure.
+                    if self.stream_format == "h264":
+                        self.drain_encoded_frames_quietly()
                     time.sleep(0.1)
                     continue
 
