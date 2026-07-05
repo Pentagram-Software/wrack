@@ -28,6 +28,10 @@ A high-performance video streaming server for Raspberry Pi 5 with multiple strea
 - Raspberry Pi Camera v2.1 or compatible
 - Network connection
 
+> **Note:** Pi 5 (BCM2712/PiSP) has no hardware H.264 encoder block, unlike Pi 4 and
+> earlier (VC4). picamera2 automatically falls back to a software encoder
+> (`LibavH264Encoder`) on Pi 5, which uses more CPU than hardware encoding.
+
 ### Software
 - Python 3.x
 - See `requirements.txt` for Python dependencies

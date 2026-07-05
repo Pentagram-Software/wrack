@@ -58,7 +58,7 @@ class VideoStreamer:
         self.h264_encoder = H264Encoder(
             bitrate=bitrate,
             profile=profile,
-            intra_period=gop,
+            iperiod=gop,
         )
         LOGGER.info(
             "Encoder config: bitrate=%s gop=%s profile=%s",
