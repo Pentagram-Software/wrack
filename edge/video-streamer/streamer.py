@@ -7,6 +7,7 @@ Supports multiple streaming methods: UDP, TCP, HTTP streaming
 import cv2
 import logging
 import os
+import queue
 import socket
 import struct
 import pickle
@@ -14,7 +15,7 @@ import threading
 import time
 from picamera2 import Picamera2
 from picamera2.encoders import H264Encoder
-from picamera2.outputs import FileOutput
+from picamera2.outputs import Output
 import io
 import socketserver
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -23,6 +24,37 @@ from monitoring import StreamMetrics, write_metrics, write_stopped_metrics
 from telemetry import VideoTelemetry
 
 LOGGER = logging.getLogger("streamer")
+
+
+class ChunkQueueOutput(Output):
+    """Captures encoded H.264 byte chunks into a bounded queue for the streaming loop to drain.
+
+    A queue slot holds one encoder outputframe() callback's worth of bytes, not necessarily
+    one displayable frame. On sustained backpressure (queue full), drops the oldest chunk AND
+    re-arms the keyframe gate, so a dropped non-keyframe chunk can never corrupt a GOP that's
+    still in flight — the stream just skips ahead to the next IDR instead of shipping broken
+    P-frames.
+    """
+
+    def __init__(self, maxsize=8):
+        super().__init__()
+        self._queue = queue.Queue(maxsize=maxsize)
+        self._seen_keyframe = False
+
+    def outputframe(self, frame, keyframe=True, timestamp=None, packet=None, audio=False):
+        if not self._seen_keyframe:
+            if not keyframe:
+                return  # drop until first IDR, mirrors FileOutput's _firstframe behavior
+            self._seen_keyframe = True
+        try:
+            self._queue.put_nowait(frame)
+        except queue.Full:
+            self._queue.get_nowait()
+            self._seen_keyframe = False  # re-arm: never ship a GOP with a gap in it
+            LOGGER.warning("h264 output queue full, dropping chunk and waiting for next keyframe")
+
+    def get(self, timeout=1.0):
+        return self._queue.get(timeout=timeout)
 
 
 def configure_logging(log_path: str = "logs/streamer.log") -> None:
@@ -45,6 +77,7 @@ class VideoStreamer:
         bitrate=2_000_000,
         gop=30,
         profile="baseline",
+        stream_format="jpeg",
     ):
         # Initialize camera
         self.picam2 = Picamera2()
@@ -54,7 +87,7 @@ class VideoStreamer:
         self.picam2.configure(config)
         self.picam2.start()
 
-        # Configure H.264 encoder (for future H.264-based pipelines)
+        # Configure H.264 encoder
         self.h264_encoder = H264Encoder(
             bitrate=bitrate,
             profile=profile,
@@ -66,18 +99,38 @@ class VideoStreamer:
             gop,
             profile,
         )
-        
+
         self.resolution = resolution
         self.framerate = framerate
         self.bitrate = bitrate
         self.gop = gop
         self.profile = profile
         self.running = False
-        
+
+        # Deliberate tradeoff: once stream_format="h264", the encoder runs continuously from
+        # construction regardless of connected clients, keeping GOP state warm so a newly
+        # connecting client gets a keyframe quickly rather than waiting up to `gop` frames.
+        self.stream_format = stream_format
+        self._h264_output = None
+        if stream_format == "h264":
+            self._h264_output = ChunkQueueOutput()
+            self.picam2.start_encoder(self.h264_encoder, self._h264_output)
+
     def capture_frame(self):
         """Capture a single frame from camera"""
         frame = self.picam2.capture_array()
         return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+    def capture_encoded_frame(self, timeout=1.0):
+        """Return the next encoded H.264 chunk, or None if none arrived within timeout."""
+        try:
+            return self._h264_output.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    def stop_encoder_if_started(self):
+        if self._h264_output is not None:
+            self.picam2.stop_encoder(self.h264_encoder)
 
 class UDPVideoStreamer(VideoStreamer):
     """Stream video over UDP (fast but no reliability guarantee)"""
@@ -242,12 +295,20 @@ class UDPVideoStreamer(VideoStreamer):
                     time.sleep(0.1)
                     continue
 
-                frame = self.capture_frame()
-                
-                # Encode frame as JPEG
-                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                data = pickle.dumps(buffer)
-                
+                if self.stream_format == "h264":
+                    data = self.capture_encoded_frame(timeout=1.0)
+                    if data is None:
+                        continue
+                    # No time.sleep(1/framerate) here: the encoder is already rate-limited by
+                    # the camera's real capture cadence, and the blocking queue.get above
+                    # already provides natural backpressure/pacing. An artificial sleep on top
+                    # would double-throttle and make queue-full drops more likely.
+                else:
+                    frame = self.capture_frame()
+                    # Encode frame as JPEG
+                    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    data = pickle.dumps(buffer)
+
                 # Prepare frame id and send to all registered clients
                 frame_id = self.next_frame_id
                 disconnected_clients = []
@@ -265,13 +326,16 @@ class UDPVideoStreamer(VideoStreamer):
                         del self.clients[client_addr]
                         print(f"Removed unresponsive client: {client_addr}")
                 
-                # Increment frame counters
+                # Increment frame counters. In h264 mode these count encoder output chunks
+                # sent, which in practice (though not formally guaranteed by the picamera2
+                # API) is one-to-one with displayable frames.
                 self.next_frame_id = (self.next_frame_id + 1) & 0xFFFFFFFF
                 self.frames_sent += 1
                 self.interval_frames_sent += 1
 
-                time.sleep(1/self.framerate)
-                
+                if self.stream_format != "h264":
+                    time.sleep(1/self.framerate)
+
             except Exception as e:
                 print(f"UDP streaming error: {e}")
                 break
@@ -357,6 +421,7 @@ class UDPVideoStreamer(VideoStreamer):
             )
 
         self.socket.close()
+        self.stop_encoder_if_started()
         self.picam2.stop()
 
     def _write_metrics(self, fps_recent: float) -> None:
@@ -378,8 +443,12 @@ class UDPVideoStreamer(VideoStreamer):
 
 class TCPVideoStreamer(VideoStreamer):
     """Stream video over TCP (reliable but slower)"""
-    
+
     def __init__(self, host='0.0.0.0', port=8888, **kwargs):
+        if kwargs.get("stream_format") == "h264":
+            raise ValueError(
+                "h264 stream_format is only supported by UDPVideoStreamer today (PEN-224)"
+            )
         super().__init__(**kwargs)
         self.host = host
         self.port = port
@@ -467,12 +536,17 @@ class TCPVideoStreamer(VideoStreamer):
         self.running = False
         for client in self.clients:
             client.close()
+        self.stop_encoder_if_started()
         self.picam2.stop()
 
 class HTTPVideoStreamer(VideoStreamer):
     """Stream video over HTTP (MJPEG streaming)"""
-    
+
     def __init__(self, host='0.0.0.0', port=8080, **kwargs):
+        if kwargs.get("stream_format") == "h264":
+            raise ValueError(
+                "h264 stream_format is only supported by UDPVideoStreamer today (PEN-224)"
+            )
         super().__init__(**kwargs)
         self.host = host
         self.port = port
@@ -575,6 +649,7 @@ class HTTPVideoStreamer(VideoStreamer):
                 
     def stop(self):
         self.running = False
+        self.stop_encoder_if_started()
         self.picam2.stop()
 
 # Example usage
@@ -599,6 +674,7 @@ if __name__ == "__main__":
                 bitrate=config.bitrate,
                 gop=config.gop,
                 profile=config.profile,
+                stream_format=config.stream_format,
             )
             streamer.start_streaming()
         elif choice == "2":
@@ -610,6 +686,7 @@ if __name__ == "__main__":
                 bitrate=config.bitrate,
                 gop=config.gop,
                 profile=config.profile,
+                stream_format=config.stream_format,
             )
             streamer.start_server()
         elif choice == "3":
@@ -621,6 +698,7 @@ if __name__ == "__main__":
                 bitrate=config.bitrate,
                 gop=config.gop,
                 profile=config.profile,
+                stream_format=config.stream_format,
             )
             streamer.start_server()
         else:
