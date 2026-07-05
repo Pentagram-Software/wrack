@@ -1,12 +1,15 @@
 """
 Regression test for edge/video-streamer/streamer.py encoder construction.
 
-picamera2 is not installed in this environment (it ships as a Pi-only package
-backed by system libcamera bindings), so streamer.py can't be imported directly
-here. We inject fake picamera2 modules into sys.modules before import, mirroring
-the real H264Encoder/LibavH264Encoder constructor signature (bitrate, repeat,
-iperiod, framerate, qp, profile) so an invalid kwarg like the old `intra_period`
-fails the same way it does on-device.
+Neither picamera2 nor opencv-python (cv2) are installed in CI (see
+.github/workflows/ci-edge.yml, which installs only pytest — this test suite is
+expected to run without Pi-only hardware bindings). We inject fake picamera2
+and cv2 modules into sys.modules before import so streamer.py can be imported
+at all. The fake H264Encoder mirrors the real H264Encoder/LibavH264Encoder
+constructor signature (bitrate, repeat, iperiod, framerate, qp, profile) so an
+invalid kwarg like the old `intra_period` fails the same way it does on-device.
+cv2 is only referenced inside VideoStreamer.capture_frame, never during
+construction, so a bare stub module is enough here.
 """
 
 import sys
@@ -50,9 +53,14 @@ def fake_picamera2(monkeypatch):
     outputs_module = types.ModuleType("picamera2.outputs")
     outputs_module.FileOutput = object
 
+    cv2_module = types.ModuleType("cv2")
+    cv2_module.COLOR_RGB2BGR = 4
+    cv2_module.cvtColor = lambda frame, code: frame
+
     monkeypatch.setitem(sys.modules, "picamera2", picamera2_module)
     monkeypatch.setitem(sys.modules, "picamera2.encoders", encoders_module)
     monkeypatch.setitem(sys.modules, "picamera2.outputs", outputs_module)
+    monkeypatch.setitem(sys.modules, "cv2", cv2_module)
     monkeypatch.delitem(sys.modules, "streamer", raising=False)
 
     yield
