@@ -11,12 +11,14 @@ def test_defaults_used_when_no_args_and_no_config(tmp_path):
     assert config.bitrate == 2_000_000
     assert config.gop == 30
     assert config.profile == "baseline"
+    assert config.stream_format == "jpeg"
 
 
 def test_json_config_used_when_present(tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text(
-        '{"width": 1280, "height": 720, "fps": 25, "bitrate": 3000000, "gop": 60, "profile": "main"}'
+        '{"width": 1280, "height": 720, "fps": 25, "bitrate": 3000000, "gop": 60, '
+        '"profile": "main", "stream_format": "h264"}'
     )
     config = parse_stream_config(["--config", str(config_path)])
     assert config.width == 1280
@@ -25,12 +27,14 @@ def test_json_config_used_when_present(tmp_path):
     assert config.bitrate == 3_000_000
     assert config.gop == 60
     assert config.profile == "main"
+    assert config.stream_format == "h264"
 
 
 def test_cli_overrides_json(tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text(
-        '{"width": 1280, "height": 720, "fps": 25, "bitrate": 3000000, "gop": 60, "profile": "main"}'
+        '{"width": 1280, "height": 720, "fps": 25, "bitrate": 3000000, "gop": 60, '
+        '"profile": "main", "stream_format": "h264"}'
     )
     config = parse_stream_config(
         [
@@ -46,6 +50,8 @@ def test_cli_overrides_json(tmp_path):
             "120",
             "--profile",
             "high",
+            "--stream-format",
+            "jpeg",
         ]
     )
     assert config.width == 1920
@@ -54,6 +60,7 @@ def test_cli_overrides_json(tmp_path):
     assert config.bitrate == 5_000_000
     assert config.gop == 120
     assert config.profile == "high"
+    assert config.stream_format == "jpeg"
 
 
 @pytest.mark.parametrize(
@@ -79,3 +86,8 @@ def test_invalid_values_raise(args):
 def test_invalid_profile_raises():
     with pytest.raises(ValueError):
         parse_stream_config(["--profile", "unsupported"])
+
+
+def test_invalid_stream_format_raises():
+    with pytest.raises(ValueError):
+        parse_stream_config(["--stream-format", "mjpeg"])
