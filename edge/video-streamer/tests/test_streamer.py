@@ -101,8 +101,8 @@ def test_chunk_queue_output_drops_until_first_keyframe(fake_picamera2):
     output.outputframe(b"idr", keyframe=True)
     output.outputframe(b"p-frame-3", keyframe=False)
 
-    assert output.get(timeout=0) == b"idr"
-    assert output.get(timeout=0) == b"p-frame-3"
+    assert output.get(timeout=0) == (b"idr", True)
+    assert output.get(timeout=0) == (b"p-frame-3", False)
 
 
 def test_chunk_queue_output_quarantines_whole_backlog_on_overflow(fake_picamera2):
@@ -127,7 +127,20 @@ def test_chunk_queue_output_quarantines_whole_backlog_on_overflow(fake_picamera2
     # No stale chunks from the truncated GOP ("idr-1", "p-1", "p-2") survive the overflow —
     # the whole backlog is quarantined, not just the single oldest entry, so a consumer can
     # never drain a leftover P-frame chunk that would corrupt the decode.
-    assert remaining == [b"idr-2"]
+    assert remaining == [(b"idr-2", True)]
+
+
+def test_chunk_queue_output_overflow_sets_resync_needed(fake_picamera2):
+    import streamer
+
+    output = streamer.ChunkQueueOutput(maxsize=1)
+    assert output.pop_resync_needed() is False
+
+    output.outputframe(b"idr-1", keyframe=True)
+    output.outputframe(b"p-1", keyframe=False)  # queue full -> quarantine + resync signal
+
+    assert output.pop_resync_needed() is True
+    assert output.pop_resync_needed() is False  # one-shot: cleared after being read
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +164,7 @@ def test_h264_mode_starts_encoder_and_captures_chunks(fake_picamera2):
     assert len(stream.picam2.started_encoders) == 1
 
     stream._h264_output.outputframe(b"idr", keyframe=True)
-    assert stream.capture_encoded_frame(timeout=0.5) == b"idr"
+    assert stream.capture_encoded_frame(timeout=0.5) == (b"idr", True)
     assert stream.capture_encoded_frame(timeout=0.01) is None
 
 
@@ -179,14 +192,18 @@ def test_udp_h264_mode_sends_raw_bytes_not_pickled(fake_picamera2, monkeypatch):
     import streamer
 
     stream = streamer.UDPVideoStreamer(port=0, stream_format="h264")
-    stream.clients = {("127.0.0.1", 12345): 0.0}
+    client_addr = ("127.0.0.1", 12345)
+    stream.clients = {client_addr: 0.0}
 
-    monkeypatch.setattr(stream, "capture_encoded_frame", lambda timeout=1.0: b"raw-h264-bytes")
+    # Keyframe=True so the per-client sync gate (tested separately below) doesn't withhold it.
+    monkeypatch.setattr(
+        stream, "capture_encoded_frame", lambda timeout=1.0: (b"raw-h264-bytes", True)
+    )
     monkeypatch.setattr(stream, "_write_metrics", lambda fps_recent: None)
 
     sent = {}
 
-    def fake_send(data, client_addr, frame_id):
+    def fake_send(data, addr, frame_id):
         sent["data"] = data
         stream.running = False  # stop after the first loop iteration
 
@@ -196,6 +213,80 @@ def test_udp_h264_mode_sends_raw_bytes_not_pickled(fake_picamera2, monkeypatch):
     stream.stream_to_clients()
 
     assert sent["data"] == b"raw-h264-bytes"
+
+
+# ---------------------------------------------------------------------------
+# Per-client keyframe sync: a client joining mid-GOP must not get P-frames
+# before its first IDR (found by Codex review on PR #81)
+# ---------------------------------------------------------------------------
+
+def test_unsynced_client_withheld_from_pframe_until_next_keyframe(fake_picamera2, monkeypatch):
+    import streamer
+
+    stream = streamer.UDPVideoStreamer(port=0, stream_format="h264")
+    synced_client = ("127.0.0.1", 1)
+    new_client = ("127.0.0.1", 2)
+    stream.clients = {synced_client: 0.0, new_client: 0.0}
+    stream.synced_h264_clients = {synced_client}  # already got an earlier IDR
+
+    monkeypatch.setattr(stream, "_write_metrics", lambda fps_recent: None)
+
+    chunks = iter([(b"p-frame", False), (b"idr", True)])
+    sent_to = []
+
+    def fake_capture(timeout=1.0):
+        try:
+            return next(chunks)
+        except StopIteration:
+            stream.running = False
+            return None
+
+    def fake_send(data, addr, frame_id):
+        sent_to.append((addr, data))
+
+    monkeypatch.setattr(stream, "capture_encoded_frame", fake_capture)
+    monkeypatch.setattr(stream, "send_frame_to_client", fake_send)
+
+    stream.running = True
+    stream.stream_to_clients()
+
+    # The P-frame only reaches the already-synced client; the new client is withheld.
+    assert (synced_client, b"p-frame") in sent_to
+    assert (new_client, b"p-frame") not in sent_to
+
+    # The following keyframe reaches both, and marks the new client as synced.
+    assert (synced_client, b"idr") in sent_to
+    assert (new_client, b"idr") in sent_to
+    assert new_client in stream.synced_h264_clients
+
+
+def test_resync_clears_synced_clients_after_queue_overflow(fake_picamera2, monkeypatch):
+    import streamer
+
+    stream = streamer.UDPVideoStreamer(port=0, stream_format="h264")
+    client_addr = ("127.0.0.1", 1)
+    stream.clients = {client_addr: 0.0}
+    stream.synced_h264_clients = {client_addr}
+
+    monkeypatch.setattr(stream, "_write_metrics", lambda fps_recent: None)
+    monkeypatch.setattr(stream, "h264_resync_needed", lambda: True)
+
+    def fake_capture(timeout=1.0):
+        stream.running = False
+        return (b"p-frame", False)
+
+    sent_to = []
+    monkeypatch.setattr(stream, "capture_encoded_frame", fake_capture)
+    monkeypatch.setattr(
+        stream, "send_frame_to_client", lambda data, addr, frame_id: sent_to.append(addr)
+    )
+
+    stream.running = True
+    stream.stream_to_clients()
+
+    # After a resync signal, even a previously-synced client is withheld until the next IDR.
+    assert client_addr not in stream.synced_h264_clients
+    assert sent_to == []
 
 
 # ---------------------------------------------------------------------------

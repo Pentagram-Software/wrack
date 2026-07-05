@@ -30,16 +30,20 @@ class ChunkQueueOutput(Output):
     """Captures encoded H.264 byte chunks into a bounded queue for the streaming loop to drain.
 
     A queue slot holds one encoder outputframe() callback's worth of bytes, not necessarily
-    one displayable frame. On sustained backpressure (queue full), the ENTIRE queue is
-    discarded and the keyframe gate is re-armed, so a consumer can never drain a leftover
-    P-frame chunk from a GOP that's already been partially dropped — the stream fully
-    quarantines itself until the next IDR instead of shipping a stream with a gap in it.
+    one displayable frame, tagged with whether it's a keyframe so consumers can gate delivery
+    per-client (a client joining mid-GOP must not receive P-frames before its first IDR). On
+    sustained backpressure (queue full), the ENTIRE queue is discarded and the keyframe gate is
+    re-armed, so a consumer can never drain a leftover P-frame chunk from a GOP that's already
+    been partially dropped — the stream fully quarantines itself until the next IDR instead of
+    shipping a stream with a gap in it. `resync_needed` signals consumers to treat every
+    currently-synced client as unsynced again, since the quarantined gap affects them too.
     """
 
     def __init__(self, maxsize=8):
         super().__init__()
         self._queue = queue.Queue(maxsize=maxsize)
         self._seen_keyframe = False
+        self._resync_needed = threading.Event()
 
     def outputframe(self, frame, keyframe=True, timestamp=None, packet=None, audio=False):
         if not self._seen_keyframe:
@@ -47,7 +51,7 @@ class ChunkQueueOutput(Output):
                 return  # drop until first IDR, mirrors FileOutput's _firstframe behavior
             self._seen_keyframe = True
         try:
-            self._queue.put_nowait(frame)
+            self._queue.put_nowait((frame, keyframe))
         except queue.Full:
             # Dropping only the oldest entry isn't enough: everything else still queued
             # belongs to the same GOP and would still get drained and sent, corrupting the
@@ -58,10 +62,19 @@ class ChunkQueueOutput(Output):
                 except queue.Empty:
                     break
             self._seen_keyframe = False
+            self._resync_needed.set()
             LOGGER.warning("h264 output queue full, dropping backlog and waiting for next keyframe")
 
     def get(self, timeout=1.0):
+        """Return the next (chunk_bytes, is_keyframe) tuple."""
         return self._queue.get(timeout=timeout)
+
+    def pop_resync_needed(self):
+        """Return True (once) if a queue-overflow quarantine happened since the last check."""
+        if self._resync_needed.is_set():
+            self._resync_needed.clear()
+            return True
+        return False
 
 
 def configure_logging(log_path: str = "logs/streamer.log") -> None:
@@ -129,11 +142,15 @@ class VideoStreamer:
         return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
     def capture_encoded_frame(self, timeout=1.0):
-        """Return the next encoded H.264 chunk, or None if none arrived within timeout."""
+        """Return the next (chunk_bytes, is_keyframe) tuple, or None if none arrived in time."""
         try:
             return self._h264_output.get(timeout=timeout)
         except queue.Empty:
             return None
+
+    def h264_resync_needed(self):
+        """True (once) if the encoder output was quarantined since the last check."""
+        return self._h264_output is not None and self._h264_output.pop_resync_needed()
 
     def stop_encoder_if_started(self):
         if self._h264_output is not None:
@@ -172,6 +189,11 @@ class UDPVideoStreamer(VideoStreamer):
         self.interval_frames_sent = 0   # frames sent in the current status interval (for accurate FPS)
         self._monitoring_path = monitoring_path  # empty string → use module default
         self._telemetry = telemetry     # None → no BigQuery emission
+
+        # h264 mode only: clients that have received at least one keyframe since they
+        # (re)connected. A client joining mid-GOP must not get P-frames before its first IDR,
+        # so it's withheld from delivery until the next keyframe arrives.
+        self.synced_h264_clients = set()
         
     def start_streaming(self):
         """Start UDP video server - wait for clients and then stream"""
@@ -228,8 +250,11 @@ class UDPVideoStreamer(VideoStreamer):
                 if data.startswith(b"REGISTER_CLIENT"):
                     # Use exact source address for frame transmissions (NAT-friendly)
                     client_addr = addr  # Use source IP:port as-is for NAT traversal
-                    
+
                     self.clients[client_addr] = time.time()
+                    # A (re)registering client starts from scratch: it must not be treated as
+                    # already synced from a prior connection, or it'll miss the initial IDR.
+                    self.synced_h264_clients.discard(client_addr)
                     print(f"Client registered: {client_addr} - frames will be sent to this exact address")
                     # Send acknowledgment
                     self.socket.sendto(b"REGISTERED", addr)
@@ -251,6 +276,7 @@ class UDPVideoStreamer(VideoStreamer):
                             break
                     if client_addr:
                         del self.clients[client_addr]
+                        self.synced_h264_clients.discard(client_addr)
                         print(f"Client disconnected: {client_addr}")
                         
             except socket.timeout:
@@ -302,10 +328,18 @@ class UDPVideoStreamer(VideoStreamer):
                     time.sleep(0.1)
                     continue
 
+                is_keyframe = None
                 if self.stream_format == "h264":
-                    data = self.capture_encoded_frame(timeout=1.0)
-                    if data is None:
+                    if self.h264_resync_needed():
+                        # The encoder just quarantined a truncated GOP: every client that
+                        # thought it was synced actually has a gap now, so make them all wait
+                        # for the next keyframe again, same as a freshly-joined client would.
+                        self.synced_h264_clients.clear()
+
+                    result = self.capture_encoded_frame(timeout=1.0)
+                    if result is None:
                         continue
+                    data, is_keyframe = result
                     # No time.sleep(1/framerate) here: the encoder is already rate-limited by
                     # the camera's real capture cadence, and the blocking queue.get above
                     # already provides natural backpressure/pacing. An artificial sleep on top
@@ -320,17 +354,28 @@ class UDPVideoStreamer(VideoStreamer):
                 frame_id = self.next_frame_id
                 disconnected_clients = []
                 for client_addr in list(self.clients.keys()):
+                    if (
+                        self.stream_format == "h264"
+                        and not is_keyframe
+                        and client_addr not in self.synced_h264_clients
+                    ):
+                        # This client hasn't received an IDR yet — a P-frame before that would
+                        # be undecodable, so withhold delivery until the next keyframe.
+                        continue
                     try:
                         self.send_frame_to_client(data, client_addr, frame_id)
+                        if self.stream_format == "h264" and is_keyframe:
+                            self.synced_h264_clients.add(client_addr)
                     except Exception as e:
                         print(f"Error sending to client {client_addr}: {e}")
                         disconnected_clients.append(client_addr)
                         self.frame_drop_total += 1
-                
+
                 # Remove clients that failed to receive
                 for client_addr in disconnected_clients:
                     if client_addr in self.clients:
                         del self.clients[client_addr]
+                        self.synced_h264_clients.discard(client_addr)
                         print(f"Removed unresponsive client: {client_addr}")
                 
                 # Increment frame counters. In h264 mode these count encoder output chunks
@@ -387,6 +432,7 @@ class UDPVideoStreamer(VideoStreamer):
                 
                 for client_addr in inactive_clients:
                     del self.clients[client_addr]
+                    self.synced_h264_clients.discard(client_addr)
                     print(f"Removed inactive client: {client_addr}")
                 
                 time.sleep(5)  # Check every 5 seconds
