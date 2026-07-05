@@ -18,6 +18,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working in this
 | `samples/python-video-receiver/` | Python | macOS test receiver for video stream |
 | `cloud/bigquery/` | Bash / SQL / Python | BigQuery DDL, IAM setup, telemetry helpers |
 | `docs/data-tracking/` | Markdown | Telemetry architecture and IAM setup guides |
+| `cloud/monitoring/` | Bash | Grafana Cloud data-source/service-account setup scripts (System Monitoring project) |
+| `docs/monitoring/` | Markdown | System Monitoring setup guides and the [monitoring/analytics scope boundary](docs/monitoring/scope-boundary.md) |
 
 Sub-components `clients/web/` and `cloud/functions/` have their own `CLAUDE.md` files with additional detail.
 
@@ -80,12 +82,21 @@ Raspberry Pi camera ──H.264 UDP chunks (port 9999)──► iOS App / Web / 
 - Streamer (`edge/video-streamer/`) sends `FRAME_START` + `CHUNK` packets; protocol spec in `shared/video-protocol/UDP_Frame_Format_Documentation.md`.
 - Clients reassemble chunks by `frame_id` before decoding H.264.
 
-### Telemetry Path
+### Telemetry Path (Wrack Analytics — historical)
 ```
 EV3 sensors ──► Raspberry Pi vision model ──► BigQuery (wrack_telemetry dataset)
 ```
 - Dataset DDL in `cloud/bigquery/schemas/`; deploy with `cloud/bigquery/deploy.sh`.
 - IAM setup (service account `telemetry-writer`) via `cloud/bigquery/setup-iam.sh`; see `docs/data-tracking/setup-iam.md`.
+- Structured event storage for historical analysis, dashboards, and future ML — not for live health checks.
+
+### Monitoring Path (System Monitoring — real-time)
+```
+EV3 / Raspberry Pi / Cloud Functions ──metrics + logs──► Grafana Alloy ──► Grafana Cloud (Prometheus/Loki) ──► Slack alerts
+```
+- Alloy config on the Pi in `edge/monitoring/`; setup scripts/data-source config in `cloud/monitoring/`.
+- 72-hour high-granularity retention only — this path is for live health/liveness, not historical analysis.
+- See `docs/monitoring/scope-boundary.md` for the explicit boundary between this path and the Telemetry Path above.
 
 ## Web Client (`clients/web/`)
 

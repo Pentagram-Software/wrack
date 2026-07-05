@@ -6,6 +6,8 @@ This document describes the architecture for collecting telemetry and events fro
 
 > **Note:** BigQuery was selected after evaluating alternatives including InfluxDB, PostgreSQL/TimescaleDB, Firestore, and ClickHouse. See the [Technology Alternatives Analysis](requirements.md#technology-alternatives-analysis) in the requirements document for the full evaluation.
 
+> **Scope boundary:** This document covers the **analytics** pipeline — historical event storage in BigQuery. It does not cover real-time operational health monitoring (Grafana Cloud, liveness alerts, 72h retention), which is a separate system. See [docs/monitoring/scope-boundary.md](../monitoring/scope-boundary.md) for the explicit boundary between the two and which system owns a given metric or event.
+
 ## System Context
 
 ```
