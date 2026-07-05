@@ -105,13 +105,13 @@ def test_chunk_queue_output_drops_until_first_keyframe(fake_picamera2):
     assert output.get(timeout=0) == b"p-frame-3"
 
 
-def test_chunk_queue_output_drops_oldest_and_rearms_keyframe_gate(fake_picamera2):
+def test_chunk_queue_output_quarantines_whole_backlog_on_overflow(fake_picamera2):
     import streamer
 
     output = streamer.ChunkQueueOutput(maxsize=2)
     output.outputframe(b"idr-1", keyframe=True)
     output.outputframe(b"p-1", keyframe=False)
-    output.outputframe(b"p-2", keyframe=False)  # queue full -> drops "idr-1", re-arms gate
+    output.outputframe(b"p-2", keyframe=False)  # queue full -> clears backlog, re-arms gate
 
     # Gate is re-armed: further non-keyframe chunks are dropped until the next keyframe.
     output.outputframe(b"p-3", keyframe=False)
@@ -124,9 +124,10 @@ def test_chunk_queue_output_drops_oldest_and_rearms_keyframe_gate(fake_picamera2
         except queue.Empty:
             break
 
-    assert b"p-1" in remaining or b"p-2" in remaining
-    assert b"p-3" not in remaining
-    assert remaining[-1] == b"idr-2"
+    # No stale chunks from the truncated GOP ("idr-1", "p-1", "p-2") survive the overflow —
+    # the whole backlog is quarantined, not just the single oldest entry, so a consumer can
+    # never drain a leftover P-frame chunk that would corrupt the decode.
+    assert remaining == [b"idr-2"]
 
 
 # ---------------------------------------------------------------------------

@@ -30,10 +30,10 @@ class ChunkQueueOutput(Output):
     """Captures encoded H.264 byte chunks into a bounded queue for the streaming loop to drain.
 
     A queue slot holds one encoder outputframe() callback's worth of bytes, not necessarily
-    one displayable frame. On sustained backpressure (queue full), drops the oldest chunk AND
-    re-arms the keyframe gate, so a dropped non-keyframe chunk can never corrupt a GOP that's
-    still in flight — the stream just skips ahead to the next IDR instead of shipping broken
-    P-frames.
+    one displayable frame. On sustained backpressure (queue full), the ENTIRE queue is
+    discarded and the keyframe gate is re-armed, so a consumer can never drain a leftover
+    P-frame chunk from a GOP that's already been partially dropped — the stream fully
+    quarantines itself until the next IDR instead of shipping a stream with a gap in it.
     """
 
     def __init__(self, maxsize=8):
@@ -49,9 +49,16 @@ class ChunkQueueOutput(Output):
         try:
             self._queue.put_nowait(frame)
         except queue.Full:
-            self._queue.get_nowait()
-            self._seen_keyframe = False  # re-arm: never ship a GOP with a gap in it
-            LOGGER.warning("h264 output queue full, dropping chunk and waiting for next keyframe")
+            # Dropping only the oldest entry isn't enough: everything else still queued
+            # belongs to the same GOP and would still get drained and sent, corrupting the
+            # decode. Quarantine the whole backlog and wait for a fresh keyframe.
+            while True:
+                try:
+                    self._queue.get_nowait()
+                except queue.Empty:
+                    break
+            self._seen_keyframe = False
+            LOGGER.warning("h264 output queue full, dropping backlog and waiting for next keyframe")
 
     def get(self, timeout=1.0):
         return self._queue.get(timeout=timeout)
