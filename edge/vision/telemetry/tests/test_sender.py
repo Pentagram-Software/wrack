@@ -44,8 +44,9 @@ def _make_event(event_type: str = "connection_status") -> dict:
 
 def _make_sender(**kwargs) -> RpiTelemetrySender:
     defaults = {
-        "endpoint": "https://example.com/telemetryIngestion",
-        "api_key": "test-api-key",
+        "endpoint": "https://example.com/unifiedIngress",
+        "device_id": "rpi-camera-01",
+        "device_token": "test-device-token",
         "max_retries": 0,
         "timeout": 5,
     }
@@ -107,14 +108,32 @@ class TestConstruction:
             s = RpiTelemetrySender()
             assert s.endpoint == "https://env.example/fn"
 
-    def test_api_key_from_env_var(self):
+    def test_device_token_from_env_var(self):
         with patch.dict(
             os.environ,
-            {"TELEMETRY_ENDPOINT": "https://env.example/fn", "TELEMETRY_API_KEY": "env-key"},
+            {"TELEMETRY_ENDPOINT": "https://env.example/fn", "TELEMETRY_DEVICE_TOKEN": "env-token"},
             clear=True,
         ):
             s = RpiTelemetrySender()
-            assert s.api_key == "env-key"
+            assert s.device_token == "env-token"
+
+    def test_device_id_from_env_var(self):
+        with patch.dict(
+            os.environ,
+            {"TELEMETRY_ENDPOINT": "https://env.example/fn", "RPI_DEVICE_ID": "rpi-camera-02"},
+            clear=True,
+        ):
+            s = RpiTelemetrySender()
+            assert s.device_id == "rpi-camera-02"
+
+    def test_device_id_defaults_when_env_var_absent(self):
+        with patch.dict(
+            os.environ,
+            {"TELEMETRY_ENDPOINT": "https://env.example/fn"},
+            clear=True,
+        ):
+            s = RpiTelemetrySender()
+            assert s.device_id == "rpi-camera-01"
 
     def test_batch_size_from_env_var(self):
         with patch.dict(
@@ -168,12 +187,13 @@ class TestSendEventsSuccess:
         assert "events" in body
         assert len(body["events"]) == 1
 
-    def test_includes_api_key_header(self):
-        s = _make_sender(api_key="my-key")
+    def test_includes_device_auth_headers(self):
+        s = _make_sender(device_id="rpi-camera-07", device_token="my-token")
         with patch("telemetry.sender.urllib_request.urlopen", return_value=_mock_response(200)) as mock_urlopen:
             s.send_events([_make_event()])
         req = mock_urlopen.call_args[0][0]
-        assert req.get_header("X-api-key") == "my-key"
+        assert req.get_header("X-device-id") == "rpi-camera-07"
+        assert req.get_header("X-device-token") == "my-token"
 
     def test_on_success_callback_called_with_count(self):
         callback = MagicMock()

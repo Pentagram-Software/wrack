@@ -44,8 +44,9 @@ def _make_event(event_type: str = "battery_status") -> dict:
 
 def _make_sender(**kwargs) -> TelemetrySender:
     defaults = {
-        "endpoint": "https://example.com/telemetryIngestion",
-        "api_key": "test-api-key",
+        "endpoint": "https://example.com/unifiedIngress",
+        "device_id": "ev3-001",
+        "device_token": "test-device-token",
         "max_retries": 0,
         "timeout": 5,
     }
@@ -62,9 +63,13 @@ class TestTelemetrySenderInit:
         s = _make_sender(endpoint="https://my.endpoint/fn")
         assert s.endpoint == "https://my.endpoint/fn"
 
-    def test_stores_api_key(self):
-        s = _make_sender(api_key="secret")
-        assert s.api_key == "secret"
+    def test_stores_device_id(self):
+        s = _make_sender(device_id="ev3-002")
+        assert s.device_id == "ev3-002"
+
+    def test_stores_device_token(self):
+        s = _make_sender(device_token="secret")
+        assert s.device_token == "secret"
 
     def test_default_batch_size(self):
         s = _make_sender()
@@ -77,7 +82,8 @@ class TestTelemetrySenderInit:
     def test_default_max_retries(self):
         s = TelemetrySender(
             endpoint="https://example.com/fn",
-            api_key="k",
+            device_id="ev3-001",
+            device_token="k",
         )
         assert s.max_retries == 3  # DEFAULT_MAX_RETRIES
 
@@ -135,15 +141,16 @@ class TestSendEventsSuccess:
         args, kwargs = mock_http.post.call_args
         assert args[0] == "https://test.example/fn"
 
-    def test_includes_api_key_header(self):
-        s = _make_sender(api_key="my-key")
+    def test_includes_device_auth_headers(self):
+        s = _make_sender(device_id="ev3-007", device_token="my-token")
         events = [_make_event()]
         with patch("telemetry.sender._http") as mock_http:
             mock_http.post.return_value = self._mock_response(200)
             s.send_events(events)
         _, kwargs = mock_http.post.call_args
         headers = kwargs.get("headers", {})
-        assert headers.get("X-API-Key") == "my-key"
+        assert headers.get("X-Device-Id") == "ev3-007"
+        assert headers.get("X-Device-Token") == "my-token"
 
     def test_sends_json_content_type(self):
         s = _make_sender()
