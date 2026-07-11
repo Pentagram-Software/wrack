@@ -164,14 +164,12 @@ check_prerequisites() {
   ok "Prerequisites satisfied"
 }
 
-# ── Step 1: Set active project ──────────────────────────────────────────────────
-set_project() {
-  info "Setting active project to ${PROJECT_ID}..."
-  run gcloud config set project "${PROJECT_ID}"
-  ok "Project set to ${PROJECT_ID}"
-}
-
-# ── Step 2a: Reserve a scratch file for the credentials JSON ──────────────────
+# ── Step 1a: Reserve a scratch file for the credentials JSON ──────────────────
+# (There's deliberately no "set active project" step here: every gcloud call
+# below already passes --project explicitly, so there's no need to mutate
+# the caller's global gcloud config — doing so would persist after this
+# script exits and could redirect concurrent or subsequent unrelated gcloud
+# commands run under the same account.)
 # Claims KEY_FILE exclusively — via mktemp for the default (unique per run,
 # so concurrent invocations can't collide) or via a noclobber create for an
 # explicit --key-file (so we refuse to silently overwrite an existing file,
@@ -206,7 +204,7 @@ reserve_key_file() {
   KEY_FILE_CREATED=true
 }
 
-# ── Step 2b: Assemble the credentials JSON ─────────────────────────────────────
+# ── Step 1b: Assemble the credentials JSON ─────────────────────────────────────
 write_credentials_file() {
   if [[ "${DRY_RUN}" == "true" ]]; then
     info "Writing credentials → ${KEY_FILE:-<a fresh mktemp file>}..."
@@ -226,7 +224,7 @@ write_credentials_file() {
   ok "Credentials written to ${KEY_FILE} (permissions: 600)"
 }
 
-# ── Step 3: Store in GCP Secret Manager ─────────────────────────────────────────
+# ── Step 2: Store in GCP Secret Manager ─────────────────────────────────────────
 store_in_secret_manager() {
   info "Storing credentials in Secret Manager as '${SECRET_NAME}'..."
 
@@ -313,7 +311,6 @@ print_next_steps() {
 main() {
   print_banner
   check_prerequisites
-  set_project
   write_credentials_file
   store_in_secret_manager
   verify
