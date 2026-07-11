@@ -38,6 +38,10 @@ service-account-key.json
 *-key.json
 telemetry-writer-key.json
 
+# Secret Manager scratch files written by cloud/*/setup-*.sh — never commit these
+device-tokens.json
+grafana-cloud-push-credentials.json
+
 # EV3 telemetry runtime config (contains API keys — never commit)
 robot/controller/telemetry_config.py
 
