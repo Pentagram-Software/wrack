@@ -130,24 +130,27 @@ print_banner() {
 
 # ── Pre-flight checks ───────────────────────────────────────────────────────────
 check_prerequisites() {
+  # Dry-run only skips checks for things a dry-run doesn't need (the gcloud/
+  # python3 tools, an authenticated gcloud account) — it still validates
+  # required inputs below, so `--dry-run` alone can't print "Setup complete!"
+  # while silently missing the token/endpoint/instance ID.
   if [[ "${DRY_RUN}" == "true" ]]; then
-    info "Dry-run: skipping prerequisite validation"
-    return
-  fi
+    info "Dry-run: skipping tool/auth checks (required inputs are still validated)"
+  else
+    local missing=()
+    command -v gcloud  &>/dev/null || missing+=(gcloud)
+    command -v python3 &>/dev/null || missing+=(python3)
 
-  local missing=()
-  command -v gcloud  &>/dev/null || missing+=(gcloud)
-  command -v python3 &>/dev/null || missing+=(python3)
+    if [[ ${#missing[@]} -gt 0 ]]; then
+      err "Missing required tools: ${missing[*]}"
+      err "Install Google Cloud SDK: https://cloud.google.com/sdk/docs/install"
+      exit 1
+    fi
 
-  if [[ ${#missing[@]} -gt 0 ]]; then
-    err "Missing required tools: ${missing[*]}"
-    err "Install Google Cloud SDK: https://cloud.google.com/sdk/docs/install"
-    exit 1
-  fi
-
-  if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null | grep -q .; then
-    err "No active gcloud account. Run: gcloud auth login"
-    exit 1
+    if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null | grep -q .; then
+      err "No active gcloud account. Run: gcloud auth login"
+      exit 1
+    fi
   fi
 
   local missing_inputs=()

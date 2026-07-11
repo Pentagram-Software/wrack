@@ -215,6 +215,25 @@ test_non_not_found_describe_error_propagates() {
   [[ -n "${key_file}" ]] && rm -f "${key_file}"
 }
 
+# ── Test 6: --dry-run alone still validates required inputs ──────────────────
+test_dry_run_still_validates_required_inputs() {
+  local out="${TEST_TMP_DIR}/dry-run-no-inputs.out"
+
+  # No GRAFANA_TOKEN, --otlp-endpoint, or --instance-id — only --dry-run.
+  # gcloud/python3 are deliberately NOT on PATH here to prove dry-run
+  # doesn't need them to reject missing required inputs.
+  PATH="/usr/bin:/bin" bash "${SCRIPT}" --dry-run > "${out}" 2>&1
+  local rc=$?
+
+  if [[ ${rc} -ne 0 ]] \
+     && grep -q "Missing required inputs" "${out}" \
+     && ! grep -q "Setup complete!" "${out}"; then
+    pass "--dry-run alone (no token/endpoint/instance-id) fails validation instead of reporting success"
+  else
+    fail "expected --dry-run with no required inputs to fail validation and never print Setup complete! (rc=${rc})"
+  fi
+}
+
 echo "Running shell-level regression tests for setup-grafana-secret.sh..."
 echo ""
 test_refuses_preexisting_explicit_path
@@ -222,6 +241,7 @@ test_concurrent_runs_use_distinct_paths
 test_failed_write_leaves_no_plaintext
 test_sigterm_cleans_up_scratch_file
 test_non_not_found_describe_error_propagates
+test_dry_run_still_validates_required_inputs
 echo ""
 
 if [[ ${FAILURES} -eq 0 ]]; then
