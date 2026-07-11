@@ -23,7 +23,7 @@ Real-time, short-horizon, operational data whose only job is to answer "is the s
 - **Operational dashboards** — one unified, above-the-fold view of current system posture
 - **Slack alerts** — pager/warning notifications with direct links to the dashboard and recent logs
 - **Recent logs** — last 5 minutes, for immediate triage, not archival
-- **72-hour retention** — high-granularity data is deliberately short-lived; nothing here is a system of record
+- **Short, plan-determined retention** — high-granularity data is deliberately short-lived; nothing here is a system of record. 72h was the original target; Grafana Cloud's free-tier floor (currently 14 days, not independently configurable) is the accepted actual window — see [docs/monitoring/architecture.md#retention](architecture.md#retention)
 
 If the question is "what is happening in the last few minutes, and does someone need to act now," it belongs here.
 
