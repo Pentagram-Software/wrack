@@ -235,17 +235,29 @@ store_in_secret_manager() {
     return
   fi
 
-  if gcloud secrets describe "${SECRET_NAME}" --project="${PROJECT_ID}" &>/dev/null; then
+  # Distinguish "secret doesn't exist yet" (NOT_FOUND) from every other
+  # describe failure — permission denial, a disabled API, a network error.
+  # Treating all of those as "absent" would attempt a create, which either
+  # fails confusingly on an unrelated error or masks a real access problem.
+  local describe_output
+  local describe_rc=0
+  describe_output="$(gcloud secrets describe "${SECRET_NAME}" --project="${PROJECT_ID}" 2>&1)" || describe_rc=$?
+
+  if [[ ${describe_rc} -eq 0 ]]; then
     run gcloud secrets versions add "${SECRET_NAME}" \
       --data-file="${KEY_FILE}" \
       --project="${PROJECT_ID}"
     ok "New version added to existing secret '${SECRET_NAME}'"
-  else
+  elif echo "${describe_output}" | grep -q "NOT_FOUND"; then
     run gcloud secrets create "${SECRET_NAME}" \
       --data-file="${KEY_FILE}" \
       --replication-policy="automatic" \
       --project="${PROJECT_ID}"
     ok "Secret '${SECRET_NAME}' created in Secret Manager"
+  else
+    err "Could not determine whether secret '${SECRET_NAME}' exists (not a NOT_FOUND error):"
+    err "${describe_output}"
+    exit 1
   fi
 }
 

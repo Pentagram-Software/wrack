@@ -42,13 +42,18 @@ trap cleanup_all EXIT
 # sleeps (FAKE_GCLOUD_CREATE_DELAY) so tests can interrupt the script while
 # a real secret upload would still be in flight, and optionally captures the
 # --data-file contents (CAPTURE_FILE) so tests can inspect what was about to
-# be uploaded.
+# be uploaded. "secrets describe" mimics real gcloud error text — NOT_FOUND
+# by default, or FAKE_GCLOUD_DESCRIBE_ERROR verbatim to simulate a different
+# failure (e.g. PERMISSION_DENIED).
 cat > "${FAKE_BIN_DIR}/gcloud" <<'FAKE_GCLOUD'
 #!/bin/bash
 case "$*" in
   "config set project"*) exit 0 ;;
   "auth list"*) echo "fake@example.com"; exit 0 ;;
-  "secrets describe"*) exit 1 ;;
+  "secrets describe"*)
+    echo "${FAKE_GCLOUD_DESCRIBE_ERROR:-ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret not found.}" >&2
+    exit 1
+    ;;
   "secrets create"*)
     for arg in "$@"; do
       case "${arg}" in
@@ -184,12 +189,39 @@ test_sigterm_cleans_up_scratch_file() {
   fi
 }
 
+# ── Test 5: a non-NOT_FOUND describe failure propagates instead of creating ───
+test_non_not_found_describe_error_propagates() {
+  local out="${TEST_TMP_DIR}/describe-error.out"
+  local cap="${TEST_TMP_DIR}/describe-error.captured.json"
+  rm -f "${cap}"
+
+  PATH="${FAKE_BIN_DIR}:${PATH}" CAPTURE_FILE="${cap}" GRAFANA_TOKEN="token-permdenied" \
+    FAKE_GCLOUD_DESCRIBE_ERROR="ERROR: (gcloud.secrets.describe) PERMISSION_DENIED: caller lacks permission" \
+    bash "${SCRIPT}" --otlp-endpoint https://denied.example/otlp --instance-id 999 \
+    > "${out}" 2>&1
+  local rc=$?
+
+  local key_file
+  key_file="$(extract_key_file "${out}")"
+
+  if [[ ${rc} -ne 0 && ! -f "${cap}" ]] \
+     && grep -q "PERMISSION_DENIED" "${out}" \
+     && ! grep -q "created in Secret Manager" "${out}"; then
+    pass "a non-NOT_FOUND describe failure (e.g. PERMISSION_DENIED) propagates instead of attempting create"
+  else
+    fail "expected a PERMISSION_DENIED describe error to abort without creating a secret (rc=${rc})"
+  fi
+
+  [[ -n "${key_file}" ]] && rm -f "${key_file}"
+}
+
 echo "Running shell-level regression tests for setup-grafana-secret.sh..."
 echo ""
 test_refuses_preexisting_explicit_path
 test_concurrent_runs_use_distinct_paths
 test_failed_write_leaves_no_plaintext
 test_sigterm_cleans_up_scratch_file
+test_non_not_found_describe_error_propagates
 echo ""
 
 if [[ ${FAILURES} -eq 0 ]]; then
