@@ -31,7 +31,11 @@
 #
 # Options:
 #   --secret-name NAME   Secret Manager secret name (default: grafana-cloud-push-credentials)
-#   --key-file PATH      Local scratch file for the JSON payload (default: ./grafana-cloud-push-credentials.json)
+#   --key-file PATH      Local scratch file for the JSON payload. Default: a
+#                        fresh, uniquely-named file created via mktemp, so
+#                        concurrent runs never collide. If you pass this flag
+#                        explicitly, the script refuses to overwrite an
+#                        existing file at that path.
 #   --dry-run            Print every command without executing it
 #
 # Prerequisites:
@@ -56,16 +60,21 @@ INSTANCE_ID=""
 
 # Defaults — overridable via flags
 SECRET_NAME="grafana-cloud-push-credentials"
-KEY_FILE="./grafana-cloud-push-credentials.json"
+# Left empty by default: reserve_key_file() fills this in with a unique
+# mktemp path unless --key-file is passed explicitly (see KEY_FILE_EXPLICIT).
+KEY_FILE=""
+KEY_FILE_EXPLICIT=false
 DRY_RUN=false
 
-# Tracks whether write_credentials_file() actually created KEY_FILE, so the
-# EXIT trap knows whether there's plaintext to clean up.
+# Tracks whether reserve_key_file() actually created KEY_FILE, so the
+# cleanup trap knows whether there's plaintext to remove. Set immediately
+# on creation — *before* any content is written — so an interruption mid-
+# write still gets cleaned up.
 KEY_FILE_CREATED=false
 
 # ── Argument parsing ────────────────────────────────────────────────────────────
 usage() {
-  sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
@@ -73,7 +82,7 @@ while [[ $# -gt 0 ]]; do
     --otlp-endpoint)  OTLP_ENDPOINT="$2"; shift ;;
     --instance-id)    INSTANCE_ID="$2"; shift ;;
     --secret-name)    SECRET_NAME="$2"; shift ;;
-    --key-file)       KEY_FILE="$2"; shift ;;
+    --key-file)       KEY_FILE="$2"; KEY_FILE_EXPLICIT=true; shift ;;
     --dry-run)        DRY_RUN=true ;;
     -h|--help)        usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
@@ -81,14 +90,16 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-# Never leave the plaintext credentials file behind, whether the script
-# finishes successfully or exits early on an error.
+# Never leave the plaintext credentials file behind — on normal completion,
+# on a failure partway through (set -e), or on Ctrl-C / a `kill` signal.
 cleanup() {
-  if [[ "${KEY_FILE_CREATED}" == "true" && -f "${KEY_FILE}" ]]; then
+  if [[ "${KEY_FILE_CREATED}" == "true" && -n "${KEY_FILE}" && -f "${KEY_FILE}" ]]; then
     rm -f "${KEY_FILE}"
   fi
 }
 trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────
 run() {
@@ -111,7 +122,7 @@ print_banner() {
   echo "=================================================="
   echo "  Project:     ${PROJECT_ID}"
   echo "  Secret name: ${SECRET_NAME}"
-  echo "  Key file:    ${KEY_FILE}"
+  echo "  Key file:    ${KEY_FILE:-<a fresh mktemp file, generated at write time>}"
   [[ "${DRY_RUN}" == "true" ]] && echo "  Mode:        DRY-RUN (no changes)"
   echo "=================================================="
   echo ""
@@ -160,23 +171,58 @@ set_project() {
   ok "Project set to ${PROJECT_ID}"
 }
 
-# ── Step 2: Assemble the credentials JSON ──────────────────────────────────────
-write_credentials_file() {
-  info "Writing credentials → ${KEY_FILE}..."
+# ── Step 2a: Reserve a scratch file for the credentials JSON ──────────────────
+# Claims KEY_FILE exclusively — via mktemp for the default (unique per run,
+# so concurrent invocations can't collide) or via a noclobber create for an
+# explicit --key-file (so we refuse to silently overwrite an existing file,
+# whether that's an unrelated file or another concurrent run's). Cleanup is
+# registered immediately after the file is claimed, before any content is
+# written, so an interrupted or partial write still gets removed.
+reserve_key_file() {
+  if [[ "${KEY_FILE_EXPLICIT}" == "true" ]]; then
+    if [[ -e "${KEY_FILE}" ]]; then
+      err "Refusing to overwrite existing file: ${KEY_FILE}"
+      err "Remove it first, or pass a different --key-file path."
+      exit 1
+    fi
+    if ! ( set -C; : > "${KEY_FILE}" ) 2>/dev/null; then
+      err "Could not exclusively create ${KEY_FILE} (already exists or path is unwritable)."
+      exit 1
+    fi
+  else
+    # The X's must be the trailing characters of the template — BSD mktemp
+    # (macOS) silently returns the template unmodified (not an error) if
+    # anything follows them, e.g. a ".json" suffix, which would defeat
+    # uniqueness entirely. GNU mktemp (Linux/CI) handles a suffix fine, but
+    # we target the lowest common denominator so this works on both.
+    KEY_FILE="$(mktemp "${TMPDIR:-/tmp}/grafana-cloud-push-credentials.XXXXXX")"
+    if [[ "${KEY_FILE}" == *XXXXXX* ]]; then
+      err "mktemp did not generate a unique filename on this platform (got: ${KEY_FILE})"
+      exit 1
+    fi
+  fi
 
+  chmod 600 "${KEY_FILE}"
+  KEY_FILE_CREATED=true
+}
+
+# ── Step 2b: Assemble the credentials JSON ─────────────────────────────────────
+write_credentials_file() {
   if [[ "${DRY_RUN}" == "true" ]]; then
-    echo "[DRY-RUN] Would write JSON with otlp_endpoint, instance_id, token to ${KEY_FILE}"
+    info "Writing credentials → ${KEY_FILE:-<a fresh mktemp file>}..."
+    echo "[DRY-RUN] Would write JSON with otlp_endpoint, instance_id, token to a freshly reserved scratch file"
     return
   fi
+
+  reserve_key_file
+  info "Writing credentials → ${KEY_FILE}..."
 
   # Values are passed via environment, not interpolated into a Python source
   # string, so a token/endpoint containing a quote or backslash can't corrupt
   # the JSON or break out of a string literal (see write_credentials.py).
   OTLP_ENDPOINT="${OTLP_ENDPOINT}" INSTANCE_ID="${INSTANCE_ID}" TOKEN="${TOKEN}" \
     python3 "${SCRIPT_DIR}/write_credentials.py" "${KEY_FILE}"
-  KEY_FILE_CREATED=true
 
-  chmod 600 "${KEY_FILE}"
   ok "Credentials written to ${KEY_FILE} (permissions: 600)"
 }
 
@@ -263,4 +309,10 @@ main() {
   print_next_steps
 }
 
-main
+# Guarded so tests/test_setup_grafana_secret.sh can `source` this file (with
+# args after the path — bash populates $1... for a sourced script the same
+# way) and call individual functions like reserve_key_file() or cleanup()
+# directly, without running the full gcloud-touching flow.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main
+fi

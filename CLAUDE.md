@@ -70,8 +70,9 @@ GRAFANA_TOKEN=<access-policy-token> GCP_PROJECT_ID=wrack-control \
   bash cloud/monitoring/setup-grafana-secret.sh --otlp-endpoint <url> --instance-id <id>
 # Token comes from the GRAFANA_TOKEN env var only, never a CLI flag — see script header
 
-# Grafana credentials helper — unit tests
+# Grafana credentials helper — unit tests (Python) + scratch-file lifecycle tests (shell)
 python -m pytest cloud/monitoring/tests/ -v
+bash cloud/monitoring/tests/test_setup_grafana_secret.sh
 ```
 
 ## System Architecture
