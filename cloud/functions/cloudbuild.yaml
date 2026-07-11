@@ -33,6 +33,19 @@ steps:
   - '--set-env-vars'
   - 'API_KEY=${_API_KEY},BIGQUERY_PROJECT_ID=${_BIGQUERY_PROJECT_ID},BIGQUERY_DATASET=${_BIGQUERY_DATASET}'
 
+# Deploy unifiedIngress Cloud Function (PEN-227)
+- name: 'gcr.io/cloud-builders/gcloud'
+  args:
+  - 'functions'
+  - 'deploy'
+  - 'unifiedIngress'
+  - '--runtime=nodejs20'
+  - '--trigger-http'
+  - '--allow-unauthenticated'
+  - '--region=europe-central2'
+  - '--set-env-vars'
+  - 'GCP_PROJECT_ID=${_BIGQUERY_PROJECT_ID},DEVICE_TOKENS_SECRET=${_DEVICE_TOKENS_SECRET},BIGQUERY_PROJECT_ID=${_BIGQUERY_PROJECT_ID},BIGQUERY_DATASET=${_BIGQUERY_DATASET},HEALTH_LEG_FUNCTION_URL=${_HEALTH_LEG_FUNCTION_URL}'
+
 # Tag the image as latest
 - name: 'gcr.io/cloud-builders/docker'
   args: ['tag', 'gcr.io/$PROJECT_ID/mindstorms-controller:${SHORT_SHA}', 'gcr.io/$PROJECT_ID/mindstorms-controller:latest']
@@ -46,6 +59,10 @@ substitutions:
   _API_KEY: 'your-secure-api-key-here'
   _BIGQUERY_PROJECT_ID: 'wrack-control'
   _BIGQUERY_DATASET: 'wrack_telemetry'
+  _DEVICE_TOKENS_SECRET: 'device-tokens'
+  # Left empty until PEN-228 (health-leg push function) is deployed — the
+  # ingress fails open (logs and drops) on type=health records until then.
+  _HEALTH_LEG_FUNCTION_URL: ''
 
 options:
   logging: CLOUD_LOGGING_ONLY

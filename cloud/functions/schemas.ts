@@ -18,6 +18,14 @@
 
 export type EventSource = 'ev3' | 'rpi' | 'cloud_functions' | 'web' | 'ios';
 
+/**
+ * Coarse routing discriminator for the unified ingress (PEN-227): `health`
+ * records route to Grafana Cloud, `event` records to BigQuery. Optional;
+ * absent records default to `event` for backward compatibility with senders
+ * that don't set it yet.
+ */
+export type RecordType = 'health' | 'event';
+
 export type EventType =
   | 'battery_status'
   | 'command_received'
@@ -41,6 +49,7 @@ export interface TelemetryEventEnvelope {
   payload: Record<string, unknown>;
   session_id?: string | null;
   device_id?: string | null;
+  type?: RecordType | null;
   version?: string | null;
   tags?: string[] | null;
   user_id?: string | null;
@@ -173,6 +182,8 @@ export const VALID_EVENT_TYPES: readonly EventType[] = [
   'video_stream_start', 'video_stream_stop', 'video_stream_health',
 ] as const;
 
+export const VALID_RECORD_TYPES: readonly RecordType[] = ['health', 'event'] as const;
+
 export const P0_EVENT_TYPES: readonly EventType[] = [
   'battery_status', 'command_received', 'command_executed',
   'device_status', 'error', 'api_request',
@@ -262,6 +273,15 @@ export function validateEventEnvelope(event: unknown): ValidationResult {
     Array.isArray(e.payload)
   ) {
     errors.push({ field: 'payload', message: 'Must be a non-null object' });
+  }
+
+  if (e.type !== undefined && e.type !== null) {
+    if (!(VALID_RECORD_TYPES as readonly string[]).includes(e.type as string)) {
+      errors.push({
+        field: 'type',
+        message: `Must be one of: ${VALID_RECORD_TYPES.join(', ')}`,
+      });
+    }
   }
 
   return { valid: errors.length === 0, errors };
