@@ -93,7 +93,7 @@ Cloud Functions ──native GCP metrics──► GCP Cloud Monitoring ──pul
 ```
 - No direct EV3↔Pi network dependency — each device talks only to the ingress; Grafana credentials live only in the health-leg push function, never on-device.
 - Analytics leg: dataset DDL in `cloud/bigquery/schemas/`; deploy with `cloud/bigquery/deploy.sh`. IAM setup (service account `telemetry-writer`) via `cloud/bigquery/setup-iam.sh`; see `docs/data-tracking/setup-iam.md`.
-- Monitoring leg: 72-hour high-granularity retention only, for live health/liveness — not historical analysis. Grafana Alloy is **not** part of this design (it can't run on the EV3, and PEN-218 dropped it for the Pi too); `edge/monitoring/alloy/` and `edge/video-streamer/monitoring.py` are superseded.
+- Monitoring leg: short-lived, live health/liveness only — not historical analysis. 72h was the target retention window; Grafana Cloud's free-tier floor (14 days, not independently configurable) is the accepted actual retention — see `docs/monitoring/architecture.md#retention`. Grafana Alloy is **not** part of this design (it can't run on the EV3, and PEN-218 dropped it for the Pi too); `edge/monitoring/alloy/` and `edge/video-streamer/monitoring.py` are superseded.
 - `docs/monitoring/scope-boundary.md` — which system owns a given metric/event. `docs/monitoring/architecture.md` — full system context, transport mechanisms, rejected alternatives, and the Grafana Cloud vs. BigQuery technology decision.
 
 ## Web Client (`clients/web/`)
