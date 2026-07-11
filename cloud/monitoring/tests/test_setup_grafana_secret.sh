@@ -65,7 +65,7 @@ case "$*" in
     sleep "${FAKE_GCLOUD_CREATE_DELAY:-0}"
     exit 0
     ;;
-  "secrets versions access"*) echo '{"fake":"payload"}'; exit 0 ;;
+  "secrets versions describe"*) echo "ENABLED"; exit 0 ;;
   *) echo "unhandled fake gcloud call: $*" >&2; exit 1 ;;
 esac
 FAKE_GCLOUD
@@ -234,6 +234,51 @@ test_dry_run_still_validates_required_inputs() {
   fi
 }
 
+# ── Test 7: verification works without secretmanager.versions.access ─────────
+test_verification_does_not_require_versions_access() {
+  # A caller with roles/secretmanager.admin but NOT roles/secretmanager.
+  # secretAccessor can call "versions describe" (metadata) but not "versions
+  # access" (payload). This stub fails "versions access" loudly, so the test
+  # fails if verify() ever falls back to reading the payload.
+  local strict_bin_dir="$(mktemp -d)"
+  cat > "${strict_bin_dir}/gcloud" <<'STRICT_GCLOUD'
+#!/bin/bash
+case "$*" in
+  "config set project"*) exit 0 ;;
+  "auth list"*) echo "fake@example.com"; exit 0 ;;
+  "secrets describe"*)
+    echo "${FAKE_GCLOUD_DESCRIBE_ERROR:-ERROR: (gcloud.secrets.describe) NOT_FOUND: Secret not found.}" >&2
+    exit 1
+    ;;
+  "secrets create"*) exit 0 ;;
+  "secrets versions access"*)
+    echo "ERROR: PERMISSION_DENIED: caller lacks secretmanager.versions.access" >&2
+    exit 1
+    ;;
+  "secrets versions describe"*) echo "ENABLED"; exit 0 ;;
+  *) echo "unhandled fake gcloud call: $*" >&2; exit 1 ;;
+esac
+STRICT_GCLOUD
+  chmod +x "${strict_bin_dir}/gcloud"
+
+  local out="${TEST_TMP_DIR}/verify-no-access.out"
+  PATH="${strict_bin_dir}:${PATH}" GRAFANA_TOKEN="token-verify" \
+    bash "${SCRIPT}" --otlp-endpoint https://verify.example/otlp --instance-id 999 \
+    > "${out}" 2>&1
+  local rc=$?
+
+  local key_file
+  key_file="$(extract_key_file "${out}")"
+  [[ -n "${key_file}" ]] && rm -f "${key_file}"
+  rm -rf "${strict_bin_dir}"
+
+  if [[ ${rc} -eq 0 ]] && grep -q "Setup complete" "${out}"; then
+    pass "verification succeeds on roles/secretmanager.admin alone, without secretmanager.versions.access"
+  else
+    fail "expected verify() to succeed using only versions.get-level access, not versions.access (rc=${rc})"
+  fi
+}
+
 echo "Running shell-level regression tests for setup-grafana-secret.sh..."
 echo ""
 test_refuses_preexisting_explicit_path
@@ -242,6 +287,7 @@ test_failed_write_leaves_no_plaintext
 test_sigterm_cleans_up_scratch_file
 test_non_not_found_describe_error_propagates
 test_dry_run_still_validates_required_inputs
+test_verification_does_not_require_versions_access
 echo ""
 
 if [[ ${FAILURES} -eq 0 ]]; then

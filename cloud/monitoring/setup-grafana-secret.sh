@@ -269,13 +269,26 @@ verify() {
     return
   fi
 
-  info "Verifying secret is readable..."
-  gcloud secrets versions access latest \
+  # Confirm the version exists (and is enabled) via its metadata, not by
+  # reading the payload. `secretmanager.versions.access` (needed to read the
+  # payload) is a narrower, separately-grantable permission than
+  # `secretmanager.versions.get` (needed for metadata) — requiring the
+  # former here would force operators onto roles/secretmanager.secretAccessor
+  # in addition to the documented roles/secretmanager.admin prerequisite,
+  # and this step doesn't need to read the secret value to confirm it landed.
+  info "Verifying secret version exists..."
+  local version_state
+  version_state="$(gcloud secrets versions describe latest \
     --secret="${SECRET_NAME}" \
     --project="${PROJECT_ID}" \
-    > /dev/null
+    --format="value(state)")"
 
-  ok "Secret '${SECRET_NAME}' stored and readable in project ${PROJECT_ID}"
+  if [[ "${version_state}" != "ENABLED" ]]; then
+    err "Secret '${SECRET_NAME}' latest version is in unexpected state: ${version_state:-<empty>}"
+    exit 1
+  fi
+
+  ok "Secret '${SECRET_NAME}' stored in project ${PROJECT_ID} (latest version: ${version_state})"
 }
 
 # ── Post-run instructions ───────────────────────────────────────────────────────
