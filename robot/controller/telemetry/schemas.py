@@ -67,6 +67,11 @@ VALID_EVENT_TYPES = [
     "video_stream_health",
 ]
 
+#: Coarse routing discriminator for the unified ingress (PEN-227): "health"
+#: records route to Grafana Cloud, "event" records to BigQuery. Optional on
+#: the envelope; absent records default to "event".
+VALID_RECORD_TYPES = ["health", "event"]
+
 #: P0-priority event types that have mandatory payload validation.
 P0_EVENT_TYPES = [
     "battery_status",
