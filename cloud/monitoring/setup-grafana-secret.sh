@@ -18,11 +18,16 @@
 # see the PEN-218 comment thread for why.
 #
 # Usage:
+#   GRAFANA_TOKEN=<access-policy-token> \
 #   GCP_PROJECT_ID=wrack-control bash setup-grafana-secret.sh \
-#     --token <access-policy-token> \
 #     --otlp-endpoint <OTLP gateway URL, e.g. https://otlp-gateway-prod-xx-xxxx.grafana.net/otlp> \
 #     --instance-id <Grafana Cloud stack instance ID> \
 #     [options]
+#
+# The token is deliberately NOT a CLI flag — it must come from the
+# GRAFANA_TOKEN environment variable so it never appears in shell history
+# or `ps` output. The OTLP endpoint and instance ID aren't secret, so they
+# stay as flags.
 #
 # Options:
 #   --secret-name NAME   Secret Manager secret name (default: grafana-cloud-push-credentials)
@@ -35,11 +40,17 @@
 
 set -euo pipefail
 
+# Ensure the scratch credentials file can never be created world/group-readable,
+# even for the brief window between open() and the later chmod.
+umask 077
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # ── Configuration ──────────────────────────────────────────────────────────────
 PROJECT_ID="${GCP_PROJECT_ID:-wrack-control}"
 
 # Required inputs — no defaults, must come from the Grafana Cloud UI
-TOKEN=""
+TOKEN="${GRAFANA_TOKEN:-}"
 OTLP_ENDPOINT=""
 INSTANCE_ID=""
 
@@ -48,14 +59,17 @@ SECRET_NAME="grafana-cloud-push-credentials"
 KEY_FILE="./grafana-cloud-push-credentials.json"
 DRY_RUN=false
 
+# Tracks whether write_credentials_file() actually created KEY_FILE, so the
+# EXIT trap knows whether there's plaintext to clean up.
+KEY_FILE_CREATED=false
+
 # ── Argument parsing ────────────────────────────────────────────────────────────
 usage() {
-  sed -n '2,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --token)          TOKEN="$2"; shift ;;
     --otlp-endpoint)  OTLP_ENDPOINT="$2"; shift ;;
     --instance-id)    INSTANCE_ID="$2"; shift ;;
     --secret-name)    SECRET_NAME="$2"; shift ;;
@@ -66,6 +80,15 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+# Never leave the plaintext credentials file behind, whether the script
+# finishes successfully or exits early on an error.
+cleanup() {
+  if [[ "${KEY_FILE_CREATED}" == "true" && -f "${KEY_FILE}" ]]; then
+    rm -f "${KEY_FILE}"
+  fi
+}
+trap cleanup EXIT
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────
 run() {
@@ -117,12 +140,12 @@ check_prerequisites() {
   fi
 
   local missing_inputs=()
-  [[ -z "${TOKEN}" ]]         && missing_inputs+=(--token)
+  [[ -z "${TOKEN}" ]]         && missing_inputs+=(GRAFANA_TOKEN env var)
   [[ -z "${OTLP_ENDPOINT}" ]] && missing_inputs+=(--otlp-endpoint)
   [[ -z "${INSTANCE_ID}" ]]   && missing_inputs+=(--instance-id)
 
   if [[ ${#missing_inputs[@]} -gt 0 ]]; then
-    err "Missing required arguments: ${missing_inputs[*]}"
+    err "Missing required inputs: ${missing_inputs[*]}"
     err "Get these values from the Grafana Cloud portal's OpenTelemetry configuration guide + a scoped Access Policy token."
     exit 1
   fi
@@ -146,14 +169,12 @@ write_credentials_file() {
     return
   fi
 
-  python3 -c "
-import json
-json.dump({
-    'otlp_endpoint': '${OTLP_ENDPOINT}',
-    'instance_id': '${INSTANCE_ID}',
-    'token': '${TOKEN}',
-}, open('${KEY_FILE}', 'w'), indent=2)
-"
+  # Values are passed via environment, not interpolated into a Python source
+  # string, so a token/endpoint containing a quote or backslash can't corrupt
+  # the JSON or break out of a string literal (see write_credentials.py).
+  OTLP_ENDPOINT="${OTLP_ENDPOINT}" INSTANCE_ID="${INSTANCE_ID}" TOKEN="${TOKEN}" \
+    python3 "${SCRIPT_DIR}/write_credentials.py" "${KEY_FILE}"
+  KEY_FILE_CREATED=true
 
   chmod 600 "${KEY_FILE}"
   ok "Credentials written to ${KEY_FILE} (permissions: 600)"
@@ -205,9 +226,11 @@ print_next_steps() {
   echo "  Setup complete!"
   echo "=================================================="
   echo ""
-  echo "IMPORTANT — delete the local scratch file now that it's in Secret Manager:"
-  echo "    rm ${KEY_FILE}"
-  echo ""
+  if [[ "${DRY_RUN}" != "true" ]]; then
+    echo "The local scratch file (${KEY_FILE}) has been deleted automatically —"
+    echo "the credentials now live only in Secret Manager."
+    echo ""
+  fi
   echo "This secret must only ever be read by the unified-ingress health-leg"
   echo "push Cloud Function's service account — never by the Raspberry Pi or"
   echo "EV3, and never committed to the repo. Once that function exists (see"
@@ -236,6 +259,7 @@ main() {
   write_credentials_file
   store_in_secret_manager
   verify
+  cleanup
   print_next_steps
 }
 

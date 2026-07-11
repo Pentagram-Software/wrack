@@ -64,6 +64,14 @@ GCP_PROJECT_ID=wrack-control bash cloud/bigquery/setup-iam.sh
 
 # BigQuery IAM helper — unit tests
 python -m pytest cloud/bigquery/tests/ -v
+
+# Grafana Cloud OTLP push credentials — store in Secret Manager (PEN-189)
+GRAFANA_TOKEN=<access-policy-token> GCP_PROJECT_ID=wrack-control \
+  bash cloud/monitoring/setup-grafana-secret.sh --otlp-endpoint <url> --instance-id <id>
+# Token comes from the GRAFANA_TOKEN env var only, never a CLI flag — see script header
+
+# Grafana credentials helper — unit tests
+python -m pytest cloud/monitoring/tests/ -v
 ```
 
 ## System Architecture
