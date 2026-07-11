@@ -1,0 +1,30 @@
+name: Cloud Monitoring CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cloud/monitoring/**'
+      - '.github/workflows/ci-cloud-monitoring.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'cloud/monitoring/**'
+      - '.github/workflows/ci-cloud-monitoring.yml'
+
+jobs:
+  ci:
+    name: Test cloud/monitoring/ (Grafana secret provisioning script)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Run write_credentials.py unit tests
+        run: python -m pytest cloud/monitoring/tests/test_write_credentials.py -v
+
+      - name: Run setup-grafana-secret.sh shell regression tests
+        run: bash cloud/monitoring/tests/test_setup_grafana_secret.sh
