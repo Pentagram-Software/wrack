@@ -89,16 +89,18 @@ The Pub/Sub-mediated alternative — a `health` topic symmetric to the analytics
 
 Health push failures fail open (drop and continue) rather than retry hard, unlike the analytics leg. The receiving side of this call is tracked in [PEN-228](https://linear.app/pentagram-software/issue/PEN-228/implement-health-leg-push-function-otlp-push-to-grafana-cloud) — PEN-219 only covers the analytics leg.
 
-### Open question: dual-homed signals
+### Dual-homed signals (decided)
 
-Some signals — `video_stream_health` today — need to reach **both** destinations (see the [scope-boundary examples table](scope-boundary.md#examples-from-each-domain)). The routing model above assumes one `type` per record, which doesn't by itself say whether a dual-homed signal should be sent as two separate records (one `health`, one `event`) or whether the ingress should support a `type: both` that fans out to both topics. Not yet decided — flagging so it doesn't get silently assumed away when this is implemented.
+Some signals — `video_stream_health` today — need to reach **both** destinations (see the [scope-boundary examples table](scope-boundary.md#examples-from-each-domain)). **Decided (2026-07-12): the device sends two separate records**, one tagged `type: "health"` and one tagged `type: "event"`, rather than the ingress supporting a `type: "both"` that fans out a single record to both topics.
+
+This keeps the routing model at exactly one `type` per record — no fan-out branch in the ingress function, no ambiguity about whether a record's `event_id` refers to one delivery or two. The tradeoff is the sending device does the duplication (two POSTs, or two entries in one batch) instead of the ingress; that's a small cost for a dual-homed signal like `video_stream_health` that isn't expected to be a common case.
 
 ## Transport mechanisms (target state)
 
 | Source | → System Monitoring | → Wrack Analytics |
 |---|---|---|
 | EV3 | HTTPS POST + per-device token, `type=health` (heartbeat/battery/device status) → unified ingress → health leg (OTLP push) → Grafana Cloud | HTTPS POST + per-device token, `type=event` → unified ingress → analytics topic → BigQuery insert fn (PEN-219) → BigQuery |
-| Raspberry Pi streamer | Same ingress, `type=health` for `video_stream_health` | Same ingress, `type=event` for `video_stream_start`/`stop` — see [open question](#open-question-dual-homed-signals) above |
+| Raspberry Pi streamer | Same ingress, `type=health` for `video_stream_health` (sent as its own record — see [dual-homed signals](#dual-homed-signals-decided) above) | Same ingress, `type=event` for `video_stream_start`/`stop`, and a second `type=event` copy of `video_stream_health` alongside the `type=health` one |
 | Raspberry Pi OS/process (CPU/mem/temp, streamer liveness) | Local collector process (replacing Alloy) → same ingress, `type=health` | not tracked — no historical value for raw OS resource samples |
 | GCP Cloud Functions (platform) | Native GCP Cloud Monitoring invocation/error-rate metrics, **pulled** by Grafana Cloud's GCP data source plugin ([PEN-196](https://linear.app/pentagram-software/issue/PEN-196/connect-gcp-cloud-monitoring-to-grafana-cloud-data-source-plugin)) — no code change, platform-emitted, does not go through the ingress | `logApiRequest()` in `cloud/functions/index.js` (via `api-telemetry.js`) → BigQuery directly — this is already inside a Cloud Function, so it writes directly rather than round-tripping through the ingress |
 
@@ -108,7 +110,7 @@ At the point a new signal is being wired up, the code-level question is a single
 
 - Tag the record `type: "health"` if it's a live gauge/log line consumed for real-time triage → routed to Grafana Cloud.
 - Tag it `type: "event"` if its value is in historical/aggregate analysis → routed to BigQuery.
-- If it's genuinely both, see the [open question above](#open-question-dual-homed-signals) — don't guess at a convention until that's settled.
+- If it's genuinely both, send it as two records — one `type: "health"`, one `type: "event"` — per [dual-homed signals](#dual-homed-signals-decided) above.
 
 The conceptual version of this question (which doesn't require knowing the wire format) is the decision table in [scope-boundary.md](scope-boundary.md#decision-table) — use that first when scoping a new ticket, then come back here for the routing mechanics.
 
