@@ -50,6 +50,7 @@ const DEVICE_TOKENS = {
 // functions.http(). We also import the helpers for direct unit-testing.
 const {
   resolveType,
+  isValidTypeField,
   _timingSafeStringEqual,
   _resetDeviceTokensCache,
 } = require('./ingress');
@@ -172,6 +173,31 @@ describe('resolveType()', () => {
 
   test('defaults to "event" when type is explicitly "event"', () => {
     expect(resolveType({ type: 'event' })).toBe('event');
+  });
+});
+
+// ─── isValidTypeField() unit tests ───────────────────────────────────────────
+
+describe('isValidTypeField()', () => {
+  test('true when type is absent', () => {
+    expect(isValidTypeField({})).toBe(true);
+  });
+
+  test('true when type is explicitly null', () => {
+    expect(isValidTypeField({ type: null })).toBe(true);
+  });
+
+  test('true for "health" and "event"', () => {
+    expect(isValidTypeField({ type: 'health' })).toBe(true);
+    expect(isValidTypeField({ type: 'event' })).toBe(true);
+  });
+
+  test('false for an unrecognized value', () => {
+    expect(isValidTypeField({ type: 'bogus' })).toBe(false);
+  });
+
+  test('false for a typo close to a valid value', () => {
+    expect(isValidTypeField({ type: 'Health' })).toBe(false);
   });
 });
 
@@ -576,5 +602,31 @@ describe('unifiedIngress handler — validation failures', () => {
     expect(res.statusCode).toBe(207);
     expect(res.data.inserted).toBe(1);
     expect(res.data.failed).toBe(1);
+  });
+
+  test('rejects an event with an unrecognized type value instead of routing it to BigQuery', async () => {
+    const event = validEvent({ type: 'bogus' });
+    const req = makeReq({ body: { events: [event] } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.data.success).toBe(false);
+    expect(res.data.errors[0].errors.some((e) => e.includes('type'))).toBe(true);
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
+
+  test('rejects an event with a typo type value in a mixed batch, without misrouting it', async () => {
+    const events = [validEvent({ event_id: 'evt-good' }), validEvent({ event_id: 'evt-typo', type: 'Health' })];
+    const req = makeReq({ body: { events } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(207);
+    expect(res.data.inserted).toBe(1);
+    expect(res.data.failed).toBe(1);
+    expect(res.data.errors[0].event_id).toBe('evt-typo');
+    expect(mockInsert.mock.calls[0][0]).toHaveLength(1);
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 });

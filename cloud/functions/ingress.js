@@ -115,6 +115,18 @@ async function validateDeviceAuth(req) {
 
 // ─── Type-field routing ──────────────────────────────────────────────────────
 
+const VALID_RECORD_TYPES = ['health', 'event'];
+
+/**
+ * True when the event's `type` field is a value the router understands: the
+ * schema declares it as an enum of health/event/absent — a typo or garbage
+ * value must not be silently routed to BigQuery as if it were valid.
+ */
+function isValidTypeField(event) {
+  const type = event && event.type;
+  return type === undefined || type === null || VALID_RECORD_TYPES.includes(type);
+}
+
 /** Resolve an event's coarse record type, defaulting to "event" when absent. */
 function resolveType(event) {
   return event && event.type === 'health' ? 'health' : 'event';
@@ -195,7 +207,15 @@ functions.http('unifiedIngress', (req, res) => {
       const event = events[i];
       const { valid, errors } = validateEvent(event);
 
-      if (valid) {
+      // validateEvent() is shared with telemetryIngestion, which predates
+      // and doesn't know about the `type` field, so it's checked separately
+      // here rather than in telemetry.js — a typo'd type must be rejected,
+      // not silently routed to BigQuery as if it were a valid "event".
+      if (valid && !isValidTypeField(event)) {
+        errors.push(`type must be one of: ${VALID_RECORD_TYPES.join(', ')} (or absent)`);
+      }
+
+      if (valid && errors.length === 0) {
         // Authentication proves who is calling, not who an event claims to
         // be from — a client-supplied device_id must never be trusted as-is,
         // or one device's token could be used to attribute events to (and
@@ -289,6 +309,7 @@ functions.http('unifiedIngress', (req, res) => {
 module.exports = {
   validateDeviceAuth,
   resolveType,
+  isValidTypeField,
   pushHealthRecord,
   getDeviceTokens,
   _resetDeviceTokensCache,
