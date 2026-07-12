@@ -20,8 +20,9 @@ Quick start::
 
     collector = TelemetryCollector(source="ev3")
     sender = TelemetrySender(
-        endpoint="https://...cloudfunctions.net/telemetryIngestion",
-        api_key="<your-api-key>",
+        endpoint="https://...cloudfunctions.net/unifiedIngress",
+        device_id="ev3-001",
+        device_token="<your-per-device-token>",
     )
 
     collector.collect_battery_status(voltage_mv=7500, percentage=90.0)

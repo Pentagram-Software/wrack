@@ -53,6 +53,14 @@ VALID_EVENT_TYPES: List[str] = [
     "video_stream_health",
 ]
 
+# Coarse routing discriminator for the unified ingress (PEN-227): "health"
+# records route to Grafana Cloud, "event" records to BigQuery. Optional;
+# absent records default to "event" for backward compatibility with senders
+# that don't set it yet.
+RecordType = Literal["health", "event"]
+
+VALID_RECORD_TYPES: List[str] = ["health", "event"]
+
 BatteryType = Literal["rechargeable", "alkaline", "unknown"]
 ControllerType = Literal["ps4", "ps5", "network_remote", "unknown"]
 DeviceStatusValue = Literal["connected", "disconnected", "error", "stalled", "initializing"]
@@ -75,6 +83,7 @@ try:
         payload: Dict[str, Any]     # required
         session_id: Optional[str]
         device_id: Optional[str]
+        type: Optional[str]        # "health" | "event", introduced by PEN-227
         version: Optional[str]
         tags: Optional[List[str]]
         user_id: Optional[str]

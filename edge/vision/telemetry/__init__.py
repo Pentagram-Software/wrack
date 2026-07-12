@@ -26,8 +26,9 @@ Quick start::
 
     collector = RpiTelemetryCollector()
     sender = RpiTelemetrySender(
-        endpoint="https://...cloudfunctions.net/telemetryIngestion",
-        api_key="<your-api-key>",
+        endpoint="https://...cloudfunctions.net/unifiedIngress",
+        device_id="rpi-camera-01",
+        device_token="<your-per-device-token>",
     )
 
     collector.collect("device_status", device_name="camera", status="connected")

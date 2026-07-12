@@ -93,14 +93,14 @@ Raspberry Pi camera ──H.264 UDP chunks (port 9999)──► iOS App / Web / 
 
 ### Telemetry & Monitoring Ingress (Wrack Analytics + System Monitoring)
 
-EV3 and Raspberry Pi both push to one unified Cloud Function ingress (per-device token auth); the ingress routes each record by a `type` field to one of two destinations. This is the **adopted target design** (not yet fully built — see `docs/monitoring/architecture.md` for what exists today vs. planned):
+EV3 and Raspberry Pi both push to one unified Cloud Function ingress (`cloud/functions/ingress.js`, `unifiedIngress`, PEN-227) — per-device auth via `X-Device-Id`/`X-Device-Token` against a `device-tokens` Secret Manager secret, not the shared static `API_KEY` the older `telemetryIngestion` function used. The ingress routes each record by a `type` field to one of two destinations. See `docs/monitoring/architecture.md` for full status vs. plan:
 ```
 EV3 / Raspberry Pi ──HTTPS POST + per-device token (type=health|event)──► unified ingress Cloud Function
-  ├─ type=event ──► Pub/Sub (analytics topic) ──► BigQuery insert fn (PEN-219) ──► BigQuery (wrack_telemetry dataset)
-  └─ type=health ─► Grafana push (leg not yet built) ──► Grafana Cloud (Prometheus/Loki) ──► Slack alerts
+  ├─ type=event ──► bigquery-client.js insertEvents() ──► BigQuery (wrack_telemetry dataset)   [PEN-219 will swap this for Pub/Sub-mediated]
+  └─ type=health ─► direct call to HEALTH_LEG_FUNCTION_URL (fails open until PEN-228 exists) ──► Grafana Cloud (OTLP) ──► Slack alerts
 Cloud Functions ──native GCP metrics──► GCP Cloud Monitoring ──pull (data source plugin)──► Grafana Cloud
 ```
-- No direct EV3↔Pi network dependency — each device talks only to the ingress; Grafana credentials live only in the health-leg push function, never on-device.
+- No direct EV3↔Pi network dependency — each device talks only to the ingress; Grafana credentials live only in the health-leg push function (PEN-228, not yet built), never on-device. Provision device tokens with `cloud/functions/setup-device-tokens.sh`.
 - Analytics leg: dataset DDL in `cloud/bigquery/schemas/`; deploy with `cloud/bigquery/deploy.sh`. IAM setup (service account `telemetry-writer`) via `cloud/bigquery/setup-iam.sh`; see `docs/data-tracking/setup-iam.md`.
 - Monitoring leg: short-lived, live health/liveness only — not historical analysis. 72h was the target retention window; Grafana Cloud's free-tier floor (14 days, not independently configurable) is the accepted actual retention — see `docs/monitoring/architecture.md#retention`. Grafana Alloy is **not** part of this design (it can't run on the EV3, and PEN-218 dropped it for the Pi too); `edge/monitoring/alloy/` and `edge/video-streamer/monitoring.py` are superseded.
 - `docs/monitoring/scope-boundary.md` — which system owns a given metric/event. `docs/monitoring/architecture.md` — full system context, transport mechanisms, rejected alternatives, and the Grafana Cloud vs. BigQuery technology decision.

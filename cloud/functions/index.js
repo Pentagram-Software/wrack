@@ -379,3 +379,7 @@ module.exports = {
 
 // Register the telemetry ingestion function alongside the robot control function.
 require('./telemetry');
+
+// Register the unified ingress function (PEN-227): per-device auth,
+// type-field routing to the analytics leg (BigQuery) or health leg (Grafana).
+require('./ingress');

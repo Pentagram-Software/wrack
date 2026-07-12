@@ -4,11 +4,15 @@
 # deploying to the EV3. The actual telemetry_config.py is gitignored so
 # credentials are never committed.
 
-# Full URL of the telemetryIngestion Cloud Function
-TELEMETRY_ENDPOINT = "https://<region>-<project>.cloudfunctions.net/telemetryIngestion"
+# Full URL of the unified ingress Cloud Function (PEN-227). Superseded
+# telemetryIngestion, which used a shared static key instead of a per-device
+# token — see cloud/functions/CLAUDE.md.
+TELEMETRY_ENDPOINT = "https://<region>-<project>.cloudfunctions.net/unifiedIngress"
 
-# API key sent in the X-API-Key header (matches cloud/functions/.env API_KEY)
-TELEMETRY_API_KEY = "your-secret-api-key"
-
-# Optional: human-readable identifier for this EV3 unit (included in every event)
+# Identifier for this EV3 unit — sent as the X-Device-Id header and included
+# in every event's device_id field.
 TELEMETRY_DEVICE_ID = "ev3-001"
+
+# Per-device token sent as the X-Device-Token header. Generate/rotate with:
+#   bash cloud/functions/setup-device-tokens.sh --device-id ev3-001
+TELEMETRY_DEVICE_TOKEN = "your-per-device-token"

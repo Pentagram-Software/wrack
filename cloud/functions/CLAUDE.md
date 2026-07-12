@@ -17,14 +17,17 @@ Client App → Cloud Function (HTTP/POST) → EV3 Robot (TCP/JSON)
 The Cloud Function receives HTTP POST requests with commands, validates authentication, enforces safety limits, forwards commands to the EV3 robot over TCP, and returns responses to the client.
 
 ### Key Components
-- **index.js**: Robot control Cloud Function (`controlRobot`) - processes HTTP requests, validates commands, manages TCP connection to robot, emits `api_request` telemetry events. Also requires `telemetry.js` so both functions are registered.
+- **index.js**: Robot control Cloud Function (`controlRobot`) - processes HTTP requests, validates commands, manages TCP connection to robot, emits `api_request` telemetry events. Also requires `telemetry.js` and `ingress.js` so all three functions are registered.
 - **api-telemetry.js**: Fire-and-forget telemetry helper used by `controlRobot`. Builds `api_request` events and inserts them to BigQuery via `setImmediate` (non-blocking). Errors are swallowed so they cannot affect command execution.
-- **telemetry.js**: Telemetry ingestion Cloud Function (`telemetryIngestion`) - accepts batched events, validates schema, batch-inserts into BigQuery `wrack_telemetry.events`.
+- **telemetry.js**: Telemetry ingestion Cloud Function (`telemetryIngestion`) - accepts batched events, validates schema, batch-inserts into BigQuery `wrack_telemetry.events`. Legacy single-purpose endpoint, shared-key auth — `ingress.js` supersedes it for new senders but it stays live during migration.
+- **ingress.js**: Unified ingress Cloud Function (`unifiedIngress`, PEN-227) - the target endpoint for EV3/Pi telemetry going forward. Per-device auth (`X-Device-Id`/`X-Device-Token` against the `device-tokens` Secret Manager secret, not the shared `API_KEY`). Routes each event by its optional `type` field: `event` (default) → `bigquery-client.js insertEvents()`; `health` → a direct synchronous POST to `HEALTH_LEG_FUNCTION_URL` (PEN-228), fails open (logged and dropped, never surfaced as a failure) when that URL is unset or the call errors. Reuses `telemetry.js`'s `validateEvent` for envelope validation.
+- **setup-device-tokens.sh**: Generates/rotates per-device tokens and stores them as the `device-tokens` Secret Manager secret `ingress.js` reads at cold start. Mirrors `cloud/monitoring/setup-grafana-secret.sh`'s structure.
 - **bigquery-client.js**: Reusable BigQuery wrapper — lazy singleton init, `insertEvent`, `insertEvents` batch, exponential-backoff retry for 429/5xx/UNAVAILABLE errors, `PartialFailureError` handling. Opt-in/fail-safe: omitting `BIGQUERY_PROJECT_ID` silently disables all inserts.
 - **index.test.js**: Jest unit tests for `controlRobot` (authentication, command validation, dispatching, error handling).
 - **telemetry.test.js**: Jest unit tests for `telemetryIngestion` (32 tests covering validation, BigQuery inserts, partial failures, auth).
+- **ingress.test.js**: Jest unit tests for `unifiedIngress` (per-device auth, type-field routing, health-leg fail-open behaviour).
 - **bigquery-client.test.js**: Jest unit tests for the BigQuery client wrapper (60 tests covering isEnabled, _formatRow, _isRetryableError, insertEvent, insertEvents, retry behaviour, client initialisation).
-- **auth.js**: API authentication logic using X-API-Key header (shared by both functions).
+- **auth.js**: API authentication logic using X-API-Key header (shared static key, used by `controlRobot` and `telemetryIngestion` only — `ingress.js` uses its own per-device token check instead).
 - **robot-server.py**: Python server running on EV3 robot (separate device) - receives TCP commands and controls motors.
 - **test-client.js**: Test utilities and client examples for development.
 
@@ -92,6 +95,27 @@ BIGQUERY_PROJECT_ID=wrack-control   # required to enable telemetry; omitting sil
 BIGQUERY_DATASET=wrack_telemetry    # optional, defaults to "wrack_telemetry"
 BIGQUERY_TABLE=events               # optional, defaults to "events"
 ```
+
+### unifiedIngress endpoint (PEN-227)
+**URL:** `https://europe-central2-[PROJECT-ID].cloudfunctions.net/unifiedIngress`
+**Method:** POST
+**Region:** europe-central2
+**Authentication:** per-device — `X-Device-Id` + `X-Device-Token` headers, checked against the `device-tokens` Secret Manager secret (not `X-API-Key`)
+
+**Request:** identical `{"events": [...]}` batch shape as `telemetryIngestion`, plus an optional `type` field per event (`"health"` or `"event"`; defaults to `"event"` when absent).
+
+**Response shapes:** identical 200/207/400 shapes as `telemetryIngestion` — health-tagged records always count toward `inserted` regardless of downstream push outcome (fail-open).
+
+**Environment variables required:**
+```bash
+GCP_PROJECT_ID=wrack-control            # project the device-tokens secret lives in
+DEVICE_TOKENS_SECRET=device-tokens      # optional, defaults to "device-tokens"
+BIGQUERY_PROJECT_ID=wrack-control       # analytics leg, same as telemetryIngestion
+BIGQUERY_DATASET=wrack_telemetry        # optional
+HEALTH_LEG_FUNCTION_URL=                # unset until PEN-228 exists; health records fail open until then
+```
+
+Provision device tokens with `bash setup-device-tokens.sh --device-id ev3-001 --device-id rpi-camera-01` (see the script header for full usage).
 
 ### Request Format
 ```json
@@ -175,15 +199,20 @@ API_KEY=abc123def456ghi789jkl012mno345pq  # Authentication key
 # Local dev servers
 npm start                   # Start controlRobot on port 8080
 npm run start:telemetry     # Start telemetryIngestion on port 8080
+npm run start:ingress       # Start unifiedIngress on port 8080
 
 # Deployment
 npm run deploy              # Deploy controlRobot to GCP europe-central2
 npm run deploy:telemetry    # Deploy telemetryIngestion to GCP europe-central2
-gcloud builds submit --config cloudbuild.yaml  # Deploy both via Cloud Build
+npm run deploy:ingress      # Deploy unifiedIngress to GCP europe-central2
+gcloud builds submit --config cloudbuild.yaml  # Deploy all three via Cloud Build
+
+# Device tokens (unifiedIngress only)
+bash setup-device-tokens.sh --device-id ev3-001 --device-id rpi-camera-01
 
 # Testing
 npm run test-robot         # Test all robot commands (requires live robot)
-npm test                   # Run all 197 unit tests (Jest)
+npm test                   # Run all unit tests (Jest)
 npm run lint              # Code linting
 ```
 

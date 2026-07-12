@@ -22,8 +22,9 @@ Usage::
     from telemetry.sender import TelemetrySender
 
     sender = TelemetrySender(
-        endpoint="https://europe-central2-wrack-control.cloudfunctions.net/telemetryIngestion",
-        api_key="your-secret-api-key",
+        endpoint="https://europe-central2-wrack-control.cloudfunctions.net/unifiedIngress",
+        device_id="ev3-001",
+        device_token="your-per-device-token",
     )
     result = sender.send_events(events)   # list of event dicts
 """
@@ -128,9 +129,14 @@ class TelemetrySender:
     Parameters
     ----------
     endpoint:
-        Full HTTPS URL of the ``telemetryIngestion`` Cloud Function.
-    api_key:
-        API key sent in the ``X-API-Key`` request header.
+        Full HTTPS URL of the ``unifiedIngress`` Cloud Function (PEN-227).
+    device_id:
+        This device's identifier, sent in the ``X-Device-Id`` request header
+        (also included in every event's ``device_id`` field).
+    device_token:
+        Per-device secret sent in the ``X-Device-Token`` request header.
+        Generate/rotate with
+        ``cloud/functions/setup-device-tokens.sh --device-id <device_id>``.
     batch_size:
         Maximum number of events per HTTP request.
     max_retries:
@@ -149,7 +155,8 @@ class TelemetrySender:
     def __init__(
         self,
         endpoint: str,
-        api_key: str,
+        device_id: str,
+        device_token: str,
         *,
         batch_size: int = DEFAULT_BATCH_SIZE,
         max_retries: int = DEFAULT_MAX_RETRIES,
@@ -163,7 +170,8 @@ class TelemetrySender:
         if max_retries < 0:
             raise ValueError("max_retries must not be negative")
         self.endpoint = endpoint
-        self.api_key = api_key
+        self.device_id = device_id
+        self.device_token = device_token
         self.batch_size = batch_size
         self.max_retries = max_retries
         self.timeout = timeout
@@ -384,7 +392,8 @@ class TelemetrySender:
         """
         headers = {
             "Content-Type": "application/json",
-            "X-API-Key": self.api_key,
+            "X-Device-Id": self.device_id,
+            "X-Device-Token": self.device_token,
         }
         body = json.dumps({"events": batch})
 

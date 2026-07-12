@@ -103,17 +103,13 @@ except Exception as e:
 
 # Load telemetry runtime config (see telemetry_config.py.example for setup instructions)
 _TELEMETRY_ENDPOINT = None
-_TELEMETRY_API_KEY = None
 _TELEMETRY_DEVICE_ID = None
+_TELEMETRY_DEVICE_TOKEN = None
 try:
-    from telemetry_config import TELEMETRY_ENDPOINT, TELEMETRY_API_KEY
+    from telemetry_config import TELEMETRY_ENDPOINT, TELEMETRY_DEVICE_ID, TELEMETRY_DEVICE_TOKEN
     _TELEMETRY_ENDPOINT = TELEMETRY_ENDPOINT
-    _TELEMETRY_API_KEY = TELEMETRY_API_KEY
-    try:
-        from telemetry_config import TELEMETRY_DEVICE_ID
-        _TELEMETRY_DEVICE_ID = TELEMETRY_DEVICE_ID
-    except ImportError:
-        pass
+    _TELEMETRY_DEVICE_ID = TELEMETRY_DEVICE_ID
+    _TELEMETRY_DEVICE_TOKEN = TELEMETRY_DEVICE_TOKEN
     print("Telemetry config loaded")
 except ImportError:
     print("telemetry_config.py not found - events collected but not sent")
@@ -128,10 +124,11 @@ if TelemetryCollector:
     _telemetry_collector = TelemetryCollector(source="ev3")
     print("Telemetry collector initialised")
 
-if TelemetrySender and _TELEMETRY_ENDPOINT and _TELEMETRY_API_KEY:
+if TelemetrySender and _TELEMETRY_ENDPOINT and _TELEMETRY_DEVICE_ID and _TELEMETRY_DEVICE_TOKEN:
     _telemetry_sender = TelemetrySender(
         endpoint=_TELEMETRY_ENDPOINT,
-        api_key=_TELEMETRY_API_KEY,
+        device_id=_TELEMETRY_DEVICE_ID,
+        device_token=_TELEMETRY_DEVICE_TOKEN,
     )
     print("Telemetry sender initialised")
 

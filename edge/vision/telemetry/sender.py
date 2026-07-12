@@ -20,8 +20,9 @@ Usage::
     from telemetry.sender import RpiTelemetrySender
 
     sender = RpiTelemetrySender(
-        endpoint="https://europe-central2-wrack-control.cloudfunctions.net/telemetryIngestion",
-        api_key="your-secret-api-key",
+        endpoint="https://europe-central2-wrack-control.cloudfunctions.net/unifiedIngress",
+        device_id="rpi-camera-01",
+        device_token="your-per-device-token",
     )
     result = sender.send_events(events)   # list of event dicts
 """
@@ -88,12 +89,19 @@ class RpiTelemetrySender:
     Parameters
     ----------
     endpoint:
-        Full HTTPS URL of the ``telemetryIngestion`` Cloud Function. Falls
-        back to the ``TELEMETRY_ENDPOINT`` environment variable. Raises
+        Full HTTPS URL of the ``unifiedIngress`` Cloud Function (PEN-227).
+        Falls back to the ``TELEMETRY_ENDPOINT`` environment variable. Raises
         ``ValueError`` at construction time if neither is set.
-    api_key:
-        API key sent in the ``X-API-Key`` request header. Falls back to the
-        ``TELEMETRY_API_KEY`` environment variable (default ``""``).
+    device_id:
+        This device's identifier, sent in the ``X-Device-Id`` request header.
+        Falls back to the ``RPI_DEVICE_ID`` environment variable (default
+        ``"rpi-camera-01"``) — the same variable already used to label this
+        device's events.
+    device_token:
+        Per-device secret sent in the ``X-Device-Token`` request header.
+        Falls back to the ``TELEMETRY_DEVICE_TOKEN`` environment variable
+        (default ``""``). Generate/rotate with
+        ``cloud/functions/setup-device-tokens.sh --device-id <device_id>``.
     batch_size:
         Maximum number of events per HTTP request. Falls back to the
         ``TELEMETRY_BATCH_SIZE`` environment variable, then
@@ -123,7 +131,8 @@ class RpiTelemetrySender:
     def __init__(
         self,
         endpoint: Optional[str] = None,
-        api_key: Optional[str] = None,
+        device_id: Optional[str] = None,
+        device_token: Optional[str] = None,
         *,
         batch_size: Optional[int] = None,
         max_retries: int = DEFAULT_MAX_RETRIES,
@@ -147,7 +156,8 @@ class RpiTelemetrySender:
             raise ValueError("max_retries must not be negative")
 
         self.endpoint = endpoint
-        self.api_key = api_key if api_key is not None else os.environ.get("TELEMETRY_API_KEY", "")
+        self.device_id = device_id if device_id is not None else os.environ.get("RPI_DEVICE_ID", "rpi-camera-01")
+        self.device_token = device_token if device_token is not None else os.environ.get("TELEMETRY_DEVICE_TOKEN", "")
         self.batch_size = batch_size
         self.max_retries = max_retries
         self.timeout = timeout
@@ -296,7 +306,8 @@ class RpiTelemetrySender:
         """
         headers = {
             "Content-Type": "application/json",
-            "X-API-Key": self.api_key,
+            "X-Device-Id": self.device_id,
+            "X-Device-Token": self.device_token,
         }
         body = json.dumps({"events": batch}).encode("utf-8")
         req = urllib_request.Request(self.endpoint, data=body, headers=headers, method="POST")

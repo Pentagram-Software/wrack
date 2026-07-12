@@ -33,6 +33,44 @@ steps:
   - '--set-env-vars'
   - 'API_KEY=${_API_KEY},BIGQUERY_PROJECT_ID=${_BIGQUERY_PROJECT_ID},BIGQUERY_DATASET=${_BIGQUERY_DATASET}'
 
+# Deploy unifiedIngress Cloud Function (PEN-227)
+# --gen2 is required here (unlike the two functions above): the IAM grant
+# step right after this one looks up the runtime service account via
+# `gcloud functions describe --gen2`, which only returns serviceConfig for a
+# Gen2 function. Deploying this one as Gen1 like its neighbors would make
+# that lookup fail.
+- name: 'gcr.io/cloud-builders/gcloud'
+  args:
+  - 'functions'
+  - 'deploy'
+  - 'unifiedIngress'
+  - '--gen2'
+  - '--runtime=nodejs20'
+  - '--trigger-http'
+  - '--allow-unauthenticated'
+  - '--region=europe-central2'
+  - '--set-env-vars'
+  - 'GCP_PROJECT_ID=${_BIGQUERY_PROJECT_ID},DEVICE_TOKENS_SECRET=${_DEVICE_TOKENS_SECRET},BIGQUERY_PROJECT_ID=${_BIGQUERY_PROJECT_ID},BIGQUERY_DATASET=${_BIGQUERY_DATASET},HEALTH_LEG_FUNCTION_URL=${_HEALTH_LEG_FUNCTION_URL}'
+
+# Grant unifiedIngress's runtime service account access to its own auth
+# secret. Without this the function deploys successfully but every real
+# request fails authentication — it can't read device-tokens to check
+# anything against. Re-running on every build is a safe no-op once the
+# binding exists. Mirrors the equivalent step in
+# .github/workflows/deploy-cloud-functions.yml — that workflow and this file
+# are two independent deploy paths and neither automatically keeps the other
+# in sync, so this needs to be maintained in both places.
+- name: 'gcr.io/cloud-builders/gcloud'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    RUNTIME_SA=$(gcloud functions describe unifiedIngress --gen2 --region=europe-central2 --format='value(serviceConfig.serviceAccountEmail)')
+    gcloud secrets add-iam-policy-binding "${_DEVICE_TOKENS_SECRET}" \
+      --member="serviceAccount:${RUNTIME_SA}" \
+      --role="roles/secretmanager.secretAccessor"
+
 # Tag the image as latest
 - name: 'gcr.io/cloud-builders/docker'
   args: ['tag', 'gcr.io/$PROJECT_ID/mindstorms-controller:${SHORT_SHA}', 'gcr.io/$PROJECT_ID/mindstorms-controller:latest']
@@ -46,6 +84,10 @@ substitutions:
   _API_KEY: 'your-secure-api-key-here'
   _BIGQUERY_PROJECT_ID: 'wrack-control'
   _BIGQUERY_DATASET: 'wrack_telemetry'
+  _DEVICE_TOKENS_SECRET: 'device-tokens'
+  # Left empty until PEN-228 (health-leg push function) is deployed — the
+  # ingress fails open (logs and drops) on type=health records until then.
+  _HEALTH_LEG_FUNCTION_URL: ''
 
 options:
   logging: CLOUD_LOGGING_ONLY

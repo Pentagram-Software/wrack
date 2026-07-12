@@ -49,6 +49,11 @@
       "type": ["string", "null"],
       "description": "Unique device identifier (e.g. ev3-001, rpi-camera-01)"
     },
+    "type": {
+      "type": ["string", "null"],
+      "enum": ["health", "event", null],
+      "description": "Coarse routing discriminator for the unified ingress (PEN-227): health records route to Grafana Cloud, event records to BigQuery. Optional; absent records default to \"event\" for backward compatibility with senders that don't set it yet."
+    },
     "payload": {
       "type": "object",
       "description": "Event-type-specific data; validated against the per-type payload schema"

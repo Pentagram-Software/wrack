@@ -6,8 +6,10 @@
   "scripts": {
     "start": "functions-framework --target=controlRobot",
     "start:telemetry": "functions-framework --target=telemetryIngestion",
+    "start:ingress": "functions-framework --target=unifiedIngress",
     "deploy": "gcloud functions deploy controlRobot --runtime nodejs20 --trigger-http --allow-unauthenticated --region europe-central2 --set-env-vars ROBOT_HOST=${ROBOT_HOST},ROBOT_PORT=${ROBOT_PORT},API_KEY=${API_KEY}",
     "deploy:telemetry": "gcloud functions deploy telemetryIngestion --runtime nodejs20 --trigger-http --allow-unauthenticated --region europe-central2 --set-env-vars API_KEY=${API_KEY},BIGQUERY_PROJECT_ID=${BIGQUERY_PROJECT_ID},BIGQUERY_DATASET=${BIGQUERY_DATASET}",
+    "deploy:ingress": "gcloud functions deploy unifiedIngress --runtime nodejs20 --trigger-http --allow-unauthenticated --region europe-central2 --set-env-vars GCP_PROJECT_ID=${GCP_PROJECT_ID},DEVICE_TOKENS_SECRET=${DEVICE_TOKENS_SECRET},BIGQUERY_PROJECT_ID=${BIGQUERY_PROJECT_ID},BIGQUERY_DATASET=${BIGQUERY_DATASET},HEALTH_LEG_FUNCTION_URL=${HEALTH_LEG_FUNCTION_URL}",
     "test-robot": "node test-client.js",
     "test": "jest",
     "lint": "eslint ."
@@ -15,6 +17,7 @@
   "dependencies": {
     "@google-cloud/bigquery": "^8.3.1",
     "@google-cloud/functions-framework": "^3.3.0",
+    "@google-cloud/secret-manager": "^6.2.0",
     "cors": "^2.8.5",
     "express": "^4.18.2"
   },

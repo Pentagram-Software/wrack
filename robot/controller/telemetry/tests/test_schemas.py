@@ -7,6 +7,7 @@ import pytest
 from telemetry.schemas import (
     VALID_EVENT_TYPES,
     VALID_SOURCES,
+    VALID_RECORD_TYPES,
     P0_EVENT_TYPES,
     ValidationError,
     is_valid_event,
@@ -91,6 +92,10 @@ class TestConstants:
 
     def test_valid_sources_contains_cloud_functions(self):
         assert "cloud_functions" in VALID_SOURCES
+
+    def test_valid_record_types_contains_health_and_event(self):
+        assert "health" in VALID_RECORD_TYPES
+        assert "event" in VALID_RECORD_TYPES
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +182,32 @@ class TestEnvelopeValidation:
             # Non-P0 types have no payload validator, so only envelope checked
             if et not in P0_EVENT_TYPES:
                 validate_event(event)
+
+    # ── type field (PEN-227 unified ingress routing) ──────────────────────
+
+    def test_absent_type_passes(self):
+        event = _make_event("battery_status", _battery_payload())
+        assert "type" not in event
+        validate_event(event)  # should not raise
+
+    def test_explicit_none_type_passes(self):
+        event = _make_event("battery_status", _battery_payload(), type=None)
+        validate_event(event)
+
+    def test_all_valid_record_types_accepted(self):
+        for rt in VALID_RECORD_TYPES:
+            event = _make_event("battery_status", _battery_payload(), type=rt)
+            validate_event(event)
+
+    def test_invalid_type_raises(self):
+        # A typo like "heath" must be rejected locally, the same way the
+        # unified ingress (cloud/functions/ingress.js::isValidTypeField)
+        # rejects it server-side — not silently pass local validation and
+        # only surface as a rejected batch once it reaches the ingress.
+        event = _make_event("battery_status", _battery_payload(), type="heath")
+        with pytest.raises(ValidationError) as exc_info:
+            validate_event(event)
+        assert any("type" in e for e in exc_info.value.errors)
 
 
 # ---------------------------------------------------------------------------
