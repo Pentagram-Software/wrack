@@ -318,22 +318,29 @@ functions.http('unifiedIngress', (req, res) => {
     const eventRows = validRows.filter((r) => r.type === 'event');
     const healthRows = validRows.filter((r) => r.type === 'health');
 
-    // Health leg: fail open. Every health record counts as inserted from the
-    // caller's point of view — downstream push failures are logged, never
-    // surfaced, matching PEN-218's "a missed metric point is low stakes".
-    if (healthRows.length > 0) {
-      await pushHealthRecords(healthRows.map((r) => r.event));
-    }
+    // The two legs are deliberately decoupled (PEN-218): health fails open
+    // and never retries, analytics retries hard and surfaces failures. They
+    // used to run sequentially (await health, then await BigQuery) — but
+    // each has its own multi-second worst case (health's own time budget,
+    // ~7s; BigQuery's exponential-backoff retries, up to ~7s), and summed
+    // sequentially that comfortably exceeds both senders' 10s HTTP timeout,
+    // causing the sender to time out and retry a batch the ingress already
+    // accepted. Running them concurrently bounds total time to whichever
+    // leg is slower, not their sum.
+    const healthPromise =
+      healthRows.length > 0 ? pushHealthRecords(healthRows.map((r) => r.event)) : Promise.resolve([]);
+    const eventPromise = eventRows.length > 0 ? insertEvents(eventRows.map((r) => r.event)) : Promise.resolve(null);
 
-    // Analytics leg: retries hard, failures are surfaced (losing an
-    // analytics event is costlier than missing one health sample).
+    const [, result] = await Promise.all([healthPromise, eventPromise]);
+
+    // Analytics leg result — health leg counts every record as "inserted"
+    // from the caller's point of view regardless of outcome (fail-open), so
+    // there's nothing further to process for it here.
     let eventInsertedCount = 0;
     const eventFailures = [];
     let hardFailure = null;
 
-    if (eventRows.length > 0) {
-      const result = await insertEvents(eventRows.map((r) => r.event));
-
+    if (result) {
       if (result.success) {
         eventInsertedCount = eventRows.length;
       } else if (result.partialFailure) {

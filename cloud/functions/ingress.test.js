@@ -737,6 +737,54 @@ describe('unifiedIngress handler — type=health routing', () => {
 // ─── Mixed batches ─────────────────────────────────────────────────────────────
 
 describe('unifiedIngress handler — mixed type=event and type=health batch', () => {
+  test('runs the health leg and analytics leg concurrently, not sequentially', async () => {
+    // Each leg has its own multi-second worst case (health's time budget,
+    // BigQuery's retry backoff) — running them sequentially would sum both,
+    // easily exceeding the senders' 10s HTTP timeout. Both underlying calls
+    // are deliberately left unresolved here; if the legs were sequential,
+    // the analytics call would never even start until the health call
+    // resolved.
+    process.env.HEALTH_LEG_FUNCTION_URL = 'https://example.test/health-leg';
+
+    let resolveFetch;
+    global.fetch = jest.fn().mockImplementation(
+      () => new Promise((resolve) => { resolveFetch = () => resolve({ ok: true, status: 200 }); })
+    );
+
+    let resolveInsert;
+    mockInsert = jest.fn().mockImplementation(
+      () => new Promise((resolve) => { resolveInsert = () => resolve([]); })
+    );
+
+    const events = [
+      validEvent({ event_id: 'evt-analytics' }),
+      validEvent({
+        event_id: 'evt-health',
+        type: 'health',
+        event_type: 'device_status',
+        payload: { device_name: 'ev3', status: 'connected' },
+      }),
+    ];
+    const req = makeReq({ body: { events } });
+    const res = makeRes();
+    const handlerPromise = invokeHandler(req, res);
+
+    // Flush pending microtasks (auth check, validation loop) so execution
+    // reaches the point where both legs are kicked off, without resolving
+    // either leg's own call.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(mockInsert).toHaveBeenCalledTimes(1);
+
+    resolveFetch();
+    resolveInsert();
+    await handlerPromise;
+
+    expect(res.statusCode).toBe(200);
+    expect(res.data.inserted).toBe(2);
+  });
+
   test('routes each record correctly and combines counts', async () => {
     process.env.HEALTH_LEG_FUNCTION_URL = 'https://example.test/health-leg';
     const events = [
