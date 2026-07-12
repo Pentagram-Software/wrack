@@ -173,6 +173,24 @@ async function pushHealthRecord(event) {
   }
 }
 
+// A single request's health records were previously fanned out with one
+// concurrent fetch per record and no limit — a large batch (from a valid or
+// compromised device; nothing upstream caps events.length) could open
+// hundreds or thousands of simultaneous outbound connections, exhausting
+// this instance's sockets/memory and potentially overwhelming the
+// downstream health-leg function. Processing in bounded chunks caps how
+// many pushes are ever in flight at once, regardless of batch size.
+const HEALTH_PUSH_CONCURRENCY = 20;
+
+async function pushHealthRecords(events) {
+  const results = [];
+  for (let i = 0; i < events.length; i += HEALTH_PUSH_CONCURRENCY) {
+    const chunk = events.slice(i, i + HEALTH_PUSH_CONCURRENCY);
+    results.push(...(await Promise.allSettled(chunk.map((event) => pushHealthRecord(event)))));
+  }
+  return results;
+}
+
 // ─── HTTP handler ─────────────────────────────────────────────────────────────
 
 functions.http('unifiedIngress', (req, res) => {
@@ -255,7 +273,7 @@ functions.http('unifiedIngress', (req, res) => {
     // caller's point of view — downstream push failures are logged, never
     // surfaced, matching PEN-218's "a missed metric point is low stakes".
     if (healthRows.length > 0) {
-      await Promise.allSettled(healthRows.map((r) => pushHealthRecord(r.event)));
+      await pushHealthRecords(healthRows.map((r) => r.event));
     }
 
     // Analytics leg: retries hard, failures are surfaced (losing an

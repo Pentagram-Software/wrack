@@ -600,6 +600,41 @@ describe('unifiedIngress handler — type=health routing', () => {
     expect(res.data.inserted).toBe(1);
     expect(res.data.failed).toBe(0);
   });
+
+  test('caps concurrent health-leg pushes so a large batch cannot open unbounded outbound connections', async () => {
+    process.env.HEALTH_LEG_FUNCTION_URL = 'https://example.test/health-leg';
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    global.fetch = jest.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          setTimeout(() => {
+            inFlight -= 1;
+            resolve({ ok: true, status: 200 });
+          }, 0);
+        })
+    );
+
+    const events = Array.from({ length: 45 }, (_, i) =>
+      validEvent({
+        event_id: `evt-health-${i}`,
+        type: 'health',
+        event_type: 'device_status',
+        payload: { device_name: 'ev3', status: 'connected' },
+      })
+    );
+    const req = makeReq({ body: { events } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.data.inserted).toBe(45);
+    expect(global.fetch).toHaveBeenCalledTimes(45);
+    expect(maxInFlight).toBeLessThanOrEqual(20);
+  });
 });
 
 // ─── Mixed batches ─────────────────────────────────────────────────────────────
