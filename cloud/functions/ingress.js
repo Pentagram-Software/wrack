@@ -120,9 +120,15 @@ function resolveType(event) {
   return event && event.type === 'health' ? 'health' : 'event';
 }
 
+// A stalled health endpoint must not be able to hold the whole ingress
+// request open — that would defeat both "return 200 quickly" and the
+// documented fail-open behavior. Bounds each push to a few seconds.
+const HEALTH_LEG_FETCH_TIMEOUT_MS = 3000;
+
 /**
  * Push a single health record to the health-leg function. Always fails open:
- * a missing URL or a failed call is logged and swallowed, never thrown.
+ * a missing URL, a timeout, or a failed call is logged and swallowed, never
+ * thrown.
  */
 async function pushHealthRecord(event) {
   const url = _healthLegFunctionUrl();
@@ -136,6 +142,7 @@ async function pushHealthRecord(event) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(event),
+      signal: AbortSignal.timeout(HEALTH_LEG_FETCH_TIMEOUT_MS),
     });
     if (!res.ok) {
       console.error(`[ingress] health leg push responded ${res.status} for event ${event.event_id}`);

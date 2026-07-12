@@ -481,6 +481,29 @@ describe('unifiedIngress handler — type=health routing', () => {
     expect(res.data.inserted).toBe(1);
     expect(res.data.failed).toBe(0);
   });
+
+  test('passes an abort signal so a stalled health endpoint cannot hang the request', async () => {
+    process.env.HEALTH_LEG_FUNCTION_URL = 'https://example.test/health-leg';
+    const event = validEvent({ type: 'health', event_type: 'device_status', payload: { device_name: 'ev3', status: 'connected' } });
+    const req = makeReq({ body: { events: [event] } });
+    await invokeHandler(req, makeRes());
+
+    const fetchOptions = global.fetch.mock.calls[0][1];
+    expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  test('fails open (still counted inserted) when the health-leg call times out', async () => {
+    process.env.HEALTH_LEG_FUNCTION_URL = 'https://example.test/health-leg';
+    global.fetch = jest.fn().mockRejectedValue(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+    const event = validEvent({ type: 'health', event_type: 'device_status', payload: { device_name: 'ev3', status: 'connected' } });
+    const req = makeReq({ body: { events: [event] } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.data.inserted).toBe(1);
+    expect(res.data.failed).toBe(0);
+  });
 });
 
 // ─── Mixed batches ─────────────────────────────────────────────────────────────
