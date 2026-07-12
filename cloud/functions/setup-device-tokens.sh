@@ -38,6 +38,14 @@ PROJECT_ID="${GCP_PROJECT_ID:-wrack-control}"
 DEVICE_IDS=()
 ROTATE_IDS=()
 
+# Set by write_credentials_file() to the secret's latest version identifier
+# at the moment it was read (or "<none>" if the secret didn't exist yet).
+# store_in_secret_manager() re-checks this right before writing — an
+# optimistic-concurrency guard against two concurrent runs each reading the
+# same version and the second write silently discarding the first run's
+# changes (e.g. un-rotating a token someone else just rotated).
+BASE_VERSION=""
+
 # Defaults — overridable via flags
 SECRET_NAME="device-tokens"
 KEY_FILE="./device-tokens.json"
@@ -74,6 +82,22 @@ info()  { echo "  ▸ $*"; }
 ok()    { echo "  ✓ $*"; }
 warn()  { echo "  ⚠ $*" >&2; }
 err()   { echo "  ✗ $*" >&2; }
+
+# Prints the secret's current latest enabled version resource name, or
+# "<none>" if the secret doesn't exist. Used for the optimistic-concurrency
+# check between write_credentials_file() and store_in_secret_manager().
+latest_secret_version() {
+  if ! gcloud secrets describe "${SECRET_NAME}" --project="${PROJECT_ID}" &>/dev/null; then
+    echo "<none>"
+    return
+  fi
+  gcloud secrets versions list "${SECRET_NAME}" \
+    --project="${PROJECT_ID}" \
+    --filter='state=enabled' \
+    --sort-by='~createTime' \
+    --limit=1 \
+    --format='value(name)'
+}
 
 print_banner() {
   echo ""
@@ -136,11 +160,18 @@ write_credentials_file() {
     return
   fi
 
+  # A `trap ... RETURN` set here does NOT reliably fire when this function
+  # itself returns — in practice it fires on the *next* function return in
+  # the call chain (main()'s, once every step here has already finished),
+  # by which point existing_file is out of scope and `set -u` kills the
+  # script with "unbound variable" after the secret was already stored
+  # successfully. Cleaned up explicitly at the end of this function instead.
   local existing_file
   existing_file="$(mktemp)"
-  trap 'rm -f "${existing_file}"' RETURN
 
-  if gcloud secrets describe "${SECRET_NAME}" --project="${PROJECT_ID}" &>/dev/null; then
+  BASE_VERSION="$(latest_secret_version)"
+
+  if [[ "${BASE_VERSION}" != "<none>" ]]; then
     gcloud secrets versions access latest --secret="${SECRET_NAME}" --project="${PROJECT_ID}" > "${existing_file}"
     ok "Loaded existing token map (preserving tokens for devices not named on this run)"
   else
@@ -179,6 +210,7 @@ for device_id in rotate_ids:
 json.dump(existing, open('${KEY_FILE}', 'w'), indent=2, sort_keys=True)
 "
 
+  rm -f "${existing_file}"
   chmod 600 "${KEY_FILE}"
   ok "Device-token map written to ${KEY_FILE} (permissions: 600)"
 }
@@ -192,7 +224,20 @@ store_in_secret_manager() {
     return
   fi
 
-  if gcloud secrets describe "${SECRET_NAME}" --project="${PROJECT_ID}" &>/dev/null; then
+  # Optimistic-concurrency check: if the secret changed since we read it (a
+  # concurrent run added a version, or created the secret from scratch), our
+  # in-memory merge is based on stale data — writing it now would silently
+  # discard whatever that other run just changed (e.g. un-rotate a token).
+  local current_version
+  current_version="$(latest_secret_version)"
+  if [[ "${current_version}" != "${BASE_VERSION}" ]]; then
+    err "device-tokens secret changed since it was read (was '${BASE_VERSION}', now '${current_version}') —"
+    err "another setup-device-tokens.sh run modified it concurrently. Re-run this script to"
+    err "merge against the latest state instead of overwriting those changes."
+    exit 1
+  fi
+
+  if [[ "${current_version}" != "<none>" ]]; then
     run gcloud secrets versions add "${SECRET_NAME}" \
       --data-file="${KEY_FILE}" \
       --project="${PROJECT_ID}"
