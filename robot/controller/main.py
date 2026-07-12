@@ -76,8 +76,9 @@ except Exception as e:
 TelemetryCollector = None
 TelemetrySender = None
 StatusCollector = None
+HeartbeatSender = None
 try:
-    from telemetry import TelemetryCollector, TelemetrySender, StatusCollector
+    from telemetry import TelemetryCollector, TelemetrySender, StatusCollector, HeartbeatSender
     print("Telemetry module imported successfully")
 except ImportError as e:
     print("Telemetry module not available: {} - telemetry collection will be disabled".format(e))
@@ -89,7 +90,7 @@ except Exception as e:
     except Exception:
         pass
     # Isolate which submodule has the syntax error
-    for _submod in ('telemetry.schemas', 'telemetry.collector', 'telemetry.sender', 'telemetry.status_collector'):
+    for _submod in ('telemetry.schemas', 'telemetry.collector', 'telemetry.sender', 'telemetry.status_collector', 'telemetry.heartbeat'):
         try:
             __import__(_submod)
             print("  OK: " + _submod)
@@ -115,10 +116,22 @@ except ImportError:
     print("telemetry_config.py not found - events collected but not sent")
     print("Copy telemetry_config.py.example to telemetry_config.py to enable sending")
 
+# Optional heartbeat interval override (PEN-229) — kept separate from the
+# import above so existing telemetry_config.py files without this field
+# still load; absence just means HeartbeatSender falls back to its own
+# DEFAULT_HEARTBEAT_INTERVAL.
+_TELEMETRY_HEARTBEAT_INTERVAL_S = None
+try:
+    from telemetry_config import TELEMETRY_HEARTBEAT_INTERVAL_S
+    _TELEMETRY_HEARTBEAT_INTERVAL_S = TELEMETRY_HEARTBEAT_INTERVAL_S
+except ImportError:
+    pass
+
 # Initialise telemetry instances (collection always on; sending only when config is present)
 _telemetry_collector = None
 _telemetry_sender = None
 _status_collector = None
+_heartbeat_sender = None
 
 if TelemetryCollector:
     _telemetry_collector = TelemetryCollector(source="ev3")
@@ -131,6 +144,15 @@ if TelemetrySender and _TELEMETRY_ENDPOINT and _TELEMETRY_DEVICE_ID and _TELEMET
         device_token=_TELEMETRY_DEVICE_TOKEN,
     )
     print("Telemetry sender initialised")
+
+if HeartbeatSender and _telemetry_collector and _telemetry_sender:
+    if _TELEMETRY_HEARTBEAT_INTERVAL_S:
+        _heartbeat_sender = HeartbeatSender(
+            _telemetry_collector, _telemetry_sender, interval=_TELEMETRY_HEARTBEAT_INTERVAL_S
+        )
+    else:
+        _heartbeat_sender = HeartbeatSender(_telemetry_collector, _telemetry_sender)
+    print("Heartbeat sender initialised (interval={}s)".format(_heartbeat_sender.interval))
 
 
 def _telemetry_send_loop():
@@ -434,12 +456,15 @@ def cancel_terrain_scan(value):
 def quit(value):
     global terrain_scanner, wake_word_detector
     global _runtime_controller, _runtime_remote_controller
-    global _status_collector
+    global _status_collector, _heartbeat_sender
 
     # Stop telemetry collection and flush any remaining buffered events
     if _status_collector:
         print("Shutting down StatusCollector...")
         _status_collector.stop()
+    if _heartbeat_sender:
+        print("Shutting down HeartbeatSender...")
+        _heartbeat_sender.stop()
     if _telemetry_sender and _telemetry_collector:
         print("Flushing telemetry events...")
         try:
@@ -676,6 +701,14 @@ def main():
         _status_collector = StatusCollector(_telemetry_collector, device_manager)
         _status_collector.start()
         print("StatusCollector started (battery 60s, motor 10s, device events immediate)")
+
+    # Start the liveness heartbeat loop (PEN-229) — independent of the 2-minute
+    # analytics flush below, since a heartbeat batched behind that would defeat
+    # the point of near-real-time offline detection.
+    global _heartbeat_sender
+    if _heartbeat_sender:
+        _heartbeat_sender.start()
+        print("Heartbeat sender started ({}s interval)".format(_heartbeat_sender.interval))
 
     # Start background telemetry flush thread (sends buffered events every 2 minutes)
     if _telemetry_sender:

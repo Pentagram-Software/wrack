@@ -14,6 +14,7 @@ import pytest
 
 import telemetry.collector as collector_module
 from telemetry.collector import TelemetryCollector, _generate_event_id, _utc_now_iso
+from telemetry.schemas import validate_event
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +233,54 @@ class TestCreateEvent:
         c = TelemetryCollector()
         c.create_event("battery_status", {"voltage_mv": 7000, "percentage": 80.0})
         assert c.buffer_size == 0
+
+    def test_record_type_omitted_by_default(self):
+        c = TelemetryCollector()
+        event = c.create_event("battery_status", {"voltage_mv": 7000, "percentage": 80.0})
+        assert "type" not in event
+
+    def test_record_type_set_when_given(self):
+        c = TelemetryCollector()
+        event = c.create_event(
+            "device_status", {"device_name": "ev3", "status": "connected"}, record_type="health"
+        )
+        assert event["type"] == "health"
+
+
+# ---------------------------------------------------------------------------
+# create_heartbeat_event (PEN-229)
+# ---------------------------------------------------------------------------
+
+class TestCreateHeartbeatEvent:
+    def test_reuses_device_status_event_type(self):
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event()
+        assert event["event_type"] == "device_status"
+
+    def test_tagged_as_health_record_type(self):
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event()
+        assert event["type"] == "health"
+
+    def test_default_payload(self):
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event()
+        assert event["payload"] == {"device_name": "ev3", "status": "connected"}
+
+    def test_custom_device_name_and_status(self):
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event(device_name="ev3-002", status="connected")
+        assert event["payload"]["device_name"] == "ev3-002"
+
+    def test_does_not_buffer_event(self):
+        c = TelemetryCollector()
+        c.create_heartbeat_event()
+        assert c.buffer_size == 0
+
+    def test_passes_schema_validation(self):
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event()
+        validate_event(event)  # must not raise
 
 
 # ---------------------------------------------------------------------------
