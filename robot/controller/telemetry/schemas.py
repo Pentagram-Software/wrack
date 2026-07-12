@@ -199,6 +199,19 @@ def _validate_envelope(event: Any) -> List[str]:
     if not isinstance(payload, dict):
         errors.append("payload must be a dict (JSON object)")
 
+    # type (PEN-227) — optional, routes the event at the unified ingress.
+    # VALID_RECORD_TYPES existed as a constant here without ever being
+    # checked, so a typo like "heath" passed local validation and only
+    # surfaced as a rejection once it reached the ingress — this mirrors
+    # the check already present in the TypeScript validators
+    # (shared/telemetry-types/typescript/events.ts,
+    # cloud/functions/schemas.ts).
+    record_type = event.get("type")
+    if record_type is not None and record_type not in VALID_RECORD_TYPES:
+        errors.append(
+            "type must be one of: " + ", ".join(VALID_RECORD_TYPES) + " (or absent)"
+        )
+
     return errors
 
 
