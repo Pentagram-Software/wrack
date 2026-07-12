@@ -273,19 +273,22 @@ functions.http('unifiedIngress', (req, res) => {
         const failedIds = new Set((result.errors || []).map((e) => e.event_id).filter(Boolean));
         eventInsertedCount = eventRows.filter((r) => !failedIds.has(r.event.event_id)).length;
         for (const e of result.errors || []) {
-          eventFailures.push({
-            index: eventRows.find((r) => r.event.event_id === e.event_id)?.index ?? null,
-            event_id: e.event_id,
-            errors: e.errors,
-          });
+          // No `index` field here, deliberately — it's how the EV3/Pi sender
+          // (sender.py::_classify_207) tells a permanent validation failure
+          // (has index) from a retryable BigQuery failure (event_id only).
+          // Adding index here made every BigQuery failure look permanent,
+          // so genuinely transient failures were dropped instead of retried.
+          eventFailures.push({ event_id: e.event_id, errors: e.errors });
         }
       } else {
         // Hard failure or BigQuery not configured (skipped) — every event
         // row in this batch is reported as failed, but health records that
-        // already succeeded above are not affected.
+        // already succeeded above are not affected. No `index` here either,
+        // for the same reason: a hard BigQuery failure is exactly the kind
+        // of transient condition the sender should retry.
         const message = result.reason || result.error || 'BigQuery insert failed';
         for (const r of eventRows) {
-          eventFailures.push({ index: r.index, event_id: r.event.event_id, errors: [message] });
+          eventFailures.push({ event_id: r.event.event_id, errors: [message] });
         }
         hardFailure = message;
       }

@@ -468,6 +468,57 @@ describe('unifiedIngress handler — type=event routing', () => {
     expect(res.data.failed).toBe(1);
     expect(res.data.errors[0].event_id).toBe('evt-bad');
   });
+
+  test('BigQuery partial-failure errors omit index, so the sender classifies them as retryable', async () => {
+    // sender.py::_classify_207 treats any error entry carrying an `index` as
+    // a permanent validation failure, and any entry with only `event_id` as
+    // a retryable BigQuery failure — the exact contract telemetry.js already
+    // established. Regressing this (e.g. by adding `index` back) silently
+    // turns transient BigQuery errors into dropped, never-retried events.
+    const partialError = new Error('PartialFailureError');
+    partialError.name = 'PartialFailureError';
+    partialError.errors = [
+      {
+        row: { insertId: 'evt-bad', json: { event_id: 'evt-bad' } },
+        errors: [{ reason: 'backendError', message: 'transient BigQuery error' }],
+      },
+    ];
+    mockInsert = jest.fn().mockRejectedValue(partialError);
+
+    const events = [validEvent({ event_id: 'evt-good' }), validEvent({ event_id: 'evt-bad' })];
+    const req = makeReq({ body: { events } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(207);
+    expect(res.data.errors[0]).toEqual({ event_id: 'evt-bad', errors: expect.any(Array) });
+    expect('index' in res.data.errors[0]).toBe(false);
+  });
+
+  test('a hard BigQuery failure also omits index, when surfaced alongside a successful health record', async () => {
+    // A fully-hard-failed batch on its own returns a 500 with a single
+    // top-level error, not a per-event array — mixing in a health record
+    // (which always "succeeds" from the caller's point of view) forces the
+    // 207 path instead, so the per-event error shape is actually observable.
+    process.env.HEALTH_LEG_FUNCTION_URL = 'https://example.test/health-leg';
+    mockInsert = jest.fn().mockRejectedValue(new Error('Connection refused'));
+    const events = [
+      validEvent({ event_id: 'evt-a' }),
+      validEvent({
+        event_id: 'evt-health',
+        type: 'health',
+        event_type: 'device_status',
+        payload: { device_name: 'ev3', status: 'connected' },
+      }),
+    ];
+    const req = makeReq({ body: { events } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(207);
+    expect(res.data.errors[0]).toEqual({ event_id: 'evt-a', errors: ['Connection refused'] });
+    expect('index' in res.data.errors[0]).toBe(false);
+  });
 });
 
 // ─── type=health routing ──────────────────────────────────────────────────────
