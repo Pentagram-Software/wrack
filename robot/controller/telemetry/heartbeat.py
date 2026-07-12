@@ -64,8 +64,12 @@ class HeartbeatSender:
         immediately, not queued for the next flush.
     sender:
         A :class:`~telemetry.sender.TelemetrySender` used to POST each
-        heartbeat immediately via ``send_events_async`` so a slow or failed
-        send can never block the next tick.
+        heartbeat. Sends run on a single dedicated worker thread that this
+        class owns and tracks (see :meth:`_send_heartbeat`) — never via
+        ``TelemetrySender.send_events_async``, which spawns an untracked
+        thread per call and would accumulate one every tick for as long as
+        a send stays hung (``urequests`` doesn't support a ``timeout``, so a
+        network outage can block a send indefinitely — PEN-229 code review).
     interval:
         Seconds between heartbeats. Defaults to
         :data:`DEFAULT_HEARTBEAT_INTERVAL`.
@@ -85,6 +89,10 @@ class HeartbeatSender:
 
         self._running = False
         self._thread = None
+        # Tracks the single in-flight send worker thread (None when idle).
+        # Bounds concurrent sends to at most one, regardless of how long a
+        # send takes — see the ``sender`` param docstring above.
+        self._send_thread = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -119,26 +127,40 @@ class HeartbeatSender:
         """
         self._running = False
         if self._thread is not None and _THREADING_AVAILABLE:
-            # ``join`` is unavailable on some Pybricks MicroPython builds; the
-            # ``_running`` flag already tells the loop to exit, so treat join
-            # as best-effort and fall back to a plain/absent join on the EV3.
-            join = getattr(self._thread, "join", None)
-            if callable(join):
-                try:
-                    join(timeout=timeout)
-                except TypeError:
-                    try:
-                        join()
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
+            self._join_thread(self._thread, timeout)
             self._thread = None
+        # Best-effort: wait briefly for an in-flight send too, so a caller
+        # that stops right after a tick doesn't race a still-running worker.
+        # If it's genuinely hung (the scenario this tracking exists for), the
+        # join simply times out here and the thread is left to finish or die
+        # on its own — never blocks stop() indefinitely.
+        if self._send_thread is not None and _THREADING_AVAILABLE:
+            self._join_thread(self._send_thread, timeout)
 
     @property
     def is_running(self) -> bool:
         """``True`` while the periodic heartbeat thread is active."""
         return self._running
+
+    @staticmethod
+    def _join_thread(thread: Any, timeout: float) -> None:
+        """Best-effort ``thread.join(timeout=...)``, tolerant of MicroPython.
+
+        ``join`` (and its ``timeout`` kwarg) is unavailable on some Pybricks
+        MicroPython builds — never lets a join failure propagate.
+        """
+        join = getattr(thread, "join", None)
+        if not callable(join):
+            return
+        try:
+            join(timeout=timeout)
+        except TypeError:
+            try:
+                join()
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Manual / forced send
@@ -148,7 +170,8 @@ class HeartbeatSender:
         """Build and send a single heartbeat immediately.
 
         Returns the event dict that was handed to the sender, or ``None`` if
-        building the event failed.
+        building the event failed, or if a previous heartbeat send is still
+        in flight (see :meth:`_send_heartbeat`).
         """
         return self._send_heartbeat()
 
@@ -175,20 +198,50 @@ class HeartbeatSender:
             time.sleep(1)
 
     def _send_heartbeat(self) -> Optional[Dict[str, Any]]:
-        """Build and send one heartbeat event, isolating any failure.
+        """Build one heartbeat event and hand it to the send worker.
 
-        A bug building the event, or a send failure, must never kill the
-        background loop — it should just skip this tick.
+        Skips the tick entirely (does not build or send) while a previous
+        send is still in flight, rather than spawning another thread on top
+        of it — an outage that hangs one send must not accumulate a new
+        thread every tick (PEN-229 code review: unbounded thread growth,
+        since ``urequests`` has no ``timeout`` support and a hung request
+        can block indefinitely). A bug building the event, or a send
+        failure, must never kill the background loop — it should just skip
+        this tick.
         """
+        if self._send_thread is not None:
+            print("HeartbeatSender: skipping tick — previous send still in flight")
+            return None
+
         try:
             event = self.collector.create_heartbeat_event()
         except Exception as exc:  # noqa: BLE001 — one bad build must never kill the loop
             print("HeartbeatSender: failed to build heartbeat event: {}".format(exc))
             return None
 
-        try:
-            self.sender.send_events_async([event])
-        except Exception as exc:  # noqa: BLE001 — one bad send must never kill the loop
-            print("HeartbeatSender: send failed: {}".format(exc))
+        if _THREADING_AVAILABLE:
+            # Pybricks MicroPython's Thread() accepts only ``target``/``args``
+            # — passing ``daemon``/``name`` raises TypeError (PEN-188).
+            self._send_thread = _threading.Thread(target=self._send_worker, args=(event,))
+            self._send_thread.start()
+        else:
+            # No threads on this runtime — send synchronously so the event is
+            # never silently dropped (mirrors TelemetrySender's own fallback).
+            self._send_worker(event)
 
         return event
+
+    def _send_worker(self, event: Dict[str, Any]) -> None:
+        """Thread target: perform one blocking send, then clear the in-flight marker.
+
+        Uses ``TelemetrySender.send_events`` (blocking) rather than
+        ``send_events_async`` — this class already runs the send on its own
+        tracked thread, so a second, untracked thread from the sender would
+        defeat the whole point of tracking one in-flight send at a time.
+        """
+        try:
+            self.sender.send_events([event])
+        except Exception as exc:  # noqa: BLE001 — one bad send must never kill the loop
+            print("HeartbeatSender: send failed: {}".format(exc))
+        finally:
+            self._send_thread = None
