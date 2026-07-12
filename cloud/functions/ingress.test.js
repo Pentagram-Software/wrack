@@ -53,6 +53,7 @@ const {
   resolveType,
   isValidTypeField,
   deriveSourceForDeviceId,
+  _isValidDeviceTokensShape,
   _timingSafeStringEqual,
   _resetDeviceTokensCache,
 } = require('./ingress');
@@ -216,6 +217,37 @@ describe('deriveSourceForDeviceId()', () => {
 
   test('returns null for a device_id matching no known prefix', () => {
     expect(deriveSourceForDeviceId('weird-device-01')).toBeNull();
+  });
+});
+
+// ─── _isValidDeviceTokensShape() unit tests ──────────────────────────────────
+
+describe('_isValidDeviceTokensShape()', () => {
+  test('true for a flat map of string tokens', () => {
+    expect(_isValidDeviceTokensShape({ 'ev3-001': 'abc', 'rpi-camera-01': 'def' })).toBe(true);
+  });
+
+  test('true for an empty object', () => {
+    expect(_isValidDeviceTokensShape({})).toBe(true);
+  });
+
+  test('false for null', () => {
+    expect(_isValidDeviceTokensShape(null)).toBe(false);
+  });
+
+  test('false for an array', () => {
+    expect(_isValidDeviceTokensShape(['ev3-001', 'abc'])).toBe(false);
+  });
+
+  test('false for a string or number', () => {
+    expect(_isValidDeviceTokensShape('hello')).toBe(false);
+    expect(_isValidDeviceTokensShape(42)).toBe(false);
+  });
+
+  test('false when any token value is not a string', () => {
+    expect(_isValidDeviceTokensShape({ 'ev3-001': 12345 })).toBe(false);
+    expect(_isValidDeviceTokensShape({ 'ev3-001': null })).toBe(false);
+    expect(_isValidDeviceTokensShape({ 'ev3-001': { nested: 'object' } })).toBe(false);
   });
 });
 
@@ -393,6 +425,44 @@ describe('unifiedIngress handler — per-device authentication', () => {
 
     expect(res.statusCode).toBe(503);
     expect(res.data.error).not.toMatch(/JSON/i);
+  });
+
+  test('returns 503 (not a crashed 401) when the secret decodes to valid JSON null', async () => {
+    // Object.hasOwn(null, deviceId) throws — without the shape check, this
+    // would surface as a 401 carrying the raw TypeError message instead of
+    // a 503 with a generic one.
+    mockAccessSecretVersion = jest.fn().mockResolvedValue([{ payload: { data: Buffer.from('null') } }]);
+
+    const req = makeReq({ body: { events: [validEvent()] } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(503);
+    expect(res.data.error).not.toMatch(/Cannot convert/i);
+  });
+
+  test('returns 503 when the secret decodes to an array instead of a map', async () => {
+    mockAccessSecretVersion = jest.fn().mockResolvedValue([
+      { payload: { data: Buffer.from(JSON.stringify(['ev3-001', 'ev3-good-token'])) } },
+    ]);
+
+    const req = makeReq({ body: { events: [validEvent()] } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(503);
+  });
+
+  test('returns 503 when a token value in the secret is not a string', async () => {
+    mockAccessSecretVersion = jest.fn().mockResolvedValue([
+      { payload: { data: Buffer.from(JSON.stringify({ 'ev3-001': 12345 })) } },
+    ]);
+
+    const req = makeReq({ body: { events: [validEvent()] } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(503);
   });
 });
 

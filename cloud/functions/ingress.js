@@ -70,6 +70,20 @@ const DEVICE_TOKENS_CACHE_TTL_MS = 5 * 60 * 1000;
 let _deviceTokensCache = null;
 let _deviceTokensCacheTime = 0;
 
+// True only for a flat object mapping deviceId -> token string — e.g.
+// null, an array, or a map with a non-string value all fail this. JSON.parse
+// alone doesn't guarantee this shape (`null`, `"hello"`, `["a"]`, and
+// `{"ev3-001": 12345}` are all valid JSON), and trusting it uncritically
+// isn't just a data-integrity risk: Object.hasOwn(null, deviceId) further
+// down actually throws, which would otherwise leak as a misleading 401
+// (see validateDeviceAuth) instead of the 503 a malformed secret deserves.
+function _isValidDeviceTokensShape(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  return Object.values(value).every((v) => typeof v === 'string');
+}
+
 async function getDeviceTokens() {
   const isFresh = _deviceTokensCache && Date.now() - _deviceTokensCacheTime < DEVICE_TOKENS_CACHE_TTL_MS;
   if (isFresh) {
@@ -78,7 +92,15 @@ async function getDeviceTokens() {
   const client = _getSecretClient();
   const name = `projects/${GCP_PROJECT_ID}/secrets/${DEVICE_TOKENS_SECRET}/versions/latest`;
   const [version] = await client.accessSecretVersion({ name });
-  _deviceTokensCache = JSON.parse(version.payload.data.toString('utf8'));
+  const parsed = JSON.parse(version.payload.data.toString('utf8'));
+  if (!_isValidDeviceTokensShape(parsed)) {
+    // Thrown here, before caching, so malformed data is never trusted even
+    // once — and this propagates through validateDeviceAuth's existing
+    // try/catch, which wraps it as a SecretLoadError (503, generic
+    // message), the same as any other secret-loading failure.
+    throw new Error('device-tokens secret has an unexpected shape (expected a flat object of deviceId -> token strings)');
+  }
+  _deviceTokensCache = parsed;
   _deviceTokensCacheTime = Date.now();
   return _deviceTokensCache;
 }
@@ -439,6 +461,7 @@ module.exports = {
   pushHealthRecord,
   getDeviceTokens,
   SecretLoadError,
+  _isValidDeviceTokensShape,
   _resetDeviceTokensCache,
   _timingSafeStringEqual,
 };
