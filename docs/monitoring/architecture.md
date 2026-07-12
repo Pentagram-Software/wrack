@@ -89,6 +89,14 @@ The Pub/Sub-mediated alternative — a `health` topic symmetric to the analytics
 
 Health push failures fail open (drop and continue) rather than retry hard, unlike the analytics leg. The receiving side of this call is tracked in [PEN-228](https://linear.app/pentagram-software/issue/PEN-228/implement-health-leg-push-function-otlp-push-to-grafana-cloud) — PEN-219 only covers the analytics leg.
 
+**Authenticating the ingress → health-leg call (decided 2026-07-12):** this call currently sends no credential at all — `pushHealthRecord()` issues a bare `fetch()` with no `Authorization` header. That's a real gap: the health-leg function will hold real Grafana OTLP push credentials, so it can't be left as an open, unauthenticated public endpoint the way `controlRobot`/`telemetryIngestion`/`unifiedIngress` are (all three are deployed `--allow-unauthenticated`, per `cloudbuild.yaml`/`package.json`, and rely on their *own* app-level check — API key or per-device token — instead of GCP IAM). Unlike those three, the health-leg function has no external caller to support; it only ever needs to accept calls from `unifiedIngress` itself, which makes GCP's built-in service-to-service authentication the right fit rather than another shared secret:
+
+* Deploy the health-leg function **without** `--allow-unauthenticated`, so GCP's own IAM layer rejects any caller that isn't explicitly granted access.
+* Grant `unifiedIngress`'s runtime service account the Cloud Functions/Cloud Run invoker role on the health-leg function (mirrors the existing pattern in `cloudbuild.yaml` that grants `unifiedIngress`'s service account `roles/secretmanager.secretAccessor` on `device-tokens` — an IAM binding added as part of the deploy step, not a credential baked into either function's code).
+* `pushHealthRecord()` fetches a Google-signed OIDC identity token scoped to the health-leg function's URL (via the metadata server, or `google-auth-library`'s `GoogleAuth.getIdTokenClient(audience)`) and attaches it as `Authorization: Bearer <token>` on each call.
+
+This needs to land as part of [PEN-228](https://linear.app/pentagram-software/issue/PEN-228/implement-health-leg-push-function-otlp-push-to-grafana-cloud)'s scope — both the IAM grant/deploy flag on the receiving side and the identity-token fetch in `pushHealthRecord()` on the calling side — not as a follow-up hardening pass after the endpoint is already live.
+
 ### Dual-homed signals (decided)
 
 Some signals — `video_stream_health` today — need to reach **both** destinations (see the [scope-boundary examples table](scope-boundary.md#examples-from-each-domain)). **Decided (2026-07-12): the device sends two separate records**, one tagged `type: "health"` and one tagged `type: "event"`, rather than the ingress supporting a `type: "both"` that fans out a single record to both topics.
