@@ -37,6 +37,13 @@ const corsHandler = cors({
 const GCP_PROJECT_ID = process.env.GCP_PROJECT_ID || process.env.BIGQUERY_PROJECT_ID || 'wrack-control';
 const DEVICE_TOKENS_SECRET = process.env.DEVICE_TOKENS_SECRET || 'device-tokens';
 
+// Matches DEFAULT_BATCH_SIZE in robot/controller/telemetry/sender.py and
+// edge/vision/telemetry/sender.py — no legitimate sender ever constructs a
+// larger batch. Without this cap, an authenticated or compromised device
+// could submit an arbitrarily large events array, driving unbounded
+// validation work, BigQuery payload size/retries, and health-leg fan-out.
+const MAX_EVENTS_PER_REQUEST = 100;
+
 // Read dynamically (not captured as a top-level const) so unit tests can
 // toggle it per-test via process.env without needing to re-require the
 // module — same rationale as bigquery-client.js's _projectId()/_datasetId().
@@ -288,6 +295,11 @@ functions.http('unifiedIngress', (req, res) => {
     }
     if (events.length === 0) {
       return res.status(400).json({ error: 'events array must not be empty' });
+    }
+    if (events.length > MAX_EVENTS_PER_REQUEST) {
+      return res
+        .status(400)
+        .json({ error: `events array must not exceed ${MAX_EVENTS_PER_REQUEST} events per request` });
     }
 
     // Per-event validation — reuses telemetryIngestion's envelope validator

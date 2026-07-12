@@ -506,6 +506,25 @@ describe('unifiedIngress handler — request body validation', () => {
     await invokeHandler(req, res);
     expect(res.statusCode).toBe(400);
   });
+
+  test('accepts a batch at exactly the 100-event limit', async () => {
+    const events = Array.from({ length: 100 }, (_, i) => validEvent({ event_id: `evt-${i}` }));
+    const req = makeReq({ body: { events } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.data.inserted).toBe(100);
+  });
+
+  test('returns 400 when the batch exceeds the 100-event limit, without touching BigQuery', async () => {
+    const events = Array.from({ length: 101 }, (_, i) => validEvent({ event_id: `evt-${i}` }));
+    const req = makeReq({ body: { events } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+    expect(res.statusCode).toBe(400);
+    expect(res.data.error).toMatch(/100 events/);
+    expect(mockInsert).not.toHaveBeenCalled();
+  });
 });
 
 // ─── type=event routing (default) ─────────────────────────────────────────────
