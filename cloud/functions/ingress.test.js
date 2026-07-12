@@ -635,6 +635,42 @@ describe('unifiedIngress handler — type=health routing', () => {
     expect(global.fetch).toHaveBeenCalledTimes(45);
     expect(maxInFlight).toBeLessThanOrEqual(20);
   });
+
+  test('stops attempting further health chunks once the total time budget is exceeded', async () => {
+    // Chunking bounds concurrency but chunks run sequentially — if every
+    // chunk took close to its full per-item timeout, a large batch could
+    // blow well past the senders' own HTTP timeout. Simulates that by
+    // advancing a mocked Date.now() on every call (independent of real
+    // elapsed time, so the test runs instantly) until the budget trips.
+    process.env.HEALTH_LEG_FUNCTION_URL = 'https://example.test/health-leg';
+
+    const nowSpy = jest.spyOn(Date, 'now');
+    let calls = 0;
+    const base = 1_000_000;
+    nowSpy.mockImplementation(() => base + calls++ * 2500);
+
+    const events = Array.from({ length: 100 }, (_, i) =>
+      validEvent({
+        event_id: `evt-health-${i}`,
+        type: 'health',
+        event_type: 'device_status',
+        payload: { device_name: 'ev3', status: 'connected' },
+      })
+    );
+    const req = makeReq({ body: { events } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    // Every health record still counts as inserted (fail open) even though
+    // most were never attempted — same policy as any other health failure.
+    expect(res.data.inserted).toBe(100);
+    // Only the first chunk (20 records) should have been attempted before
+    // the second deadline check reports the budget exceeded.
+    expect(global.fetch).toHaveBeenCalledTimes(20);
+
+    nowSpy.mockRestore();
+  });
 });
 
 // ─── Mixed batches ─────────────────────────────────────────────────────────────

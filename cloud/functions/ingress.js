@@ -182,9 +182,25 @@ async function pushHealthRecord(event) {
 // many pushes are ever in flight at once, regardless of batch size.
 const HEALTH_PUSH_CONCURRENCY = 20;
 
+// Chunking alone bounds concurrency but not total wall-clock time: chunks
+// run sequentially, so a 100-record batch (5 chunks) where every push hits
+// its own HEALTH_LEG_FETCH_TIMEOUT_MS could take up to 15s — longer than
+// both senders' 10s HTTP timeout, which would make them time out, retry,
+// and duplicate-push a batch the ingress actually already accepted. This
+// caps the *whole* health leg's time budget, independent of batch size;
+// once exceeded, remaining health records are dropped (fail open) rather
+// than attempted, same policy as any other health-leg failure.
+const HEALTH_LEG_TOTAL_BUDGET_MS = 4000;
+
 async function pushHealthRecords(events) {
   const results = [];
+  const deadline = Date.now() + HEALTH_LEG_TOTAL_BUDGET_MS;
   for (let i = 0; i < events.length; i += HEALTH_PUSH_CONCURRENCY) {
+    if (Date.now() >= deadline) {
+      const remaining = events.length - i;
+      console.log(`[ingress] health-leg time budget exceeded — dropping ${remaining} remaining health record(s)`);
+      break;
+    }
     const chunk = events.slice(i, i + HEALTH_PUSH_CONCURRENCY);
     results.push(...(await Promise.allSettled(chunk.map((event) => pushHealthRecord(event)))));
   }
