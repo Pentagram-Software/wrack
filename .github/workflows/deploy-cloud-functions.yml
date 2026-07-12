@@ -78,6 +78,24 @@ jobs:
             --project ${{ secrets.GCP_PROJECT_ID }} \
             --set-env-vars API_KEY=${{ secrets.GCP_API_KEY }},BIGQUERY_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }}
 
+      # PEN-227: the target endpoint for EV3/Pi telemetry going forward.
+      # HEALTH_LEG_FUNCTION_URL is deliberately not set — PEN-228 (the
+      # health-leg push function) doesn't exist yet, so it's left unset and
+      # health records fail open (logged, dropped) until that lands.
+      - name: Deploy unifiedIngress Cloud Function
+        id: deploy-ingress
+        run: |
+          gcloud functions deploy unifiedIngress \
+            --gen2 \
+            --runtime nodejs20 \
+            --trigger-http \
+            --allow-unauthenticated \
+            --region europe-central2 \
+            --source ./cloud/functions \
+            --entry-point unifiedIngress \
+            --project ${{ secrets.GCP_PROJECT_ID }} \
+            --set-env-vars GCP_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }},DEVICE_TOKENS_SECRET=device-tokens,BIGQUERY_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }}
+
       - name: Tag successful deployment
         if: success()
         run: |
@@ -105,7 +123,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "✅ *Cloud Functions deployed successfully*\n*Functions:* `controlRobot`, `telemetryIngestion`\n*Commit:* `${{ github.sha }}` by ${{ github.actor }}\n*Branch:* `${{ github.ref_name }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+                    "text": "✅ *Cloud Functions deployed successfully*\n*Functions:* `controlRobot`, `telemetryIngestion`, `unifiedIngress`\n*Commit:* `${{ github.sha }}` by ${{ github.actor }}\n*Branch:* `${{ github.ref_name }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
                   }
                 }
               ]
