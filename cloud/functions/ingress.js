@@ -54,22 +54,32 @@ function _getSecretClient() {
   return _secretClient;
 }
 
+// Cached secret is re-fetched after this many ms so a rotated/revoked token
+// (via setup-device-tokens.sh --rotate) takes effect on already-warm
+// instances within a bounded window, instead of living forever until the
+// instance happens to cold-start.
+const DEVICE_TOKENS_CACHE_TTL_MS = 5 * 60 * 1000;
+
 let _deviceTokensCache = null;
+let _deviceTokensCacheTime = 0;
 
 async function getDeviceTokens() {
-  if (_deviceTokensCache) {
+  const isFresh = _deviceTokensCache && Date.now() - _deviceTokensCacheTime < DEVICE_TOKENS_CACHE_TTL_MS;
+  if (isFresh) {
     return _deviceTokensCache;
   }
   const client = _getSecretClient();
   const name = `projects/${GCP_PROJECT_ID}/secrets/${DEVICE_TOKENS_SECRET}/versions/latest`;
   const [version] = await client.accessSecretVersion({ name });
   _deviceTokensCache = JSON.parse(version.payload.data.toString('utf8'));
+  _deviceTokensCacheTime = Date.now();
   return _deviceTokensCache;
 }
 
 // Exposed for unit-test injection only.
 function _resetDeviceTokensCache() {
   _deviceTokensCache = null;
+  _deviceTokensCacheTime = 0;
 }
 
 function _timingSafeStringEqual(a, b) {

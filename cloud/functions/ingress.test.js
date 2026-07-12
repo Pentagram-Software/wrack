@@ -257,6 +257,47 @@ describe('unifiedIngress handler — per-device authentication', () => {
     await invokeHandler(req2, makeRes());
     expect(mockAccessSecretVersion).toHaveBeenCalledTimes(1);
   });
+
+  test('re-fetches the secret once the cache TTL has elapsed, picking up a rotated token', async () => {
+    const nowSpy = jest.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(1_000_000);
+
+    const req1 = makeReq({ body: { events: [validEvent({ event_id: 'e1' })] } });
+    await invokeHandler(req1, makeRes());
+    expect(mockAccessSecretVersion).toHaveBeenCalledTimes(1);
+
+    // Simulate a rotation: the secret now returns a different token for ev3-001.
+    mockAccessSecretVersion = jest.fn().mockResolvedValue([
+      { payload: { data: Buffer.from(JSON.stringify({ ...DEVICE_TOKENS, 'ev3-001': 'ev3-rotated-token' })) } },
+    ]);
+
+    // Still within the TTL — old cached token should still be accepted, new
+    // one not yet known.
+    nowSpy.mockReturnValue(1_000_000 + 60 * 1000);
+    const req2 = makeReq({ body: { events: [validEvent({ event_id: 'e2' })] } });
+    const res2 = makeRes();
+    await invokeHandler(req2, res2);
+    expect(res2.statusCode).toBe(200);
+    expect(mockAccessSecretVersion).toHaveBeenCalledTimes(0);
+
+    // Past the TTL — should re-fetch, and the old token must now be rejected.
+    nowSpy.mockReturnValue(1_000_000 + 6 * 60 * 1000);
+    const req3 = makeReq({ body: { events: [validEvent({ event_id: 'e3' })] } });
+    const res3 = makeRes();
+    await invokeHandler(req3, res3);
+    expect(res3.statusCode).toBe(401);
+
+    const req4 = makeReq({
+      headers: { 'x-device-id': 'ev3-001', 'x-device-token': 'ev3-rotated-token' },
+      body: { events: [validEvent({ event_id: 'e4' })] },
+    });
+    const res4 = makeRes();
+    await invokeHandler(req4, res4);
+    expect(res4.statusCode).toBe(200);
+    expect(mockAccessSecretVersion).toHaveBeenCalledTimes(1);
+
+    nowSpy.mockRestore();
+  });
 });
 
 // ─── Request body validation ──────────────────────────────────────────────────
