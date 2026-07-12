@@ -91,9 +91,27 @@ function _timingSafeStringEqual(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
+// Thrown when the device-tokens secret itself couldn't be loaded (missing
+// IAM grant, Secret Manager outage, malformed JSON) — distinct from a
+// credential mismatch, which is the caller's fault. The HTTP handler uses
+// `instanceof SecretLoadError` to tell the two apart: this one must never
+// be reported as 401 (wrong info: it's not that the credentials are
+// invalid, it's that nothing could be checked) and must never leak the
+// underlying exception's message to the caller (may contain internal
+// infrastructure detail — project IDs, IAM policy hints, stack traces).
+class SecretLoadError extends Error {
+  constructor(message, cause) {
+    super(message);
+    this.name = 'SecretLoadError';
+    this.cause = cause;
+  }
+}
+
 /**
  * Validate the X-Device-Id / X-Device-Token headers against the device-token
- * map. Throws on missing headers or an unknown/mismatched device.
+ * map. Throws on missing headers or an unknown/mismatched device (generic
+ * message, safe to return to the caller as 401), or SecretLoadError if the
+ * secret itself couldn't be loaded (must not be treated as 401 — see above).
  */
 async function validateDeviceAuth(req) {
   const deviceId = req.headers['x-device-id'];
@@ -103,7 +121,13 @@ async function validateDeviceAuth(req) {
     throw new Error('X-Device-Id and X-Device-Token headers are required');
   }
 
-  const tokens = await getDeviceTokens();
+  let tokens;
+  try {
+    tokens = await getDeviceTokens();
+  } catch (err) {
+    throw new SecretLoadError('Unable to load device credentials', err);
+  }
+
   // `tokens` is a plain object parsed from JSON, so a bare `tokens[deviceId]`
   // also resolves inherited Object.prototype properties — a deviceId of
   // "toString" would resolve to the built-in toString function (truthy),
@@ -245,6 +269,12 @@ functions.http('unifiedIngress', (req, res) => {
     try {
       ({ deviceId: authenticatedDeviceId } = await validateDeviceAuth(req));
     } catch (authError) {
+      if (authError instanceof SecretLoadError) {
+        // Log full detail server-side only — the caller gets a generic
+        // message, not the underlying Secret Manager/IAM exception text.
+        console.error('[ingress] failed to load device-tokens secret:', authError.cause?.message || authError.message);
+        return res.status(503).json({ error: 'Authentication temporarily unavailable' });
+      }
       return res.status(401).json({ error: authError.message });
     }
 
@@ -396,6 +426,7 @@ module.exports = {
   deriveSourceForDeviceId,
   pushHealthRecord,
   getDeviceTokens,
+  SecretLoadError,
   _resetDeviceTokensCache,
   _timingSafeStringEqual,
 };

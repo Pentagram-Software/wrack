@@ -361,6 +361,39 @@ describe('unifiedIngress handler — per-device authentication', () => {
 
     nowSpy.mockRestore();
   });
+
+  test('returns 503 with a generic message when the secret itself fails to load, not 401', async () => {
+    // Simulates the exact failure mode from the missing-IAM-grant bug this
+    // ticket also fixed elsewhere: Secret Manager rejects the access call.
+    // This must never be reported as "invalid credentials" — nothing about
+    // the caller's credentials was actually checked — and the internal
+    // exception text (which can include project IDs and IAM hints) must
+    // never reach the response body.
+    const internalError = new Error(
+      'PERMISSION_DENIED: Permission denied on secret: projects/wrack-control/secrets/device-tokens/versions/latest'
+    );
+    mockAccessSecretVersion = jest.fn().mockRejectedValue(internalError);
+
+    const req = makeReq({ body: { events: [validEvent()] } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(503);
+    expect(res.data.error).not.toMatch(/PERMISSION_DENIED/);
+    expect(res.data.error).not.toMatch(/wrack-control/);
+    expect(res.data.error).not.toMatch(/Invalid device credentials/);
+  });
+
+  test('returns 503 (not 401) when the secret payload is malformed JSON', async () => {
+    mockAccessSecretVersion = jest.fn().mockResolvedValue([{ payload: { data: Buffer.from('not valid json{{{') } }]);
+
+    const req = makeReq({ body: { events: [validEvent()] } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(503);
+    expect(res.data.error).not.toMatch(/JSON/i);
+  });
 });
 
 // ─── Device identity binding ──────────────────────────────────────────────────
