@@ -300,6 +300,50 @@ describe('unifiedIngress handler — per-device authentication', () => {
   });
 });
 
+// ─── Device identity binding ──────────────────────────────────────────────────
+
+describe('unifiedIngress handler — device identity binding', () => {
+  test('overwrites a spoofed device_id with the authenticated device identity before insert', async () => {
+    const event = validEvent({ device_id: 'rpi-camera-01' }); // ev3-001's token, claiming to be the Pi
+    const req = makeReq({ body: { events: [event] } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const insertedRows = mockInsert.mock.calls[0][0];
+    expect(insertedRows[0].json.device_id).toBe('ev3-001');
+  });
+
+  test('stamps the authenticated device identity even when device_id is absent from the payload', async () => {
+    const event = validEvent();
+    delete event.device_id;
+    const req = makeReq({ body: { events: [event] } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const insertedRows = mockInsert.mock.calls[0][0];
+    expect(insertedRows[0].json.device_id).toBe('ev3-001');
+  });
+
+  test('stamps the authenticated device identity on health records too', async () => {
+    process.env.HEALTH_LEG_FUNCTION_URL = 'https://example.test/health-leg';
+    const event = validEvent({
+      type: 'health',
+      event_type: 'device_status',
+      payload: { device_name: 'ev3', status: 'connected' },
+      device_id: 'rpi-camera-01',
+    });
+    const req = makeReq({ body: { events: [event] } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const pushedBody = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(pushedBody.device_id).toBe('ev3-001');
+  });
+});
+
 // ─── Request body validation ──────────────────────────────────────────────────
 
 describe('unifiedIngress handler — request body validation', () => {

@@ -160,8 +160,9 @@ functions.http('unifiedIngress', (req, res) => {
       return res.status(405).json({ error: 'Method not allowed' });
     }
 
+    let authenticatedDeviceId;
     try {
-      await validateDeviceAuth(req);
+      ({ deviceId: authenticatedDeviceId } = await validateDeviceAuth(req));
     } catch (authError) {
       return res.status(401).json({ error: authError.message });
     }
@@ -188,6 +189,13 @@ functions.http('unifiedIngress', (req, res) => {
       const { valid, errors } = validateEvent(event);
 
       if (valid) {
+        // Authentication proves who is calling, not who an event claims to
+        // be from — a client-supplied device_id must never be trusted as-is,
+        // or one device's token could be used to attribute events to (and
+        // poison the data/dashboards of) a different device. The
+        // authenticated identity always wins, regardless of what the caller
+        // put in the payload.
+        event.device_id = authenticatedDeviceId;
         validRows.push({ index: i, event, type: resolveType(event) });
       } else {
         validationFailures.push({
