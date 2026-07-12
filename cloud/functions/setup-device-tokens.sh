@@ -179,22 +179,24 @@ write_credentials_file() {
     info "No existing '${SECRET_NAME}' secret — starting a fresh token map"
   fi
 
-  # Device IDs are passed as one arg per line via stdin, not interpolated into
-  # the Python source, so IDs/tokens containing shell-special characters can't
-  # break out of the script.
+  # Device IDs are passed as one arg per line via stdin, and both file paths
+  # via environment variables — never interpolated into the Python source
+  # text. --key-file is a user-controlled path; a value containing a quote
+  # (or other Python-syntax character) interpolated directly into the
+  # source string could break out of the string literal and inject code.
   {
     printf '%s\n' "${DEVICE_IDS[@]:-}"
     echo '---'
     printf '%s\n' "${ROTATE_IDS[@]:-}"
-  } | python3 -c "
-import json, secrets, sys
+  } | EXISTING_FILE="${existing_file}" OUT_FILE="${KEY_FILE}" python3 -c "
+import json, os, secrets, sys
 
 lines = [l.rstrip('\n') for l in sys.stdin]
 sep = lines.index('---')
 device_ids = [d for d in lines[:sep] if d]
 rotate_ids = [d for d in lines[sep + 1:] if d]
 
-existing = json.load(open('${existing_file}'))
+existing = json.load(open(os.environ['EXISTING_FILE']))
 
 for device_id in device_ids:
     if device_id not in existing:
@@ -207,7 +209,7 @@ for device_id in rotate_ids:
     existing[device_id] = secrets.token_hex(32)
     print(f'  ▸ rotated token for {device_id}', file=sys.stderr)
 
-json.dump(existing, open('${KEY_FILE}', 'w'), indent=2, sort_keys=True)
+json.dump(existing, open(os.environ['OUT_FILE'], 'w'), indent=2, sort_keys=True)
 "
 
   rm -f "${existing_file}"
@@ -278,10 +280,10 @@ print_next_steps() {
   echo "own config now — this is the only time this script prints them):"
   echo ""
   if [[ "${DRY_RUN}" != "true" ]]; then
-    printf '%s\n' "${DEVICE_IDS[@]:-}" "${ROTATE_IDS[@]:-}" | python3 -c "
-import json, sys
+    printf '%s\n' "${DEVICE_IDS[@]:-}" "${ROTATE_IDS[@]:-}" | OUT_FILE="${KEY_FILE}" python3 -c "
+import json, os, sys
 touched = sorted({l.rstrip('\n') for l in sys.stdin if l.strip()})
-data = json.load(open('${KEY_FILE}'))
+data = json.load(open(os.environ['OUT_FILE']))
 for device_id in touched:
     if device_id in data:
         print(f'  {device_id}: {data[device_id]}')
