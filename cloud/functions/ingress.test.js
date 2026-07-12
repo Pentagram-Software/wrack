@@ -269,6 +269,25 @@ describe('unifiedIngress handler — per-device authentication', () => {
     expect(res.data.error).toMatch(/Invalid device credentials/);
   });
 
+  test('rejects a device_id that names an inherited Object.prototype property (prototype-chain bypass)', async () => {
+    const req = makeReq({
+      headers: { 'x-device-id': 'toString', 'x-device-token': String(Object.prototype.toString) },
+    });
+    const res = makeRes();
+    await invokeHandler(req, res);
+    expect(res.statusCode).toBe(401);
+    expect(res.data.error).toMatch(/Invalid device credentials/);
+  });
+
+  test('rejects "constructor" as a device_id the same way', async () => {
+    const req = makeReq({
+      headers: { 'x-device-id': 'constructor', 'x-device-token': String(Object.prototype.constructor) },
+    });
+    const res = makeRes();
+    await invokeHandler(req, res);
+    expect(res.statusCode).toBe(401);
+  });
+
   test('accepts a known device_id with the matching token', async () => {
     const req = makeReq({ body: { events: [validEvent()] } });
     const res = makeRes();

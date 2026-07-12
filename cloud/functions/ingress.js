@@ -104,7 +104,13 @@ async function validateDeviceAuth(req) {
   }
 
   const tokens = await getDeviceTokens();
-  const expected = tokens[deviceId];
+  // `tokens` is a plain object parsed from JSON, so a bare `tokens[deviceId]`
+  // also resolves inherited Object.prototype properties — a deviceId of
+  // "toString" would resolve to the built-in toString function (truthy),
+  // whose stringified form is fixed and predictable, letting an attacker
+  // authenticate without ever seeing a real token. Object.hasOwn() restricts
+  // the lookup to the secret's actual own keys.
+  const expected = Object.hasOwn(tokens, deviceId) ? tokens[deviceId] : undefined;
 
   if (!expected || !_timingSafeStringEqual(deviceToken, expected)) {
     throw new Error('Invalid device credentials');
