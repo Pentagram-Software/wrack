@@ -44,6 +44,7 @@ const { _resetClient: _resetBigQueryClient, _setSleepFn } = require('./bigquery-
 const DEVICE_TOKENS = {
   'ev3-001': 'ev3-good-token',
   'rpi-camera-01': 'rpi-good-token',
+  'weird-device-01': 'weird-good-token', // deliberately doesn't match a known source prefix
 };
 
 // Load the module under test — this registers 'unifiedIngress' via
@@ -51,6 +52,7 @@ const DEVICE_TOKENS = {
 const {
   resolveType,
   isValidTypeField,
+  deriveSourceForDeviceId,
   _timingSafeStringEqual,
   _resetDeviceTokensCache,
 } = require('./ingress');
@@ -198,6 +200,22 @@ describe('isValidTypeField()', () => {
 
   test('false for a typo close to a valid value', () => {
     expect(isValidTypeField({ type: 'Health' })).toBe(false);
+  });
+});
+
+// ─── deriveSourceForDeviceId() unit tests ────────────────────────────────────
+
+describe('deriveSourceForDeviceId()', () => {
+  test('maps an ev3-prefixed device_id to "ev3"', () => {
+    expect(deriveSourceForDeviceId('ev3-001')).toBe('ev3');
+  });
+
+  test('maps an rpi-prefixed device_id to "rpi"', () => {
+    expect(deriveSourceForDeviceId('rpi-camera-01')).toBe('rpi');
+  });
+
+  test('returns null for a device_id matching no known prefix', () => {
+    expect(deriveSourceForDeviceId('weird-device-01')).toBeNull();
   });
 });
 
@@ -386,6 +404,49 @@ describe('unifiedIngress handler — device identity binding', () => {
     expect(res.statusCode).toBe(200);
     const pushedBody = JSON.parse(global.fetch.mock.calls[0][1].body);
     expect(pushedBody.device_id).toBe('ev3-001');
+  });
+
+  test('overwrites a spoofed source with the device_id-derived source before insert', async () => {
+    // ev3-001's token, claiming to be a Raspberry Pi.
+    const event = validEvent({ source: 'rpi' });
+    const req = makeReq({ body: { events: [event] } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const insertedRows = mockInsert.mock.calls[0][0];
+    expect(insertedRows[0].json.source).toBe('ev3');
+  });
+
+  test('overwrites a spoofed source on health records too', async () => {
+    process.env.HEALTH_LEG_FUNCTION_URL = 'https://example.test/health-leg';
+    const event = validEvent({
+      type: 'health',
+      event_type: 'device_status',
+      payload: { device_name: 'ev3', status: 'connected' },
+      source: 'cloud_functions',
+    });
+    const req = makeReq({ body: { events: [event] } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const pushedBody = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(pushedBody.source).toBe('ev3');
+  });
+
+  test('rejects events from a device_id with no known source mapping', async () => {
+    const req = makeReq({
+      headers: { 'x-device-id': 'weird-device-01', 'x-device-token': 'weird-good-token' },
+      body: { events: [validEvent({ device_id: 'weird-device-01' })] },
+    });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.data.success).toBe(false);
+    expect(res.data.errors[0].errors.some((e) => e.includes('source mapping'))).toBe(true);
+    expect(mockInsert).not.toHaveBeenCalled();
   });
 });
 

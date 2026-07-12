@@ -119,6 +119,28 @@ async function validateDeviceAuth(req) {
   return { deviceId };
 }
 
+// Maps a device_id's naming convention to the coarse `source` category
+// (mirrors VALID_SOURCES in shared/telemetry-types) that device is allowed
+// to submit events as. Authentication only proves *which* device_id is
+// calling — it says nothing about the client-supplied `source` field, so
+// without this an ev3-001 credential could submit events labeled
+// source: "rpi" (or any other value) just as easily as it could have
+// spoofed device_id before that was fixed. New device categories need a
+// prefix added here — this intentionally doesn't guess.
+const DEVICE_ID_SOURCE_PREFIXES = [
+  { prefix: 'ev3', source: 'ev3' },
+  { prefix: 'rpi', source: 'rpi' },
+];
+
+/**
+ * Returns the source a device_id is authorized to submit events as, or null
+ * if the device_id doesn't match any known naming convention.
+ */
+function deriveSourceForDeviceId(deviceId) {
+  const match = DEVICE_ID_SOURCE_PREFIXES.find((p) => deviceId.startsWith(p.prefix));
+  return match ? match.source : null;
+}
+
 // ─── Type-field routing ──────────────────────────────────────────────────────
 
 const VALID_RECORD_TYPES = ['health', 'event'];
@@ -243,6 +265,12 @@ functions.http('unifiedIngress', (req, res) => {
     const validRows = [];
     const validationFailures = [];
 
+    // Computed once — the authenticated device doesn't change per event in
+    // a batch, and an unmapped device_id (a new device category provisioned
+    // without updating DEVICE_ID_SOURCE_PREFIXES) rejects every event in
+    // this request the same way.
+    const expectedSource = deriveSourceForDeviceId(authenticatedDeviceId);
+
     for (let i = 0; i < events.length; i++) {
       const event = events[i];
       const { valid, errors } = validateEvent(event);
@@ -255,14 +283,19 @@ functions.http('unifiedIngress', (req, res) => {
         errors.push(`type must be one of: ${VALID_RECORD_TYPES.join(', ')} (or absent)`);
       }
 
+      if (valid && !expectedSource) {
+        errors.push(`no known source mapping for device_id "${authenticatedDeviceId}"`);
+      }
+
       if (valid && errors.length === 0) {
         // Authentication proves who is calling, not who an event claims to
-        // be from — a client-supplied device_id must never be trusted as-is,
-        // or one device's token could be used to attribute events to (and
-        // poison the data/dashboards of) a different device. The
-        // authenticated identity always wins, regardless of what the caller
-        // put in the payload.
+        // be from — client-supplied device_id and source must never be
+        // trusted as-is, or one device's token could be used to attribute
+        // events to (and poison the data/dashboards of) a different device
+        // or device category. The authenticated identity always wins,
+        // regardless of what the caller put in the payload.
         event.device_id = authenticatedDeviceId;
+        event.source = expectedSource;
         validRows.push({ index: i, event, type: resolveType(event) });
       } else {
         validationFailures.push({
@@ -353,6 +386,7 @@ module.exports = {
   validateDeviceAuth,
   resolveType,
   isValidTypeField,
+  deriveSourceForDeviceId,
   pushHealthRecord,
   getDeviceTokens,
   _resetDeviceTokensCache,
