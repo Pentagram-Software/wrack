@@ -50,6 +50,23 @@ except ImportError:
 # Placeholder default — PEN-203 owns tuning this to the real 5s/15s target.
 DEFAULT_HEARTBEAT_INTERVAL = 30
 
+# Heartbeats should use a TelemetrySender configured with these rather than
+# TelemetrySender's own analytics-oriented defaults (10s timeout, 3 retries
+# with backoff — up to ~47s worst case per send). A heartbeat is disposable:
+# the next tick, DEFAULT_HEARTBEAT_INTERVAL seconds away, is just as good as
+# a slow/failed one, so retrying only prolongs how long the tracked send
+# thread can block for zero benefit. This bounds the worst case on any
+# runtime where ``urequests.post()`` actually honors ``timeout`` — it cannot
+# help on a build where ``urequests`` doesn't accept ``timeout`` at all (see
+# the ``sender`` param docstring below): a single hung syscall can still
+# block that one worker thread for the life of the program, since Pybricks
+# MicroPython's Thread() has no daemon flag (PEN-188) and Python has no way
+# to force-cancel a blocked socket call. What tracking in-flight sends does
+# guarantee is that this is bounded to *at most one* such thread ever, not
+# an unbounded, accumulating leak (code review).
+DEFAULT_HEARTBEAT_SEND_TIMEOUT_S = 5
+DEFAULT_HEARTBEAT_SEND_MAX_RETRIES = 0
+
 
 class HeartbeatSender:
     """Periodically sends a ``type="health"`` liveness event to the ingress.
@@ -70,6 +87,12 @@ class HeartbeatSender:
         thread per call and would accumulate one every tick for as long as
         a send stays hung (``urequests`` doesn't support a ``timeout``, so a
         network outage can block a send indefinitely — PEN-229 code review).
+        Should be a *dedicated* ``TelemetrySender`` instance configured with
+        :data:`DEFAULT_HEARTBEAT_SEND_TIMEOUT_S` /
+        :data:`DEFAULT_HEARTBEAT_SEND_MAX_RETRIES` (see their docstring),
+        not the shared analytics sender — its default 10s-timeout/3-retry
+        behavior can block a single heartbeat send for up to ~47s for no
+        benefit.
     interval:
         Seconds between heartbeats. Defaults to
         :data:`DEFAULT_HEARTBEAT_INTERVAL`.

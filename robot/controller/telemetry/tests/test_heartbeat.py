@@ -18,7 +18,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from telemetry.collector import TelemetryCollector
-from telemetry.heartbeat import HeartbeatSender, DEFAULT_HEARTBEAT_INTERVAL
+from telemetry.heartbeat import (
+    HeartbeatSender,
+    DEFAULT_HEARTBEAT_INTERVAL,
+    DEFAULT_HEARTBEAT_SEND_TIMEOUT_S,
+    DEFAULT_HEARTBEAT_SEND_MAX_RETRIES,
+)
+from telemetry.sender import TelemetrySender, DEFAULT_TIMEOUT_S, DEFAULT_MAX_RETRIES
 
 
 def _make_sender():
@@ -85,6 +91,47 @@ class TestConfiguration:
         s = _make_sender()
         hb = HeartbeatSender(c, s)
         assert hb._send_thread is None
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat-specific send tuning (P1 code review): a dedicated TelemetrySender
+# with no retries and a short timeout, instead of reusing the shared
+# analytics sender's defaults (3 retries, 10s timeout — up to ~47s worst
+# case per send).
+# ---------------------------------------------------------------------------
+
+
+class TestHeartbeatSendTuning:
+    def test_default_timeout_shorter_than_analytics_default(self):
+        assert DEFAULT_HEARTBEAT_SEND_TIMEOUT_S < DEFAULT_TIMEOUT_S
+
+    def test_default_max_retries_is_zero(self):
+        assert DEFAULT_HEARTBEAT_SEND_MAX_RETRIES == 0
+
+    def test_max_retries_less_than_analytics_default(self):
+        assert DEFAULT_HEARTBEAT_SEND_MAX_RETRIES < DEFAULT_MAX_RETRIES
+
+    def test_real_telemetry_sender_with_heartbeat_tuning_does_not_retry(self):
+        """End-to-end: a HeartbeatSender wired with a *real* TelemetrySender
+        configured per DEFAULT_HEARTBEAT_SEND_* gives up after one failed
+        attempt instead of retrying with backoff — the whole point of using
+        a dedicated sender instead of the shared analytics one, since a
+        retry (or the analytics sender's longer timeout) only prolongs how
+        long the tracked send thread can block for a signal that's
+        superseded by the next tick anyway."""
+        c = TelemetryCollector()
+        real_sender = TelemetrySender(
+            endpoint="https://example.invalid/unifiedIngress",
+            device_id="ev3-001",
+            device_token="test-token",
+            max_retries=DEFAULT_HEARTBEAT_SEND_MAX_RETRIES,
+            timeout=DEFAULT_HEARTBEAT_SEND_TIMEOUT_S,
+        )
+        with patch.object(real_sender, "_post_batch", side_effect=OSError("connection refused")):
+            hb = HeartbeatSender(c, real_sender)
+            hb.send_now()
+            _join_send_thread(hb)
+            assert real_sender._post_batch.call_count == 1  # no retry attempts
 
 
 # ---------------------------------------------------------------------------

@@ -77,8 +77,17 @@ TelemetryCollector = None
 TelemetrySender = None
 StatusCollector = None
 HeartbeatSender = None
+DEFAULT_HEARTBEAT_SEND_TIMEOUT_S = None
+DEFAULT_HEARTBEAT_SEND_MAX_RETRIES = None
 try:
-    from telemetry import TelemetryCollector, TelemetrySender, StatusCollector, HeartbeatSender
+    from telemetry import (
+        TelemetryCollector,
+        TelemetrySender,
+        StatusCollector,
+        HeartbeatSender,
+        DEFAULT_HEARTBEAT_SEND_TIMEOUT_S,
+        DEFAULT_HEARTBEAT_SEND_MAX_RETRIES,
+    )
     print("Telemetry module imported successfully")
 except ImportError as e:
     print("Telemetry module not available: {} - telemetry collection will be disabled".format(e))
@@ -146,12 +155,27 @@ if TelemetrySender and _TELEMETRY_ENDPOINT and _TELEMETRY_DEVICE_ID and _TELEMET
     print("Telemetry sender initialised")
 
 if HeartbeatSender and _telemetry_collector and _telemetry_sender:
+    # Deliberately a *separate* TelemetrySender from the analytics one above,
+    # not a reuse — heartbeats are disposable (the next tick supersedes a
+    # slow/failed one ~30s later), so retrying with the analytics sender's
+    # defaults (3 retries, 10s timeout — up to ~47s worst case) only
+    # prolongs how long the tracked send thread can block for zero benefit
+    # (code review). See telemetry.heartbeat's DEFAULT_HEARTBEAT_SEND_*
+    # docstrings for why this can't fully bound the worst case on every
+    # MicroPython build.
+    _heartbeat_telemetry_sender = TelemetrySender(
+        endpoint=_TELEMETRY_ENDPOINT,
+        device_id=_TELEMETRY_DEVICE_ID,
+        device_token=_TELEMETRY_DEVICE_TOKEN,
+        max_retries=DEFAULT_HEARTBEAT_SEND_MAX_RETRIES,
+        timeout=DEFAULT_HEARTBEAT_SEND_TIMEOUT_S,
+    )
     if _TELEMETRY_HEARTBEAT_INTERVAL_S:
         _heartbeat_sender = HeartbeatSender(
-            _telemetry_collector, _telemetry_sender, interval=_TELEMETRY_HEARTBEAT_INTERVAL_S
+            _telemetry_collector, _heartbeat_telemetry_sender, interval=_TELEMETRY_HEARTBEAT_INTERVAL_S
         )
     else:
-        _heartbeat_sender = HeartbeatSender(_telemetry_collector, _telemetry_sender)
+        _heartbeat_sender = HeartbeatSender(_telemetry_collector, _heartbeat_telemetry_sender)
     print("Heartbeat sender initialised (interval={}s)".format(_heartbeat_sender.interval))
 
 
