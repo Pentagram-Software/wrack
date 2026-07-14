@@ -144,23 +144,41 @@ class HeartbeatSender:
 
     @staticmethod
     def _join_thread(thread: Any, timeout: float) -> None:
-        """Best-effort ``thread.join(timeout=...)``, tolerant of MicroPython.
+        """Best-effort wait for *thread* to finish, bounded by *timeout*.
 
-        ``join`` (and its ``timeout`` kwarg) is unavailable on some Pybricks
-        MicroPython builds — never lets a join failure propagate.
+        Tries ``join(timeout=...)`` first. Some Pybricks MicroPython builds
+        don't accept the ``timeout`` kwarg on ``join()`` — falling back to a
+        bare, unbounded ``join()`` there (as an earlier version of this
+        method did) can block forever on ``_send_thread``, whose target
+        performs unbounded network I/O (see ``_send_worker``), defeating
+        ``stop(timeout)``'s whole contract (code review). Poll ``is_alive()``
+        instead in short increments, so the wait is bounded by *timeout* on
+        every runtime, with or without a ``timeout``-aware ``join()``.
         """
         join = getattr(thread, "join", None)
-        if not callable(join):
-            return
-        try:
-            join(timeout=timeout)
-        except TypeError:
+        if callable(join):
             try:
-                join()
-            except Exception:
+                join(timeout=timeout)
+                return
+            except TypeError:
                 pass
-        except Exception:
-            pass
+            except Exception:
+                return
+
+        is_alive = getattr(thread, "is_alive", None)
+        if not callable(is_alive):
+            return
+
+        poll_interval = 0.1
+        waited = 0.0
+        while waited < timeout:
+            try:
+                if not is_alive():
+                    return
+            except Exception:
+                return
+            time.sleep(poll_interval)
+            waited += poll_interval
 
     # ------------------------------------------------------------------
     # Manual / forced send

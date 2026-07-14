@@ -12,6 +12,7 @@ Acceptance criteria verified here:
 from __future__ import annotations
 
 import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -288,6 +289,99 @@ class TestLifecycle:
         hb._thread.join(timeout=2.0)  # let the first tick fire and hang
         hb.stop(timeout=0.5)  # must return within ~0.5s, not hang
         release.set()  # unblock so the leaked thread doesn't linger past the test
+
+
+# ---------------------------------------------------------------------------
+# _join_thread — bounded wait even when join() rejects the timeout kwarg
+# (P2 code review: some Pybricks MicroPython builds raise TypeError on
+# join(timeout=...); falling back to a bare join() there could hang stop()
+# forever on a thread doing unbounded network I/O).
+# ---------------------------------------------------------------------------
+
+
+class _RejectsTimeoutJoin:
+    """Thread stub whose join() rejects the timeout kwarg, like some
+    Pybricks MicroPython builds. is_alive() flips to False after
+    *alive_for_calls* checks, simulating the thread eventually finishing."""
+
+    def __init__(self, alive_for_calls: int = 0):
+        self._remaining_alive_calls = alive_for_calls
+
+    def join(self, timeout=None):
+        if timeout is not None:
+            raise TypeError("join() got an unexpected keyword argument 'timeout'")
+        # A real bare join() would block until the thread finishes; the fix
+        # must never call this path with a hung target, so this stub simply
+        # never being invoked (without timeout) is itself part of what the
+        # tests below verify by bounding elapsed time.
+        raise AssertionError("join() must always be called with timeout=...")
+
+    def is_alive(self):
+        if self._remaining_alive_calls <= 0:
+            return False
+        self._remaining_alive_calls -= 1
+        return True
+
+
+class TestJoinThreadTimeoutFallback:
+    def test_polls_is_alive_when_timeout_kwarg_unsupported(self):
+        """A thread that stays alive for the whole window must not cause an
+        unbounded wait — _join_thread polls is_alive(), bounded by timeout."""
+        stub = _RejectsTimeoutJoin(alive_for_calls=1_000_000)  # "never" finishes
+        start = time.time()
+        HeartbeatSender._join_thread(stub, timeout=0.3)
+        elapsed = time.time() - start
+        assert elapsed < 2.0, "must not block far past the requested timeout"
+
+    def test_returns_promptly_once_thread_is_no_longer_alive(self):
+        """True polling, not a blind sleep(timeout): returns as soon as
+        is_alive() goes False, well before the full timeout elapses."""
+        stub = _RejectsTimeoutJoin(alive_for_calls=1)  # finishes after 1 check
+        start = time.time()
+        HeartbeatSender._join_thread(stub, timeout=5.0)
+        elapsed = time.time() - start
+        assert elapsed < 1.0, "should return once the thread finishes, not wait out the full timeout"
+
+    def test_bails_immediately_when_is_alive_unavailable(self):
+        """No timeout-aware join() and no is_alive() — nothing safe to poll,
+        so return immediately rather than guessing at an unbounded wait."""
+        class _NoTimeoutNoIsAlive:
+            def join(self, timeout=None):
+                if timeout is not None:
+                    raise TypeError("no timeout kwarg")
+                raise AssertionError("bare join() must never be called")
+
+        start = time.time()
+        HeartbeatSender._join_thread(_NoTimeoutNoIsAlive(), timeout=5.0)
+        elapsed = time.time() - start
+        assert elapsed < 1.0
+
+    def test_stop_bounded_even_when_send_thread_rejects_timeout_join(self):
+        """End-to-end: stop() stays bounded by its timeout even when the
+        send-worker thread's join() rejects the timeout kwarg AND the send
+        itself is hung — the exact combination the review flagged."""
+        c = TelemetryCollector()
+        s = _make_sender()
+        release = threading.Event()
+        s.send_events = MagicMock(side_effect=lambda events: release.wait(timeout=30))
+        hb = HeartbeatSender(c, s, interval=1)
+
+        hb.start()
+        hb._thread.join(timeout=2.0)  # let the first tick fire and hang
+        assert hb._send_thread is not None
+
+        # Swap in a stub that mimics a MicroPython build without a
+        # timeout-aware join(), wrapping the real (hung) thread's is_alive.
+        real_send_thread = hb._send_thread
+        hb._send_thread = _RejectsTimeoutJoin(alive_for_calls=1_000_000)
+
+        start = time.time()
+        hb.stop(timeout=0.5)
+        elapsed = time.time() - start
+
+        assert elapsed < 2.0, "stop() must not hang on a join() that rejects timeout"
+        release.set()  # unblock the real background thread so it can exit
+        real_send_thread.join(timeout=2.0)
 
 
 # ---------------------------------------------------------------------------
