@@ -641,9 +641,15 @@ def main():
 
     # Wire telemetry collector into both controllers so every command is recorded
     if _telemetry_collector:
-        controller.set_telemetry_collector(_telemetry_collector)
+        # Stick events arrive at a high rate on the PS4 reader thread.  Do not
+        # synchronously buffer telemetry for them: once the buffer is full,
+        # overflow persistence performs file I/O and delays motor control.
+        controller.set_telemetry_collector(
+            _telemetry_collector,
+            excluded_events=("left_joystick", "right_joystick"),
+        )
         remote_controller.set_telemetry_collector(_telemetry_collector)
-        print("Telemetry collector wired into PS4 and network controllers")
+        print("Telemetry collector wired into controllers (PS4 sticks excluded)")
 
     # Start periodic battery/motor/device telemetry collection
     global _status_collector

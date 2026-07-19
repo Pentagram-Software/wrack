@@ -11,6 +11,7 @@ class EventHandler(object):
     callbacks = None
     _telemetry_collector = None
     _telemetry_filter = None
+    _telemetry_excluded_events = None
     _controller_type = "unknown"
 
     def on(self, event_name, callback):
@@ -53,6 +54,10 @@ class EventHandler(object):
         should_collect = (
             collector is not None
             and (self._telemetry_filter is None or event_name in self._telemetry_filter)
+            and (
+                self._telemetry_excluded_events is None
+                or event_name not in self._telemetry_excluded_events
+            )
         )
 
         # Emit command_received before running callbacks
@@ -95,7 +100,7 @@ class EventHandler(object):
         if exc is not None:
             raise exc
 
-    def set_telemetry_collector(self, collector, event_filter=None):
+    def set_telemetry_collector(self, collector, event_filter=None, excluded_events=None):
         """
         Attach a TelemetryCollector to receive forwarded events.
 
@@ -113,6 +118,11 @@ class EventHandler(object):
             Optional iterable of event-name strings.  Only events whose name
             appears in this collection are forwarded.  ``None`` means *all*
             events are forwarded.
+        excluded_events:
+            Optional iterable of event-name strings that must not be
+            forwarded. Applied after *event_filter*, allowing high-frequency
+            controls to be excluded without omitting other current or future
+            event types.
 
         Returns
         -------
@@ -120,3 +130,6 @@ class EventHandler(object):
         """
         self._telemetry_collector = collector
         self._telemetry_filter = set(event_filter) if event_filter is not None else None
+        self._telemetry_excluded_events = (
+            set(excluded_events) if excluded_events is not None else None
+        )

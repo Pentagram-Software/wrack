@@ -117,7 +117,7 @@ wrack/
 | `cloud/bigquery/migrations/*.sql` | Schema migrations for evolution |
 | `cloud/functions/telemetry.js` | HTTP Cloud Function for ingesting events |
 | `cloud/functions/bigquery-client.js` | Wrapper for BigQuery insert operations |
-| `robot/controller/telemetry/collector.py` | Collects events from EV3, buffers locally |
+| `robot/controller/telemetry/collector.py` | Collects events from EV3, buffers locally; high-frequency physical PS4 stick events are excluded so synchronous buffering cannot delay motor control |
 | `robot/controller/telemetry/sender.py` | Sends batched events to Cloud Functions |
 | `shared/telemetry-types/` | Type definitions shared across languages |
 

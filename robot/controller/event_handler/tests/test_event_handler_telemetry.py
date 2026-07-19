@@ -99,6 +99,12 @@ class TestSetTelemetryCollector:
         eh.set_telemetry_collector(c)
         assert eh._telemetry_filter is None
 
+    def test_excluded_events_stored_as_set(self):
+        eh = EventHandler()
+        c = TelemetryCollector()
+        eh.set_telemetry_collector(c, excluded_events=["left_joystick"])
+        assert eh._telemetry_excluded_events == {"left_joystick"}
+
 
 # ---------------------------------------------------------------------------
 # Event forwarding to collector
@@ -187,6 +193,15 @@ class TestEventFiltering:
         eh.trigger("forward")
         eh.trigger("stop")
         assert c.buffer_size == 0
+
+    def test_excluded_event_is_not_collected_but_other_events_are(self):
+        eh = EventHandler()
+        c = TelemetryCollector()
+        eh.set_telemetry_collector(c, excluded_events=["left_joystick"])
+        eh.trigger("left_joystick")
+        eh.trigger("cross_button")
+        assert c.buffer_size == 2
+        assert {e["payload"]["command"] for e in c.peek()} == {"cross_button"}
 
 
 # ---------------------------------------------------------------------------
