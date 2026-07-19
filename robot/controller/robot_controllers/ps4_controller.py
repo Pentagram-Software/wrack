@@ -145,8 +145,19 @@ class PS4Controller(EventHandler, threading.Thread):
         self.last_joystick_event_time = 0
         self.connected = False
         self._axis_range = None
+        self._debug_input = False
     def __str__(self):
         return "PlayStation controller (PS4/PS5) for EV3"; 
+
+    def set_debug_input(self, enabled):
+        """Enable or disable concise controller input diagnostics."""
+        self._debug_input = bool(enabled)
+        if self._debug_input:
+            print("PlayStation controller input debug enabled")
+
+    def _debug(self, message):
+        if self._debug_input:
+            print("PS4 input: {}".format(message))
     
     # This is the main loop of handling PlayStation controller events. It is run in a separate thread.
     def run(self):
@@ -220,11 +231,12 @@ class PS4Controller(EventHandler, threading.Thread):
                         if scaled is not None:
                             self.r_left = -1 * scaled
 
-                    if abs(self.r_forward) < 50:
-                        self.r_forward = 0
-                    if abs(self.r_left) < 50:
-                        self.r_left = 0
-
+                    # The turret owns its deadzone.  Filtering here as well made
+                    # small, deliberate right-stick movements indistinguishable
+                    # from a centered stick.
+                    self._debug("right stick x={:.0f} y={:.0f}".format(
+                        self.r_left, self.r_forward
+                    ))
                     self.trigger("right_joystick")
 
                 # Handle left joystick (PS4 8-bit and PS5/DualSense 16-bit axes)
@@ -272,6 +284,7 @@ class PS4Controller(EventHandler, threading.Thread):
                 if ev_type == EV_KEY:
                     # Cross (X) button — BTN_SOUTH (304)
                     if code == X_BUTTON and value == 1:
+                        self._debug("button code=304 event=cross_button")
                         self.trigger("cross_button");
                     # Circle button — BTN_EAST (305)
                     if code == CIRCLE_BUTTON and value == 1:

@@ -388,6 +388,46 @@ class TestPS4Controller:
         assert len(self.callback_calls) == 1
         assert self.callback_calls[0] == "manual_trigger"
         assert self.callback_args[0] == self.controller
+
+    def test_run_dispatches_cross_button_press(self):
+        """A real BTN_SOUTH evdev event reaches the Cross callback."""
+        event = struct.pack("llHHI", 0, 0, 1, 304, 1)
+        mock_event_file = MagicMock()
+        mock_event_file.read.side_effect = [event, b""]
+
+        received = []
+        self.controller.onCrossButton(lambda sender: received.append(sender))
+        with patch("robot_controllers.ps4_controller.find_controller_device",
+                   return_value="/dev/input/event99"), \
+             patch("builtins.open", return_value=mock_event_file):
+            self.controller.run()
+
+        assert received == [self.controller]
+
+    def test_run_preserves_small_right_stick_movement_for_turret(self):
+        """The controller must not apply a second turret deadzone."""
+        # 147 is a small-but-deliberate 8-bit horizontal movement (~15/100).
+        event = struct.pack("llHHI", 0, 0, 3, 3, 147)
+        mock_event_file = MagicMock()
+        mock_event_file.read.side_effect = [event, b""]
+
+        received_x_values = []
+        self.controller.onRightJoystickMove(
+            lambda sender: received_x_values.append(sender.r_left)
+        )
+        with patch("robot_controllers.ps4_controller.find_controller_device",
+                   return_value="/dev/input/event99"), \
+             patch("builtins.open", return_value=mock_event_file):
+            self.controller.run()
+
+        assert len(received_x_values) == 1
+        assert abs(received_x_values[0]) > 10
+        assert abs(received_x_values[0]) < 20
+
+    def test_debug_input_can_be_enabled(self):
+        """Controller input diagnostics are opt-in."""
+        self.controller.set_debug_input(True)
+        assert self.controller._debug_input is True
     
     def test_joystick_value_updates(self):
         """Test that joystick values can be updated"""

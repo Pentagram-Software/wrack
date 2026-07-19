@@ -30,7 +30,7 @@ class TestTurret:
         turret_no_motor = Turret(device_manager_empty)
         assert turret_no_motor.turret_motor is None
     
-    @pytest.mark.parametrize("x_axis", [0, 10, -15, 30, -40])
+    @pytest.mark.parametrize("x_axis", [0, 10, -14, 14])
     def test_speed_control_stop_in_deadzone(self, x_axis):
         """Test speed control stops motor when input is in deadzone"""
         self.turret.speed_control(x_axis, 0)
@@ -38,6 +38,7 @@ class TestTurret:
         assert self.mock_motor._running == False
     
     @pytest.mark.parametrize("x_axis,expected_speed", [
+        (15, 54),    # 15% of 360 = 54°/s
         (60, 216),    # 60% of 360 = 216°/s
         (-80, -288),  # -80% of 360 = -288°/s  
         (100, 360),   # 100% of 360 = 360°/s (max)
