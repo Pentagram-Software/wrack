@@ -244,6 +244,94 @@ class TestInFlightTracking:
 
 
 # ---------------------------------------------------------------------------
+# Concurrency safety — regression coverage for the race-condition finding
+# from code review: _send_heartbeat's check-then-set on _send_thread wasn't
+# synchronized, so concurrent callers (a periodic tick racing a manual
+# send_now(), or multiple send_now() calls) could both observe None and both
+# launch a worker; and a worker's finally-block clear wasn't tied to which
+# worker it belonged to, so it could clear a *different*, still-running
+# worker's marker.
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrencySafety:
+    def test_concurrent_calls_launch_at_most_one_worker(self):
+        """Fire many concurrent send_now() calls at the same instant (via a
+        Barrier, to maximize contention on the check-then-set window) while
+        the send itself hangs. Without the lock, this reliably launches more
+        than one worker; with it, exactly one caller ever proceeds."""
+        c = TelemetryCollector()
+        s = _make_sender()
+        release = threading.Event()
+        s.send_events = MagicMock(side_effect=lambda events: release.wait(timeout=5.0))
+        hb = HeartbeatSender(c, s, interval=1)
+
+        n_callers = 20
+        barrier = threading.Barrier(n_callers)
+        results = [None] * n_callers
+
+        def call_send_now(i):
+            barrier.wait(timeout=5.0)
+            results[i] = hb.send_now()
+
+        callers = [threading.Thread(target=call_send_now, args=(i,)) for i in range(n_callers)]
+        for t in callers:
+            t.start()
+        for t in callers:
+            t.join(timeout=5.0)
+
+        release.set()  # unblock the one send that actually proceeded
+        _join_send_thread(hb)
+
+        launched = [r for r in results if r is not None]
+        assert len(launched) == 1, "exactly one caller should have launched a worker, got {}".format(len(launched))
+        assert s.send_events.call_count == 1
+
+    def test_worker_does_not_clear_a_different_generations_marker(self):
+        """Defense in depth for the marker-clearing race, independent of the
+        lock: a worker completing late (e.g. generation 3) must not clear
+        the marker for a newer, still-running send (generation 5)."""
+        c = TelemetryCollector()
+        s = _make_sender()
+        hb = HeartbeatSender(c, s)
+
+        newer_marker = MagicMock()
+        hb._send_thread = newer_marker
+        hb._send_generation = 5
+
+        hb._send_worker({"event_id": "stale"}, generation=3)
+
+        assert hb._send_thread is newer_marker
+
+    def test_worker_clears_marker_for_its_own_matching_generation(self):
+        c = TelemetryCollector()
+        s = _make_sender()
+        hb = HeartbeatSender(c, s)
+
+        hb._send_thread = MagicMock()
+        hb._send_generation = 7
+
+        hb._send_worker({"event_id": "current"}, generation=7)
+
+        assert hb._send_thread is None
+
+    def test_send_generation_increments_per_launch(self):
+        c = TelemetryCollector()
+        s = _make_sender()
+        hb = HeartbeatSender(c, s)
+
+        hb.send_now()
+        _join_send_thread(hb)
+        first_generation = hb._send_generation
+
+        hb.send_now()
+        _join_send_thread(hb)
+        second_generation = hb._send_generation
+
+        assert second_generation > first_generation
+
+
+# ---------------------------------------------------------------------------
 # Start / stop lifecycle
 # ---------------------------------------------------------------------------
 

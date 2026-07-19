@@ -25,6 +25,8 @@ Usage::
 
 import time
 
+from threading_compat import create_lock
+
 # ``typing`` and ``from __future__ import annotations`` are unavailable on
 # Pybricks/MicroPython.  Without the future import, function-signature
 # annotations are evaluated at import time, so the fallback below provides a
@@ -115,7 +117,21 @@ class HeartbeatSender:
         # Tracks the single in-flight send worker thread (None when idle).
         # Bounds concurrent sends to at most one, regardless of how long a
         # send takes — see the ``sender`` param docstring above.
+        #
+        # ``_send_lock`` protects the check-then-set in ``_send_heartbeat``:
+        # without it, a periodic tick and a concurrent ``send_now()`` call
+        # can both observe ``_send_thread is None`` and both launch a worker,
+        # defeating the one-worker bound (code review). Pybricks MicroPython
+        # has no ``threading.Lock`` (see ``threading_compat``), hence
+        # ``create_lock()`` rather than constructing one directly.
+        #
+        # ``_send_generation`` protects the clear in ``_send_worker``: a
+        # worker only clears ``_send_thread`` if its generation still matches
+        # the current one, so a worker can never clear a *different*,
+        # possibly still-running worker's marker (code review).
         self._send_thread = None
+        self._send_lock = create_lock()
+        self._send_generation = 0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -249,40 +265,77 @@ class HeartbeatSender:
         can block indefinitely). A bug building the event, or a send
         failure, must never kill the background loop — it should just skip
         this tick.
+
+        The check, event build, and (when threading is available) thread
+        launch all happen under ``_send_lock`` — without it, the periodic
+        tick and a concurrent ``send_now()`` call could both observe
+        ``_send_thread is None`` and both launch a worker, breaking the
+        one-worker guarantee (code review). The lock is held only long
+        enough to start the worker thread, never for the blocking send
+        itself (that happens in ``_send_worker``, after ``Thread.start()``
+        has already returned).
+
+        When threading isn't available, ``_send_worker`` runs synchronously
+        on this same thread instead — deliberately *outside* the ``with``
+        block below, since ``_send_worker``'s own ``finally`` re-acquires
+        ``_send_lock`` to clear the marker, and re-entering a non-reentrant
+        lock from the thread that already holds it would deadlock.
         """
-        if self._send_thread is not None:
-            print("HeartbeatSender: skipping tick — previous send still in flight")
-            return None
+        run_synchronously = False
 
-        try:
-            event = self.collector.create_heartbeat_event()
-        except Exception as exc:  # noqa: BLE001 — one bad build must never kill the loop
-            print("HeartbeatSender: failed to build heartbeat event: {}".format(exc))
-            return None
+        with self._send_lock:
+            if self._send_thread is not None:
+                print("HeartbeatSender: skipping tick — previous send still in flight")
+                return None
 
-        if _THREADING_AVAILABLE:
-            # Pybricks MicroPython's Thread() accepts only ``target``/``args``
-            # — passing ``daemon``/``name`` raises TypeError (PEN-188).
-            self._send_thread = _threading.Thread(target=self._send_worker, args=(event,))
-            self._send_thread.start()
-        else:
-            # No threads on this runtime — send synchronously so the event is
-            # never silently dropped (mirrors TelemetrySender's own fallback).
-            self._send_worker(event)
+            try:
+                event = self.collector.create_heartbeat_event()
+            except Exception as exc:  # noqa: BLE001 — one bad build must never kill the loop
+                print("HeartbeatSender: failed to build heartbeat event: {}".format(exc))
+                return None
+
+            self._send_generation += 1
+            generation = self._send_generation
+
+            if _THREADING_AVAILABLE:
+                # Pybricks MicroPython's Thread() accepts only
+                # ``target``/``args`` — passing ``daemon``/``name`` raises
+                # TypeError (PEN-188).
+                self._send_thread = _threading.Thread(
+                    target=self._send_worker, args=(event, generation)
+                )
+                self._send_thread.start()
+            else:
+                run_synchronously = True
+
+        if run_synchronously:
+            # No threads on this runtime — send synchronously (outside the
+            # lock, see docstring) so the event is never silently dropped,
+            # mirroring TelemetrySender's own fallback behavior.
+            self._send_worker(event, generation)
 
         return event
 
-    def _send_worker(self, event: Dict[str, Any]) -> None:
+    def _send_worker(self, event: Dict[str, Any], generation: int) -> None:
         """Thread target: perform one blocking send, then clear the in-flight marker.
 
         Uses ``TelemetrySender.send_events`` (blocking) rather than
         ``send_events_async`` — this class already runs the send on its own
         tracked thread, so a second, untracked thread from the sender would
         defeat the whole point of tracking one in-flight send at a time.
+
+        *generation* identifies which call to :meth:`_send_heartbeat`
+        launched this worker. The marker is only cleared if it still matches
+        the current generation — a worker must never clear a *different*
+        (newer) worker's in-flight marker, which would let further sends
+        proceed while this generation's own send remains unresolved (code
+        review).
         """
         try:
             self.sender.send_events([event])
         except Exception as exc:  # noqa: BLE001 — one bad send must never kill the loop
             print("HeartbeatSender: send failed: {}".format(exc))
         finally:
-            self._send_thread = None
+            with self._send_lock:
+                if generation == self._send_generation:
+                    self._send_thread = None
