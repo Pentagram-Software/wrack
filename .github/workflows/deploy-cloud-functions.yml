@@ -78,13 +78,57 @@ jobs:
             --project ${{ secrets.GCP_PROJECT_ID }} \
             --set-env-vars API_KEY=${{ secrets.GCP_API_KEY }},BIGQUERY_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }}
 
+      # PEN-228: healthLegPush is the receiving end of unifiedIngress's
+      # type=health leg. Deployed BEFORE unifiedIngress so its URL is known
+      # in time to wire into unifiedIngress's HEALTH_LEG_FUNCTION_URL below.
+      # --no-allow-unauthenticated is deliberate: its only caller is
+      # unifiedIngress itself (see docs/monitoring/architecture.md,
+      # "Authenticating the ingress -> health-leg call"), so GCP IAM handles
+      # auth here instead of an app-level shared secret.
+      - name: Deploy healthLegPush Cloud Function
+        id: deploy-health-leg
+        run: |
+          gcloud functions deploy healthLegPush \
+            --gen2 \
+            --runtime nodejs20 \
+            --trigger-http \
+            --no-allow-unauthenticated \
+            --region europe-central2 \
+            --source ./cloud/functions \
+            --entry-point healthLegPush \
+            --project ${{ secrets.GCP_PROJECT_ID }} \
+            --set-env-vars GCP_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }},GRAFANA_CREDENTIALS_SECRET=grafana-cloud-push-credentials
+
+      # Grant healthLegPush's own runtime service account read access to the
+      # Grafana Cloud OTLP push credentials it needs on every push.
+      # Re-running this on every deploy is a safe no-op once the binding
+      # exists.
+      - name: Grant healthLegPush access to the grafana-cloud-push-credentials secret
+        run: |
+          HEALTH_LEG_SA=$(gcloud functions describe healthLegPush \
+            --gen2 \
+            --region europe-central2 \
+            --project ${{ secrets.GCP_PROJECT_ID }} \
+            --format="value(serviceConfig.serviceAccountEmail)")
+
+          gcloud secrets add-iam-policy-binding grafana-cloud-push-credentials \
+            --member="serviceAccount:${HEALTH_LEG_SA}" \
+            --role="roles/secretmanager.secretAccessor" \
+            --project ${{ secrets.GCP_PROJECT_ID }}
+
       # PEN-227: the target endpoint for EV3/Pi telemetry going forward.
-      # HEALTH_LEG_FUNCTION_URL is deliberately not set — PEN-228 (the
-      # health-leg push function) doesn't exist yet, so it's left unset and
-      # health records fail open (logged, dropped) until that lands.
+      # HEALTH_LEG_FUNCTION_URL is read back from the healthLegPush deploy
+      # above, now that PEN-228 exists — previously left unset (health
+      # records failed open, logged and dropped) until this landed.
       - name: Deploy unifiedIngress Cloud Function
         id: deploy-ingress
         run: |
+          HEALTH_LEG_URL=$(gcloud functions describe healthLegPush \
+            --gen2 \
+            --region europe-central2 \
+            --project ${{ secrets.GCP_PROJECT_ID }} \
+            --format="value(serviceConfig.uri)")
+
           gcloud functions deploy unifiedIngress \
             --gen2 \
             --runtime nodejs20 \
@@ -94,14 +138,18 @@ jobs:
             --source ./cloud/functions \
             --entry-point unifiedIngress \
             --project ${{ secrets.GCP_PROJECT_ID }} \
-            --set-env-vars GCP_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }},DEVICE_TOKENS_SECRET=device-tokens,BIGQUERY_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }}
+            --set-env-vars GCP_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }},DEVICE_TOKENS_SECRET=device-tokens,BIGQUERY_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }},HEALTH_LEG_FUNCTION_URL=${HEALTH_LEG_URL}
 
       # setup-device-tokens.sh only prints this binding as a manual
       # instruction — nothing actually granted it, so a fresh deploy would
       # otherwise leave every request failing with a Secret Manager
       # permission error. Re-running this on every deploy is a safe no-op
-      # once the binding exists.
-      - name: Grant unifiedIngress access to the device-tokens secret
+      # once the binding exists. The second binding grants unifiedIngress's
+      # service account the Cloud Run invoker role on healthLegPush (Gen2
+      # Cloud Functions are Cloud Run services under the hood) — without it,
+      # every type=health push is rejected 401/403 by healthLegPush's own
+      # IAM check before ingress.js's code ever runs.
+      - name: Grant unifiedIngress access to the device-tokens secret and healthLegPush
         run: |
           RUNTIME_SA=$(gcloud functions describe unifiedIngress \
             --gen2 \
@@ -113,6 +161,12 @@ jobs:
             --member="serviceAccount:${RUNTIME_SA}" \
             --role="roles/secretmanager.secretAccessor" \
             --project ${{ secrets.GCP_PROJECT_ID }}
+
+          gcloud run services add-iam-policy-binding healthLegPush \
+            --region europe-central2 \
+            --project ${{ secrets.GCP_PROJECT_ID }} \
+            --member="serviceAccount:${RUNTIME_SA}" \
+            --role="roles/run.invoker"
 
       - name: Tag successful deployment
         if: success()
@@ -141,7 +195,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "✅ *Cloud Functions deployed successfully*\n*Functions:* `controlRobot`, `telemetryIngestion`, `unifiedIngress`\n*Commit:* `${{ github.sha }}` by ${{ github.actor }}\n*Branch:* `${{ github.ref_name }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+                    "text": "✅ *Cloud Functions deployed successfully*\n*Functions:* `controlRobot`, `telemetryIngestion`, `healthLegPush`, `unifiedIngress`\n*Commit:* `${{ github.sha }}` by ${{ github.actor }}\n*Branch:* `${{ github.ref_name }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
                   }
                 }
               ]

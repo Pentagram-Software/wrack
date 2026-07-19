@@ -20,12 +20,18 @@ The Cloud Function receives HTTP POST requests with commands, validates authenti
 - **index.js**: Robot control Cloud Function (`controlRobot`) - processes HTTP requests, validates commands, manages TCP connection to robot, emits `api_request` telemetry events. Also requires `telemetry.js` and `ingress.js` so all three functions are registered.
 - **api-telemetry.js**: Fire-and-forget telemetry helper used by `controlRobot`. Builds `api_request` events and inserts them to BigQuery via `setImmediate` (non-blocking). Errors are swallowed so they cannot affect command execution.
 - **telemetry.js**: Telemetry ingestion Cloud Function (`telemetryIngestion`) - accepts batched events, validates schema, batch-inserts into BigQuery `wrack_telemetry.events`. Legacy single-purpose endpoint, shared-key auth — `ingress.js` supersedes it for new senders but it stays live during migration.
-- **ingress.js**: Unified ingress Cloud Function (`unifiedIngress`, PEN-227) - the target endpoint for EV3/Pi telemetry going forward. Per-device auth (`X-Device-Id`/`X-Device-Token` against the `device-tokens` Secret Manager secret, not the shared `API_KEY`). Routes each event by its optional `type` field: `event` (default) → `bigquery-client.js insertEvents()`; `health` → a direct synchronous POST to `HEALTH_LEG_FUNCTION_URL` (PEN-228), fails open (logged and dropped, never surfaced as a failure) when that URL is unset or the call errors. Reuses `telemetry.js`'s `validateEvent` for envelope validation.
+- **ingress.js**: Unified ingress Cloud Function (`unifiedIngress`, PEN-227) - the target endpoint for EV3/Pi telemetry going forward. Per-device auth (`X-Device-Id`/`X-Device-Token` against the `device-tokens` Secret Manager secret, not the shared `API_KEY`). Routes each event by its optional `type` field: `event` (default) → `bigquery-client.js insertEvents()`; `health` → a direct synchronous POST to `HEALTH_LEG_FUNCTION_URL` (`healthLegPush`, PEN-228), authenticated with a Google-signed OIDC identity token (`google-auth-library`, cached at module scope with single-flight dedup so a concurrent fan-out of pushes doesn't each hit the metadata server) attached as `Authorization: Bearer <token>`. Fails open (logged and dropped, never surfaced as a failure) when the URL is unset, the token can't be acquired, or the call errors. Reuses `telemetry.js`'s `validateEvent` for envelope validation.
+- **health-leg.js**: Health-leg push Cloud Function (`healthLegPush`, PEN-228) - the receiving end of `unifiedIngress`'s `type=health` leg. Receives one health record per POST, maps it to OTLP metrics (numeric payload fields, via `otlp-mapper.js`) and a structured log record (full payload), and pushes both to Grafana Cloud's hosted OTLP gateway using `@opentelemetry/exporter-metrics-otlp-http` + `-logs-otlp-http`, authenticated with Basic Auth (Grafana instance ID + Access Policy token from `grafana-credentials.js`). Deployed `--no-allow-unauthenticated` — its only caller is `unifiedIngress`, so GCP IAM (Cloud Run invoker role) gates access instead of an app-level check. Fails open on any push failure (logged, dropped, never retried).
+- **otlp-mapper.js**: Pure field-mapping logic used by `health-leg.js` — turns a validated health event into OTLP gauge metric points (one per numeric/boolean payload field, named `wrack.<event_type>.<field>`) and a single structured log record (full payload as body, severity elevated for `error` events and problem-state `device_status` events). No OTLP client/network code, so it's independently unit-testable.
+- **grafana-credentials.js**: Loads `{otlp_endpoint, instance_id, token}` from the `grafana-cloud-push-credentials` Secret Manager secret (PEN-189, provisioned by `cloud/monitoring/setup-grafana-secret.sh`) for `health-leg.js`. TTL-cached across warm invocations, mirroring `ingress.js`'s device-tokens cache.
 - **setup-device-tokens.sh**: Generates/rotates per-device tokens and stores them as the `device-tokens` Secret Manager secret `ingress.js` reads at cold start. Mirrors `cloud/monitoring/setup-grafana-secret.sh`'s structure.
 - **bigquery-client.js**: Reusable BigQuery wrapper — lazy singleton init, `insertEvent`, `insertEvents` batch, exponential-backoff retry for 429/5xx/UNAVAILABLE errors, `PartialFailureError` handling. Opt-in/fail-safe: omitting `BIGQUERY_PROJECT_ID` silently disables all inserts.
 - **index.test.js**: Jest unit tests for `controlRobot` (authentication, command validation, dispatching, error handling).
 - **telemetry.test.js**: Jest unit tests for `telemetryIngestion` (32 tests covering validation, BigQuery inserts, partial failures, auth).
-- **ingress.test.js**: Jest unit tests for `unifiedIngress` (per-device auth, type-field routing, health-leg fail-open behaviour).
+- **ingress.test.js**: Jest unit tests for `unifiedIngress` (per-device auth, type-field routing, health-leg fail-open behaviour, identity-token acquisition/caching/concurrency).
+- **health-leg.test.js**: Jest unit tests for `healthLegPush` (OTLP exporter wiring, fail-open on downstream push failure, 401/403 left to GCP IAM, request validation).
+- **otlp-mapper.test.js**: Jest unit tests for the health-event → OTLP metrics/logs field mapping.
+- **grafana-credentials.test.js**: Jest unit tests for the Grafana credentials Secret Manager loader (TTL cache, shape validation).
 - **bigquery-client.test.js**: Jest unit tests for the BigQuery client wrapper (60 tests covering isEnabled, _formatRow, _isRetryableError, insertEvent, insertEvents, retry behaviour, client initialisation).
 - **auth.js**: API authentication logic using X-API-Key header (shared static key, used by `controlRobot` and `telemetryIngestion` only — `ingress.js` uses its own per-device token check instead).
 - **robot-server.py**: Python server running on EV3 robot (separate device) - receives TCP commands and controls motors.
@@ -112,10 +118,28 @@ GCP_PROJECT_ID=wrack-control            # project the device-tokens secret lives
 DEVICE_TOKENS_SECRET=device-tokens      # optional, defaults to "device-tokens"
 BIGQUERY_PROJECT_ID=wrack-control       # analytics leg, same as telemetryIngestion
 BIGQUERY_DATASET=wrack_telemetry        # optional
-HEALTH_LEG_FUNCTION_URL=                # unset until PEN-228 exists; health records fail open until then
+HEALTH_LEG_FUNCTION_URL=                # healthLegPush's URL; unset means health records fail open (logged, dropped)
 ```
 
 Provision device tokens with `bash setup-device-tokens.sh --device-id ev3-001 --device-id rpi-camera-01` (see the script header for full usage).
+
+### healthLegPush endpoint (PEN-228)
+**URL:** `https://europe-central2-[PROJECT-ID].cloudfunctions.net/healthLegPush` (what `unifiedIngress`'s `HEALTH_LEG_FUNCTION_URL` should point at)
+**Method:** POST
+**Region:** europe-central2
+**Authentication:** GCP IAM only (deployed `--no-allow-unauthenticated`) — no app-level check. `unifiedIngress`'s runtime service account is granted `roles/run.invoker` on it; `unifiedIngress` attaches a Google-signed OIDC identity token as `Authorization: Bearer <token>`. A request without a valid token is rejected by the platform before this function's code runs.
+
+**Request:** a single telemetry event object (not a batch) — `unifiedIngress`'s `pushHealthRecord()` calls this once per health record.
+
+**Response:** `{"success": true}` (200) on a successful push; `{"error": "..."}` (400) for a malformed body; `{"success": false, "error": "push failed"}` (502) only when Grafana credentials themselves can't be loaded — any downstream OTLP push failure is logged and swallowed internally (fails open, still 200).
+
+**Environment variables required:**
+```bash
+GCP_PROJECT_ID=wrack-control                          # project the credentials secret lives in
+GRAFANA_CREDENTIALS_SECRET=grafana-cloud-push-credentials  # optional, defaults to this name
+```
+
+Provision Grafana credentials with `cloud/monitoring/setup-grafana-secret.sh` (PEN-189) before deploying this function.
 
 ### Request Format
 ```json
@@ -200,12 +224,14 @@ API_KEY=abc123def456ghi789jkl012mno345pq  # Authentication key
 npm start                   # Start controlRobot on port 8080
 npm run start:telemetry     # Start telemetryIngestion on port 8080
 npm run start:ingress       # Start unifiedIngress on port 8080
+npm run start:health-leg    # Start healthLegPush on port 8080 (no local IAM check — POST a single event directly)
 
 # Deployment
 npm run deploy              # Deploy controlRobot to GCP europe-central2
 npm run deploy:telemetry    # Deploy telemetryIngestion to GCP europe-central2
 npm run deploy:ingress      # Deploy unifiedIngress to GCP europe-central2
-gcloud builds submit --config cloudbuild.yaml  # Deploy all three via Cloud Build
+npm run deploy:health-leg   # Deploy healthLegPush to GCP europe-central2 (--no-allow-unauthenticated)
+gcloud builds submit --config cloudbuild.yaml  # Deploy all four via Cloud Build (healthLegPush before unifiedIngress, so its URL/IAM grants are ready first)
 
 # Device tokens (unifiedIngress only)
 bash setup-device-tokens.sh --device-id ev3-001 --device-id rpi-camera-01

@@ -25,6 +25,7 @@ const functions = require('@google-cloud/functions-framework');
 const cors = require('cors');
 const crypto = require('crypto');
 const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
+const { GoogleAuth } = require('google-auth-library');
 const { validateEvent } = require('./telemetry');
 const { insertEvents } = require('./bigquery-client');
 
@@ -213,6 +214,102 @@ function resolveType(event) {
   return event && event.type === 'health' ? 'health' : 'event';
 }
 
+// ─── Identity-token acquisition for the health-leg call (PEN-228) ───────────
+//
+// The health-leg function is deployed without --allow-unauthenticated (its
+// only caller is this function), so every push needs a Google-signed OIDC
+// identity token as Authorization: Bearer <token>. pushHealthRecords() fans
+// out up to HEALTH_PUSH_CONCURRENCY (20) concurrent pushHealthRecord() calls
+// per chunk — naive per-call token acquisition would mean up to 20
+// concurrent metadata-server round-trips on a cold instance, eating into
+// the 3s-per-call/~7s-total latency budget documented in
+// docs/monitoring/architecture.md. Cached at module scope with a
+// single-flight in-flight promise so a cold-start burst triggers exactly
+// one fetch, and every concurrent caller in that burst awaits the same one.
+
+let _auth = null;
+function _getAuth() {
+  if (!_auth) {
+    _auth = new GoogleAuth();
+  }
+  return _auth;
+}
+
+// GCP-issued ID tokens are valid for ~1h; refreshed a bit early so a
+// request can never race the token's real expiry.
+const ID_TOKEN_REFRESH_SKEW_MS = 60 * 1000;
+// Fallback TTL used only if the token's own `exp` claim can't be parsed —
+// keeps the cache from being unboundedly (and silently) stale if that ever
+// happens, rather than trusting an un-parseable token forever.
+const ID_TOKEN_FALLBACK_TTL_MS = 50 * 60 * 1000;
+
+let _idTokenCache = null; // { audience, token, expiresAt }
+// Set synchronously (before any `await`) the moment a fetch starts, and
+// cleared only once it settles — see _getIdentityToken()'s comment for why
+// this makes a burst of concurrent callers coalesce onto one fetch.
+let _idTokenFetchPromise = null;
+
+/**
+ * Decode a JWT's `exp` claim (seconds since epoch) into milliseconds,
+ * without a JWT-parsing dependency — this only ever reads a token this
+ * process itself just received from Google, never an untrusted input, so a
+ * plain base64url decode of the payload segment is enough.
+ */
+function _decodeJwtExpiryMs(token) {
+  try {
+    const payloadSegment = token.split('.')[1];
+    const json = Buffer.from(payloadSegment, 'base64url').toString('utf8');
+    const { exp } = JSON.parse(json);
+    return typeof exp === 'number' ? exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Returns a cached (or freshly fetched) Google-signed identity token for
+ * `audience`. Concurrent callers during a cache miss all await the same
+ * in-flight fetch rather than each triggering their own — this relies on
+ * `_idTokenFetchPromise` being assigned synchronously, before the first
+ * `await` inside it, so every call made in the same synchronous batch (e.g.
+ * chunk.map(event => pushHealthRecord(event)) in pushHealthRecords()) sees
+ * it already set by the time it runs.
+ */
+async function _getIdentityToken(audience) {
+  const now = Date.now();
+  if (
+    _idTokenCache &&
+    _idTokenCache.audience === audience &&
+    _idTokenCache.expiresAt - ID_TOKEN_REFRESH_SKEW_MS > now
+  ) {
+    return _idTokenCache.token;
+  }
+
+  if (_idTokenFetchPromise) {
+    return _idTokenFetchPromise;
+  }
+
+  _idTokenFetchPromise = (async () => {
+    try {
+      const client = await _getAuth().getIdTokenClient(audience);
+      const token = await client.idTokenProvider.fetchIdToken(audience);
+      const expiresAt = _decodeJwtExpiryMs(token) || now + ID_TOKEN_FALLBACK_TTL_MS;
+      _idTokenCache = { audience, token, expiresAt };
+      return token;
+    } finally {
+      _idTokenFetchPromise = null;
+    }
+  })();
+
+  return _idTokenFetchPromise;
+}
+
+// Exposed for unit-test injection only.
+function _resetIdentityTokenCache() {
+  _idTokenCache = null;
+  _idTokenFetchPromise = null;
+}
+
 // A stalled health endpoint must not be able to hold the whole ingress
 // request open — that would defeat both "return 200 quickly" and the
 // documented fail-open behavior. Bounds each push to a few seconds.
@@ -230,10 +327,21 @@ async function pushHealthRecord(event) {
     return { success: false, skipped: true };
   }
 
+  const headers = { 'Content-Type': 'application/json' };
+  try {
+    headers['Authorization'] = `Bearer ${await _getIdentityToken(url)}`;
+  } catch (tokenErr) {
+    // Fail open, same as any other health-leg failure: attempt the push
+    // anyway rather than skip it outright — the receiving function will
+    // simply reject an unauthenticated call with 401, which is exactly the
+    // fail-open outcome any other health-leg failure already produces.
+    console.error(`[ingress] failed to acquire identity token for health-leg push (fail open):`, tokenErr.message);
+  }
+
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(event),
       signal: AbortSignal.timeout(HEALTH_LEG_FETCH_TIMEOUT_MS),
     });
@@ -464,4 +572,7 @@ module.exports = {
   _isValidDeviceTokensShape,
   _resetDeviceTokensCache,
   _timingSafeStringEqual,
+  _getIdentityToken,
+  _resetIdentityTokenCache,
+  _decodeJwtExpiryMs,
 };
