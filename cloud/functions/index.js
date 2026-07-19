@@ -383,3 +383,12 @@ require('./telemetry');
 // Register the unified ingress function (PEN-227): per-device auth,
 // type-field routing to the analytics leg (BigQuery) or health leg (Grafana).
 require('./ingress');
+
+// Register the health-leg push function (PEN-228): the receiving end of
+// unifiedIngress's type=health leg. Cloud Functions/functions-framework
+// discovers a --target by loading this package's main (index.js) and
+// looking up the name in functions.http()'s registry — without this
+// require, healthLegPush is never registered and both `npm run
+// start:health-leg` and a real `--entry-point healthLegPush` deploy fail to
+// find it.
+require('./health-leg');

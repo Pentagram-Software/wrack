@@ -9,11 +9,16 @@
  *  - Mock @google-cloud/secret-manager so device-token lookups are controllable.
  *  - Mock @google-cloud/bigquery via a variable-captured insert function.
  *  - Mock global.fetch for the health-leg push.
+ *  - Mock google-auth-library so the health-leg push's identity-token
+ *    acquisition is controllable (and never makes a real metadata-server
+ *    call in tests).
  */
 
 // --- Module-level mock variables (reassigned in beforeEach) ---
 let mockAccessSecretVersion;
 let mockInsert;
+let mockFetchIdToken;
+let mockGetIdTokenClient;
 
 jest.mock('@google-cloud/functions-framework', () => ({
   http: jest.fn(),
@@ -24,6 +29,12 @@ jest.mock('cors', () => () => (req, res, callback) => callback());
 jest.mock('@google-cloud/secret-manager', () => ({
   SecretManagerServiceClient: jest.fn().mockImplementation(() => ({
     accessSecretVersion: (...args) => mockAccessSecretVersion(...args),
+  })),
+}));
+
+jest.mock('google-auth-library', () => ({
+  GoogleAuth: jest.fn().mockImplementation(() => ({
+    getIdTokenClient: (...args) => mockGetIdTokenClient(...args),
   })),
 }));
 
@@ -56,7 +67,22 @@ const {
   _isValidDeviceTokensShape,
   _timingSafeStringEqual,
   _resetDeviceTokensCache,
+  _getIdentityToken,
+  _resetIdentityTokenCache,
+  _decodeJwtExpiryMs,
 } = require('./ingress');
+
+// Builds an unsigned but structurally valid JWT (header.payload.signature)
+// with the given `exp` claim (seconds since epoch) — enough for
+// _decodeJwtExpiryMs()/the identity-token cache to read, without needing a
+// real signing key.
+function makeFakeIdToken(expiresInSeconds = 3600) {
+  const header = Buffer.from(JSON.stringify({ alg: 'none' })).toString('base64url');
+  const payload = Buffer.from(
+    JSON.stringify({ exp: Math.floor(Date.now() / 1000) + expiresInSeconds })
+  ).toString('base64url');
+  return `${header}.${payload}.`;
+}
 
 let ingressHandler;
 
@@ -141,12 +167,18 @@ beforeEach(() => {
   jest.clearAllMocks();
   _resetDeviceTokensCache();
   _resetBigQueryClient();
+  _resetIdentityTokenCache();
   _setSleepFn(() => Promise.resolve()); // retries complete instantly in tests
 
   mockAccessSecretVersion = jest.fn().mockResolvedValue([
     { payload: { data: Buffer.from(JSON.stringify(DEVICE_TOKENS)) } },
   ]);
   mockInsert = jest.fn().mockResolvedValue([]);
+
+  mockFetchIdToken = jest.fn().mockResolvedValue(makeFakeIdToken());
+  mockGetIdTokenClient = jest.fn().mockResolvedValue({
+    idTokenProvider: { fetchIdToken: (...args) => mockFetchIdToken(...args) },
+  });
 
   process.env.BIGQUERY_PROJECT_ID = 'test-project';
   delete process.env.HEALTH_LEG_FUNCTION_URL;
@@ -853,6 +885,130 @@ describe('unifiedIngress handler — type=health routing', () => {
     expect(global.fetch).toHaveBeenCalledTimes(20);
 
     nowSpy.mockRestore();
+  });
+});
+
+// ─── Identity-token acquisition for the health-leg call (PEN-228) ────────────
+
+describe('unifiedIngress handler — health-leg identity token', () => {
+  test('attaches a Bearer identity token to the health-leg push', async () => {
+    process.env.HEALTH_LEG_FUNCTION_URL = 'https://example.test/health-leg';
+    const token = makeFakeIdToken();
+    mockFetchIdToken.mockResolvedValue(token);
+    const event = validEvent({ type: 'health', event_type: 'device_status', payload: { device_name: 'ev3', status: 'connected' } });
+    await invokeHandler(makeReq({ body: { events: [event] } }), makeRes());
+
+    expect(mockGetIdTokenClient).toHaveBeenCalledWith('https://example.test/health-leg');
+    const fetchOptions = global.fetch.mock.calls[0][1];
+    expect(fetchOptions.headers.Authorization).toBe(`Bearer ${token}`);
+  });
+
+  test('a second request in the same warm instance reuses the cached token', async () => {
+    process.env.HEALTH_LEG_FUNCTION_URL = 'https://example.test/health-leg';
+    const event = validEvent({ type: 'health', event_type: 'device_status', payload: { device_name: 'ev3', status: 'connected' } });
+    await invokeHandler(makeReq({ body: { events: [{ ...event, event_id: 'e1' }] } }), makeRes());
+    await invokeHandler(makeReq({ body: { events: [{ ...event, event_id: 'e2' }] } }), makeRes());
+
+    expect(mockGetIdTokenClient).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  test('a burst of concurrent cold-start pushes triggers exactly one token fetch, not one per push', async () => {
+    // Mirrors the "caps concurrent health-leg pushes" test's batch size and
+    // async fetch shape, but asserts on the token acquisition itself — the
+    // constraint PEN-228 calls out explicitly: up to HEALTH_PUSH_CONCURRENCY
+    // (20) concurrent pushHealthRecord() calls on a cold instance must not
+    // each independently hit the metadata server.
+    process.env.HEALTH_LEG_FUNCTION_URL = 'https://example.test/health-leg';
+
+    let resolveIdToken;
+    mockFetchIdToken.mockImplementation(
+      () => new Promise((resolve) => { resolveIdToken = () => resolve(makeFakeIdToken()); })
+    );
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+
+    const events = Array.from({ length: 20 }, (_, i) =>
+      validEvent({ event_id: `evt-health-${i}`, type: 'health', event_type: 'device_status', payload: { device_name: 'ev3', status: 'connected' } })
+    );
+    const handlerPromise = invokeHandler(makeReq({ body: { events } }), makeRes());
+
+    // Let every pushHealthRecord() call reach (and block on) the token
+    // fetch before resolving it — this is the moment a naive per-call
+    // implementation would have already fired 20 separate metadata-server
+    // requests.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(mockGetIdTokenClient).toHaveBeenCalledTimes(1);
+
+    resolveIdToken();
+    await handlerPromise;
+
+    expect(mockGetIdTokenClient).toHaveBeenCalledTimes(1);
+    expect(global.fetch).toHaveBeenCalledTimes(20);
+  });
+
+  test('re-fetches once the cached token is close to expiry', async () => {
+    process.env.HEALTH_LEG_FUNCTION_URL = 'https://example.test/health-leg';
+    const nowSpy = jest.spyOn(Date, 'now');
+    nowSpy.mockReturnValue(1_000_000);
+    mockFetchIdToken.mockResolvedValue(makeFakeIdToken(120)); // expires in 2 minutes
+
+    const event = validEvent({ type: 'health', event_type: 'device_status', payload: { device_name: 'ev3', status: 'connected' } });
+    await invokeHandler(makeReq({ body: { events: [{ ...event, event_id: 'e1' }] } }), makeRes());
+    expect(mockGetIdTokenClient).toHaveBeenCalledTimes(1);
+
+    // Still within the refresh skew window (60s before the 120s expiry) —
+    // cached token should still be reused.
+    nowSpy.mockReturnValue(1_000_000 + 50 * 1000);
+    await invokeHandler(makeReq({ body: { events: [{ ...event, event_id: 'e2' }] } }), makeRes());
+    expect(mockGetIdTokenClient).toHaveBeenCalledTimes(1);
+
+    // Past the refresh skew — should re-fetch.
+    nowSpy.mockReturnValue(1_000_000 + 65 * 1000);
+    await invokeHandler(makeReq({ body: { events: [{ ...event, event_id: 'e3' }] } }), makeRes());
+    expect(mockGetIdTokenClient).toHaveBeenCalledTimes(2);
+
+    nowSpy.mockRestore();
+  });
+
+  test('fails open (push still attempted, no Authorization header) when token acquisition fails', async () => {
+    process.env.HEALTH_LEG_FUNCTION_URL = 'https://example.test/health-leg';
+    mockGetIdTokenClient.mockRejectedValue(new Error('metadata server unreachable'));
+    const event = validEvent({ type: 'health', event_type: 'device_status', payload: { device_name: 'ev3', status: 'connected' } });
+    const req = makeReq({ body: { events: [event] } });
+    const res = makeRes();
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.data.inserted).toBe(1);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch.mock.calls[0][1].headers.Authorization).toBeUndefined();
+  });
+
+  test('_getIdentityToken() re-fetches when the audience changes', async () => {
+    await _getIdentityToken('https://a.example.test');
+    await _getIdentityToken('https://b.example.test');
+    expect(mockGetIdTokenClient).toHaveBeenCalledTimes(2);
+    expect(mockGetIdTokenClient).toHaveBeenNthCalledWith(1, 'https://a.example.test');
+    expect(mockGetIdTokenClient).toHaveBeenNthCalledWith(2, 'https://b.example.test');
+  });
+});
+
+describe('_decodeJwtExpiryMs()', () => {
+  test('extracts the exp claim as milliseconds', () => {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const token = makeFakeIdToken(3600);
+    const expiresAt = _decodeJwtExpiryMs(token);
+    expect(expiresAt).not.toBeNull();
+    expect(expiresAt / 1000).toBeCloseTo(nowSeconds + 3600, 0);
+  });
+
+  test('returns null for a malformed token', () => {
+    expect(_decodeJwtExpiryMs('not-a-jwt')).toBeNull();
+  });
+
+  test('returns null when the payload has no exp claim', () => {
+    const payload = Buffer.from(JSON.stringify({ sub: 'test' })).toString('base64url');
+    expect(_decodeJwtExpiryMs(`header.${payload}.sig`)).toBeNull();
   });
 });
 

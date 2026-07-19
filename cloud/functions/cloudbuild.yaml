@@ -33,30 +33,70 @@ steps:
   - '--set-env-vars'
   - 'API_KEY=${_API_KEY},BIGQUERY_PROJECT_ID=${_BIGQUERY_PROJECT_ID},BIGQUERY_DATASET=${_BIGQUERY_DATASET}'
 
-# Deploy unifiedIngress Cloud Function (PEN-227)
-# --gen2 is required here (unlike the two functions above): the IAM grant
-# step right after this one looks up the runtime service account via
-# `gcloud functions describe --gen2`, which only returns serviceConfig for a
-# Gen2 function. Deploying this one as Gen1 like its neighbors would make
-# that lookup fail.
+# Deploy healthLegPush Cloud Function (PEN-228)
+# Deployed BEFORE unifiedIngress so unifiedIngress's own deploy step below
+# can read back its URL. --no-allow-unauthenticated is deliberate — its only
+# caller is unifiedIngress itself (see docs/monitoring/architecture.md,
+# "Authenticating the ingress -> health-leg call"), so GCP IAM handles auth
+# instead of an app-level shared secret. --gen2 for the same reason as
+# unifiedIngress below: the IAM/URL lookups need `--gen2` describe output.
 - name: 'gcr.io/cloud-builders/gcloud'
   args:
   - 'functions'
   - 'deploy'
-  - 'unifiedIngress'
+  - 'healthLegPush'
   - '--gen2'
   - '--runtime=nodejs20'
   - '--trigger-http'
-  - '--allow-unauthenticated'
+  - '--no-allow-unauthenticated'
   - '--region=europe-central2'
   - '--set-env-vars'
-  - 'GCP_PROJECT_ID=${_BIGQUERY_PROJECT_ID},DEVICE_TOKENS_SECRET=${_DEVICE_TOKENS_SECRET},BIGQUERY_PROJECT_ID=${_BIGQUERY_PROJECT_ID},BIGQUERY_DATASET=${_BIGQUERY_DATASET},HEALTH_LEG_FUNCTION_URL=${_HEALTH_LEG_FUNCTION_URL}'
+  - 'GCP_PROJECT_ID=${_BIGQUERY_PROJECT_ID},GRAFANA_CREDENTIALS_SECRET=${_GRAFANA_CREDENTIALS_SECRET}'
+
+# Grant healthLegPush's own runtime service account read access to the
+# Grafana Cloud OTLP push credentials it needs on every push. Re-running on
+# every build is a safe no-op once the binding exists.
+- name: 'gcr.io/cloud-builders/gcloud'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    HEALTH_LEG_SA=$(gcloud functions describe healthLegPush --gen2 --region=europe-central2 --format='value(serviceConfig.serviceAccountEmail)')
+    gcloud secrets add-iam-policy-binding "${_GRAFANA_CREDENTIALS_SECRET}" \
+      --member="serviceAccount:${HEALTH_LEG_SA}" \
+      --role="roles/secretmanager.secretAccessor"
+
+# Deploy unifiedIngress Cloud Function (PEN-227)
+# --gen2 is required here (unlike controlRobot/telemetryIngestion above): the
+# IAM grant step right after this one looks up the runtime service account
+# via `gcloud functions describe --gen2`, which only returns serviceConfig
+# for a Gen2 function. HEALTH_LEG_FUNCTION_URL is read back from the
+# healthLegPush deploy above via a bash entrypoint (not a static
+# substitution) since that URL isn't known until healthLegPush is deployed.
+- name: 'gcr.io/cloud-builders/gcloud'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    set -euo pipefail
+    HEALTH_LEG_URL=$(gcloud functions describe healthLegPush --gen2 --region=europe-central2 --format='value(serviceConfig.uri)')
+    gcloud functions deploy unifiedIngress \
+      --gen2 \
+      --runtime=nodejs20 \
+      --trigger-http \
+      --allow-unauthenticated \
+      --region=europe-central2 \
+      --set-env-vars "GCP_PROJECT_ID=${_BIGQUERY_PROJECT_ID},DEVICE_TOKENS_SECRET=${_DEVICE_TOKENS_SECRET},BIGQUERY_PROJECT_ID=${_BIGQUERY_PROJECT_ID},BIGQUERY_DATASET=${_BIGQUERY_DATASET},HEALTH_LEG_FUNCTION_URL=${HEALTH_LEG_URL}"
 
 # Grant unifiedIngress's runtime service account access to its own auth
-# secret. Without this the function deploys successfully but every real
-# request fails authentication — it can't read device-tokens to check
-# anything against. Re-running on every build is a safe no-op once the
-# binding exists. Mirrors the equivalent step in
+# secret, and the Cloud Run invoker role on healthLegPush (Gen2 Cloud
+# Functions are Cloud Run services under the hood, so cross-function
+# service-to-service auth is granted the same way). Without the first grant
+# every real request fails authentication; without the second, every
+# type=health push gets rejected with 401/403 by healthLegPush's own IAM
+# check before ingress.js's code ever runs. Re-running on every build is a
+# safe no-op once both bindings exist. Mirrors the equivalent step in
 # .github/workflows/deploy-cloud-functions.yml — that workflow and this file
 # are two independent deploy paths and neither automatically keeps the other
 # in sync, so this needs to be maintained in both places.
@@ -70,6 +110,10 @@ steps:
     gcloud secrets add-iam-policy-binding "${_DEVICE_TOKENS_SECRET}" \
       --member="serviceAccount:${RUNTIME_SA}" \
       --role="roles/secretmanager.secretAccessor"
+    gcloud run services add-iam-policy-binding healthLegPush \
+      --region=europe-central2 \
+      --member="serviceAccount:${RUNTIME_SA}" \
+      --role="roles/run.invoker"
 
 # Tag the image as latest
 - name: 'gcr.io/cloud-builders/docker'
@@ -85,9 +129,7 @@ substitutions:
   _BIGQUERY_PROJECT_ID: 'wrack-control'
   _BIGQUERY_DATASET: 'wrack_telemetry'
   _DEVICE_TOKENS_SECRET: 'device-tokens'
-  # Left empty until PEN-228 (health-leg push function) is deployed — the
-  # ingress fails open (logs and drops) on type=health records until then.
-  _HEALTH_LEG_FUNCTION_URL: ''
+  _GRAFANA_CREDENTIALS_SECRET: 'grafana-cloud-push-credentials'
 
 options:
   logging: CLOUD_LOGGING_ONLY
