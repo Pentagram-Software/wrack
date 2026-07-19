@@ -41,8 +41,9 @@ from pybricks.ev3devices import (Motor, TouchSensor, ColorSensor,
                                  InfraredSensor, UltrasonicSensor, GyroSensor)
 
 import sys
-import math
 from time import sleep
+
+PS4_INPUT_DEBUG = False
 
 # Import TerrainScanner with error handling
 TerrainScanner = None
@@ -406,6 +407,8 @@ def lighton(value):
     device_manager.safe_device_call("pixy_camera", "light", True);
 
 def sayit(value):
+    if PS4_INPUT_DEBUG:
+        print("PS4 input: Cross button received; speaking greeting")
     ev3.speaker.say("Hello, I am Wrack!")
 
 def start_auto_terrain_scanning(value):
@@ -599,114 +602,37 @@ def move(value):
 
 def watch(value):
     """Handle right joystick movement for turret control"""
-    if turret:
-        # Apply aggressive deadzone filtering similar to tank drive
-        TURRET_DEADZONE = 50  # Large deadzone for reliable stop detection
-        
-        # Apply deadzone and ensure true zero when joystick is at rest
-        if abs(value.r_left) < TURRET_DEADZONE:
-            x_axis = 0
-        else:
-            x_axis = value.r_left
-            
-        if abs(value.r_forward) < TURRET_DEADZONE:
-            y_axis = 0
-        else:
-            y_axis = value.r_forward
-        
-        # Map right joystick to turret speed control
-        # x_axis: left/right rotation with speed
-        # y_axis: currently unused
-        turret.speed_control(x_axis, y_axis)
-
-    result = 0;
-    val_x = value.r_left * -1;
-    val_y = value.r_forward;
-    
-    if(abs(val_x) < 10 and abs(val_y) < 10):
+    if not turret:
+        if PS4_INPUT_DEBUG:
+            print("PS4 input: right stick received, but turret is unavailable")
         return
-    if(val_x == 0):
-        return;
-    if(val_y == 0):
-        return;  # Prevent divide by zero in math.atan calculations
 
-    quadrant = 1;
-    if (val_x < 0 and val_y < 0):
-        quadrant = 3
-        #result_degrees = result_degrees_orig + 180
-        result = math.atan(abs(val_x) / abs(val_y))
-    elif(val_y < 0):
-        quadrant = 2
-        #result_degrees = result_degrees_orig + 90
-        result = math.atan(abs(val_y) / abs(val_x))
-    elif(val_x < 0):
-        quadrant = 4
-        #result_degrees = result_degrees_orig + 270
-        result = math.atan(abs(val_y) / abs(val_x))
-    else:
-        quadrant = 1
-        result = math.atan(abs(val_x) / abs(val_y))
-
-    result_degrees_orig = math.degrees(result)
-    result_degrees = result_degrees_orig
-
-    if(quadrant == 3):
-        result_degrees = result_degrees_orig + 180
-    elif(quadrant==2):
-        result_degrees = result_degrees_orig + 90
-    elif(quadrant == 4):
-        result_degrees = result_degrees_orig + 270
-
-    # TODO: This code is disabled - old implementation for angle tracking
-    # If re-enabling, need to define drive_motor properly
-    # 
-    # angle_shift = abs(result_degrees - last_angle);
-    # speed = 360;
-    # result_degrees_final = result_degrees;
-    # if(angle_shift > 180):
-    #     if(result_degrees > last_angle):
-    #         diff = result_degrees - last_angle;
-    #         diff = diff - 360;
-    #         result_degrees_final = last_angle + diff;
-    #     else:
-    #         diff = result_degrees - last_angle;
-    #         diff = diff + 360;
-    #         result_degrees_final = last_angle + diff;
-    # 
-    #     print("Shift is greater than 180:" + str(result_degrees_final))
-    #     speed = -1 * speed;
-    # 
-    # 
-    # if(angle_shift < 5):
-    #     return
-    # 
-    # print(str(result_degrees_final) + " from " + str(last_angle) + " shift: " + str(angle_shift) + " speed: " + str(speed))
-    # 
-    # # NOTE: drive_motor is not defined - would need to be initialized if this code is re-enabled
-    # # drive_motor.track_target(result_degrees_final)
-    # last_angle = result_degrees;
-    """
+    # Keep the raw normalized stick value intact. Turret.speed_control()
+    # applies the only deadzone used by this control path.
+    if PS4_INPUT_DEBUG:
+        print("PS4 input: right stick x={:.0f} y={:.0f}".format(
+            value.r_left, value.r_forward
+        ))
+    turret.speed_control(value.r_left, value.r_forward)
 
 
 def blockDetected(value):
-#    if(value.blocks == None or len(value.blocks) == 0):
-#        return;
     if not device_manager.is_device_available("pixy_camera"):
         return
-        
-    block = value.blocks[0];
-    if(block.width > 10 or block.height > 10):
-        scale_factor = block.x_center - 150;
-        device_manager.safe_device_call("turret_motor", "run", scale_factor);
+    if not value.blocks:
+        return
 
-
-"""
+    block = value.blocks[0]
+    if block.width > 10 or block.height > 10:
+        scale_factor = block.x_center - 150
+        device_manager.safe_device_call("turret_motor", "run", scale_factor)
 
 def main():
     global _runtime_controller, _runtime_remote_controller
 
     # Initialize both PS4 and Network Remote controllers
     controller = PS4Controller()
+    controller.set_debug_input(PS4_INPUT_DEBUG)
     remote_controller = RemoteController()
     _runtime_controller = controller
     _runtime_remote_controller = remote_controller
@@ -752,10 +678,18 @@ def main():
     # Check if controller connected successfully
     if controller.is_connected():
         print("Setting up PlayStation controller event handlers...")
-        
+
+        # Core controls must be registered before optional hardware.  A missing
+        # or misconfigured optional component must not disable speech or turret
+        # control for an otherwise connected controller.
+        controller.onOptionsButton(quit)
+        controller.onLeftJoystickMove(move)
+        controller.onCrossButton(sayit)
+        controller.onRightJoystickMove(watch)
+
         # Only set up pixy camera event handler if camera is available
         if device_manager.is_device_available("pixy_camera"):
-            pixy_camera.onBlockDetected(blockDetected);
+            pixy_camera.onBlockDetected(blockDetected)
 
         # Only set up light controls if pixy camera is available
         if device_manager.is_device_available("pixy_camera"):
@@ -769,10 +703,6 @@ def main():
             controller.onL2Button(start_auto_terrain_scanning)
             controller.onR2Button(stop_auto_terrain_scanning)
             controller.onCircleButton(get_terrain_scan_status)
-        
-        controller.onOptionsButton(quit)
-        controller.onLeftJoystickMove(move)
-        controller.onCrossButton(sayit)
         
         # Only set up arrow controls if drive motors are available
         if device_manager.are_devices_available(["drive_L_motor", "drive_R_motor"]):
@@ -788,7 +718,6 @@ def main():
         else:
             print("Drive motors not available - arrow controls disabled")
             
-        controller.onRightJoystickMove(watch)
         print("PlayStation controller (PS4/PS5) is ready for use!")
     else:
         print("PlayStation controller not available - program running in manual mode")

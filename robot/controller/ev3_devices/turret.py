@@ -6,6 +6,8 @@ from pybricks.tools import wait
 from .drive_system import DriveSystem
 from error_reporting import report_device_error, report_exception
 
+TURRET_SPEED_DEADZONE = 15
+
 
 class Turret(DriveSystem):
     """
@@ -77,9 +79,9 @@ class Turret(DriveSystem):
         if not self.turret_motor:
             return
         
-        # Apply aggressive deadzone to prevent jitter and ensure reliable stop
-        LARGE_DEADZONE = 50  # Much larger deadzone for reliable stop detection
-        if abs(x_axis) < LARGE_DEADZONE:
+        # The controller keeps raw normalized input; this is the single
+        # deadzone in the right-stick-to-turret path.
+        if abs(x_axis) < TURRET_SPEED_DEADZONE:
             # Stop turret when joystick is centered or near center
             try:
                 self.turret_motor.stop(Stop.HOLD)
