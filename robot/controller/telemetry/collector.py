@@ -209,6 +209,7 @@ class TelemetryCollector:
         event_id: Optional[str] = None,
         timestamp: Optional[str] = None,
         source: Optional[str] = None,
+        record_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Build a fully-formed telemetry event envelope dict.
 
@@ -225,19 +226,48 @@ class TelemetryCollector:
             Override the auto-generated timestamp (useful in tests).
         source:
             Override the collector's default source.
+        record_type:
+            Optional coarse routing discriminator for the unified ingress
+            (PEN-227): ``"health"`` or ``"event"``. Omitted from the envelope
+            when ``None`` (the ingress then defaults to ``"event"``), rather
+            than being sent as an explicit ``None``.
 
         Returns
         -------
         dict
             A dict conforming to the event envelope schema.
         """
-        return {
+        event = {
             "event_id": event_id or _generate_event_id(),
             "event_type": event_type,
             "source": source or self.source,
             "timestamp": timestamp or _utc_now_iso(),
             "payload": payload,
         }
+        if record_type is not None:
+            event["type"] = record_type
+        return event
+
+    def create_heartbeat_event(
+        self,
+        *,
+        device_name: str = "ev3",
+        status: str = "connected",
+    ) -> Dict[str, Any]:
+        """Build (but do not buffer) a liveness heartbeat event (PEN-229).
+
+        Reuses the existing ``device_status`` event type rather than
+        introducing a new one, so the unified ingress and shared schemas
+        need no changes — tagged ``type="health"`` so the ingress (PEN-227)
+        routes it to the Grafana health leg instead of BigQuery.
+
+        Deliberately not buffered/returned via ``collect_device_status``:
+        a heartbeat is time-sensitive and must be sent immediately by the
+        caller, not queued for the next analytics flush (which could be
+        minutes away).
+        """
+        payload = {"device_name": device_name, "status": status}
+        return self.create_event("device_status", payload, record_type="health")
 
     # ------------------------------------------------------------------
     # Generic collect API

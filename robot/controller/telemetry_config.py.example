@@ -16,3 +16,7 @@ TELEMETRY_DEVICE_ID = "ev3-001"
 # Per-device token sent as the X-Device-Token header. Generate/rotate with:
 #   bash cloud/functions/setup-device-tokens.sh --device-id ev3-001
 TELEMETRY_DEVICE_TOKEN = "your-per-device-token"
+
+# Optional: seconds between liveness heartbeats (PEN-229). Omit this line to
+# use HeartbeatSender's own default (telemetry.heartbeat.DEFAULT_HEARTBEAT_INTERVAL).
+# TELEMETRY_HEARTBEAT_INTERVAL_S = 30

@@ -13,6 +13,9 @@ sender
 status_collector
     Periodic battery/motor telemetry and immediate device-change events
     (StatusCollector — PEN-124).
+heartbeat
+    :class:`HeartbeatSender` — periodic EV3 liveness heartbeat POSTed
+    directly to the unified ingress (PEN-229).
 
 Quick start::
 
@@ -36,6 +39,12 @@ from .status_collector import (
     DEFAULT_BATTERY_INTERVAL,
     DEFAULT_MOTOR_INTERVAL,
 )
+from .heartbeat import (
+    HeartbeatSender,
+    DEFAULT_HEARTBEAT_INTERVAL,
+    DEFAULT_HEARTBEAT_SEND_TIMEOUT_S,
+    DEFAULT_HEARTBEAT_SEND_MAX_RETRIES,
+)
 from .schemas import (
     validate_event,
     validate_payload,
@@ -55,6 +64,11 @@ __all__ = [
     "StatusCollector",
     "DEFAULT_BATTERY_INTERVAL",
     "DEFAULT_MOTOR_INTERVAL",
+    # Heartbeat sender (PEN-229)
+    "HeartbeatSender",
+    "DEFAULT_HEARTBEAT_INTERVAL",
+    "DEFAULT_HEARTBEAT_SEND_TIMEOUT_S",
+    "DEFAULT_HEARTBEAT_SEND_MAX_RETRIES",
     # Schema validation
     "validate_event",
     "validate_payload",
