@@ -409,7 +409,7 @@ def lighton(value):
 def sayit(value):
     if PS4_INPUT_DEBUG:
         print("PS4 input: Cross button received; speaking greeting")
-    ev3.speaker.say("Hello, I am Wrack!")
+    ev3.speaker.say("Hello, I am wrack. I love you Elvira")
 
 def start_auto_terrain_scanning(value):
     """Start automatic terrain scanning"""
