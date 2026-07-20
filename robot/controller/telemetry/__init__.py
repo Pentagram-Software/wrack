@@ -45,6 +45,7 @@ from .heartbeat import (
     DEFAULT_HEARTBEAT_SEND_TIMEOUT_S,
     DEFAULT_HEARTBEAT_SEND_MAX_RETRIES,
 )
+from .configuration import is_analytics_enabled
 from .schemas import (
     validate_event,
     validate_payload,
@@ -69,6 +70,7 @@ __all__ = [
     "DEFAULT_HEARTBEAT_INTERVAL",
     "DEFAULT_HEARTBEAT_SEND_TIMEOUT_S",
     "DEFAULT_HEARTBEAT_SEND_MAX_RETRIES",
+    "is_analytics_enabled",
     # Schema validation
     "validate_event",
     "validate_payload",

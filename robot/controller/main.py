@@ -80,6 +80,7 @@ StatusCollector = None
 HeartbeatSender = None
 DEFAULT_HEARTBEAT_SEND_TIMEOUT_S = None
 DEFAULT_HEARTBEAT_SEND_MAX_RETRIES = None
+is_analytics_enabled = None
 try:
     from telemetry import (
         TelemetryCollector,
@@ -88,6 +89,7 @@ try:
         HeartbeatSender,
         DEFAULT_HEARTBEAT_SEND_TIMEOUT_S,
         DEFAULT_HEARTBEAT_SEND_MAX_RETRIES,
+        is_analytics_enabled,
     )
     print("Telemetry module imported successfully")
 except ImportError as e:
@@ -116,6 +118,7 @@ except Exception as e:
 _TELEMETRY_ENDPOINT = None
 _TELEMETRY_DEVICE_ID = None
 _TELEMETRY_DEVICE_TOKEN = None
+_TELEMETRY_ANALYTICS_ENABLED = False
 try:
     from telemetry_config import TELEMETRY_ENDPOINT, TELEMETRY_DEVICE_ID, TELEMETRY_DEVICE_TOKEN
     _TELEMETRY_ENDPOINT = TELEMETRY_ENDPOINT
@@ -125,6 +128,15 @@ try:
 except ImportError:
     print("telemetry_config.py not found - events collected but not sent")
     print("Copy telemetry_config.py.example to telemetry_config.py to enable sending")
+
+# Analytics telemetry is opt-in.  Keep the import separate so deployed
+# configurations created before PEN-233 continue to load and default safely
+# to health-only telemetry.
+try:
+    from telemetry_config import TELEMETRY_ANALYTICS_ENABLED
+    _TELEMETRY_ANALYTICS_ENABLED = TELEMETRY_ANALYTICS_ENABLED
+except ImportError:
+    pass
 
 # Optional heartbeat interval override (PEN-229) — kept separate from the
 # import above so existing telemetry_config.py files without this field
@@ -142,20 +154,25 @@ _telemetry_collector = None
 _telemetry_sender = None
 _status_collector = None
 _heartbeat_sender = None
+_heartbeat_telemetry_sender = None
 
 if TelemetryCollector:
     _telemetry_collector = TelemetryCollector(source="ev3")
     print("Telemetry collector initialised")
 
-if TelemetrySender and _TELEMETRY_ENDPOINT and _TELEMETRY_DEVICE_ID and _TELEMETRY_DEVICE_TOKEN:
+if (is_analytics_enabled and is_analytics_enabled(_TELEMETRY_ANALYTICS_ENABLED) and TelemetrySender
+        and _TELEMETRY_ENDPOINT and _TELEMETRY_DEVICE_ID and _TELEMETRY_DEVICE_TOKEN):
     _telemetry_sender = TelemetrySender(
         endpoint=_TELEMETRY_ENDPOINT,
         device_id=_TELEMETRY_DEVICE_ID,
         device_token=_TELEMETRY_DEVICE_TOKEN,
     )
     print("Telemetry sender initialised")
+else:
+    print("Analytics telemetry disabled (PEN-233 health-only baseline)")
 
-if HeartbeatSender and _telemetry_collector and _telemetry_sender:
+if (HeartbeatSender and TelemetrySender and _telemetry_collector
+        and _TELEMETRY_ENDPOINT and _TELEMETRY_DEVICE_ID and _TELEMETRY_DEVICE_TOKEN):
     # Deliberately a *separate* TelemetrySender from the analytics one above,
     # not a reuse — heartbeats are disposable (the next tick supersedes a
     # slow/failed one ~30s later), so retrying with the analytics sender's
@@ -492,7 +509,8 @@ def quit(value):
     if _heartbeat_sender:
         print("Shutting down HeartbeatSender...")
         _heartbeat_sender.stop()
-    if _telemetry_sender and _telemetry_collector:
+    if (is_analytics_enabled and is_analytics_enabled(_TELEMETRY_ANALYTICS_ENABLED)
+            and _telemetry_sender and _telemetry_collector):
         print("Flushing telemetry events...")
         try:
             _telemetry_sender.flush_and_send(_telemetry_collector)
@@ -639,8 +657,10 @@ def main():
     # Attach device manager so status can include battery/cpu/ip
     remote_controller.device_manager = device_manager
 
-    # Wire telemetry collector into both controllers so every command is recorded
-    if _telemetry_collector:
+    # Analytics telemetry is deliberately opt-in (PEN-233).  Do not attach the
+    # buffered collector to controller callbacks in the health-only baseline:
+    # doing so can trigger retry, buffer, and disk-overflow work on control paths.
+    if is_analytics_enabled and is_analytics_enabled(_TELEMETRY_ANALYTICS_ENABLED) and _telemetry_collector:
         # Stick events arrive at a high rate on the PS4 reader thread.  Do not
         # synchronously buffer telemetry for them: once the buffer is full,
         # overflow persistence performs file I/O and delays motor control.
@@ -651,9 +671,11 @@ def main():
         remote_controller.set_telemetry_collector(_telemetry_collector)
         print("Telemetry collector wired into controllers (PS4 sticks excluded)")
 
-    # Start periodic battery/motor/device telemetry collection
+    # StatusCollector emits analytics records (battery/motor/device); health
+    # heartbeats below are intentionally independent of it.
     global _status_collector
-    if StatusCollector and _telemetry_collector:
+    if (is_analytics_enabled and is_analytics_enabled(_TELEMETRY_ANALYTICS_ENABLED)
+            and StatusCollector and _telemetry_collector):
         _status_collector = StatusCollector(_telemetry_collector, device_manager)
         _status_collector.start()
         print("StatusCollector started (battery 60s, motor 10s, device events immediate)")
@@ -667,7 +689,7 @@ def main():
         print("Heartbeat sender started ({}s interval)".format(_heartbeat_sender.interval))
 
     # Start background telemetry flush thread (sends buffered events every 2 minutes)
-    if _telemetry_sender:
+    if is_analytics_enabled and is_analytics_enabled(_TELEMETRY_ANALYTICS_ENABLED) and _telemetry_sender:
         import threading as _t
         # Pybricks MicroPython's Thread() accepts only ``target`` — passing
         # ``daemon``/``name`` raises TypeError (PEN-188).

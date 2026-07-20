@@ -17,6 +17,12 @@ TELEMETRY_DEVICE_ID = "ev3-001"
 #   bash cloud/functions/setup-device-tokens.sh --device-id ev3-001
 TELEMETRY_DEVICE_TOKEN = "your-per-device-token"
 
+# Analytics records (commands, motor/device status, and buffered battery
+# samples) are disabled by default under the PEN-233 health-only baseline.
+# Set to True only after the analytics restoration work has been deployed and
+# verified. Health heartbeats continue independently of this setting.
+TELEMETRY_ANALYTICS_ENABLED = False
+
 # Optional: seconds between liveness heartbeats (PEN-229). Omit this line to
 # use HeartbeatSender's own default (telemetry.heartbeat.DEFAULT_HEARTBEAT_INTERVAL).
 # TELEMETRY_HEARTBEAT_INTERVAL_S = 30
