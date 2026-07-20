@@ -11,7 +11,7 @@ from time import sleep
 import struct
 import os
 
-from robot_controllers import PS4Controller, MIN_JOYSTICK_MOVE
+from robot_controllers import PS4Controller, MIN_JOYSTICK_MOVE, wait_for_connection
 
 
 class TestPS4Controller:
@@ -678,6 +678,61 @@ class TestPS4ControllerTelemetry:
         self.controller.trigger("cross_button")
         for event in self.collector.peek():
             validate_event(event)
+
+
+class TestWaitForConnection:
+    """Tests for wait_for_connection() (PEN-166 follow-up)."""
+
+    def test_returns_immediately_when_already_connected(self):
+        controller = Mock()
+        controller.is_connected.return_value = True
+        sleep_fn = Mock()
+
+        connected, elapsed = wait_for_connection(controller, sleep_fn=sleep_fn)
+
+        assert connected is True
+        assert elapsed == 0.0
+        sleep_fn.assert_not_called()
+
+    def test_polls_until_connected_within_timeout(self):
+        controller = Mock()
+        # Not connected for the first two checks, connected on the third.
+        controller.is_connected.side_effect = [False, False, True]
+        sleep_fn = Mock()
+
+        connected, elapsed = wait_for_connection(
+            controller, timeout=1.0, poll_interval=0.1, sleep_fn=sleep_fn
+        )
+
+        assert connected is True
+        assert elapsed == pytest.approx(0.2)
+        assert sleep_fn.call_count == 2
+        sleep_fn.assert_called_with(0.1)
+
+    def test_gives_up_after_timeout_elapses(self):
+        controller = Mock()
+        controller.is_connected.return_value = False
+        sleep_fn = Mock()
+
+        connected, elapsed = wait_for_connection(
+            controller, timeout=0.3, poll_interval=0.1, sleep_fn=sleep_fn
+        )
+
+        assert connected is False
+        assert elapsed == pytest.approx(0.3)
+        # elapsed reaches (but does not exceed) timeout after 3 polls; the
+        # loop then exits on the elapsed >= timeout check without sleeping again.
+        assert sleep_fn.call_count == 3
+
+    def test_default_sleep_fn_uses_time_sleep(self):
+        controller = Mock()
+        controller.is_connected.return_value = True
+
+        with patch("robot_controllers.ps4_controller._sleep") as mock_sleep:
+            connected, elapsed = wait_for_connection(controller)
+
+        assert connected is True
+        mock_sleep.assert_not_called()
 
 
 # Tests can be run with: pytest tests/test_ps4_controller.py

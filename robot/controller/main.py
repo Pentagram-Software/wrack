@@ -27,7 +27,7 @@ Usage:
 """
 
 from pybricks.hubs import EV3Brick
-from robot_controllers import MIN_JOYSTICK_MOVE, PS4Controller
+from robot_controllers import MIN_JOYSTICK_MOVE, PS4Controller, wait_for_connection
 from threading_compat import wait_for_workers
 from pixy_camera import Pixy2Camera
 from ev3_devices import DeviceManager
@@ -675,58 +675,67 @@ def main():
         _flush_thread.start()
         print("Telemetry flush thread started")
 
-    # Start the controller thread first
+    # Register PS4 controller event handlers before starting the reader
+    # thread. EventHandler.on() only appends to a callback list — it never
+    # fires anything — so this is safe regardless of whether or when the
+    # Bluetooth handshake completes. Gating registration on a post-start
+    # connection check (as a prior version of this code did) meant a
+    # handshake that completed even moments after the check left the
+    # controller permanently without handlers for the rest of the session
+    # (code review, PEN-166 follow-up). Registering unconditionally removes
+    # that race entirely instead of just shrinking its window.
+    print("Setting up PlayStation controller event handlers...")
+
+    controller.onOptionsButton(quit)
+    controller.onLeftJoystickMove(move)
+    controller.onCrossButton(sayit)
+    controller.onRightJoystickMove(watch)
+
+    # Only set up pixy camera / light event handlers if camera is available
+    if device_manager.is_device_available("pixy_camera"):
+        pixy_camera.onBlockDetected(blockDetected)
+        controller.onL1Button(lighton)
+        controller.onR1Button(lightoff)
+
+    # Terrain scanning controls (if available)
+    if terrain_scanner:
+        controller.onSquareButton(perform_single_terrain_scan)
+        controller.onTriangleButton(perform_quick_terrain_scan)
+        controller.onL2Button(start_auto_terrain_scanning)
+        controller.onR2Button(stop_auto_terrain_scanning)
+        controller.onCircleButton(get_terrain_scan_status)
+
+    # Only set up arrow controls if drive motors are available
+    if device_manager.are_devices_available(["drive_L_motor", "drive_R_motor"]):
+        # Left/Right arrows for drifting
+        controller.onLeftArrowPressed(driftLeft)
+        controller.onRightArrowPressed(driftRight)
+        controller.onLRArrowReleased(driftStop)
+
+        # Up/Down arrows for forward/backward movement
+        controller.onUpArrowPressed(moveForward)
+        controller.onDownArrowPressed(moveBackward)
+        controller.onUDArrowReleased(moveStop)
+    else:
+        print("Drive motors not available - arrow controls disabled")
+
+    # Start the controller thread now that handlers are registered.
     controller.start()
-    
-    # Give the controller a moment to attempt connection
-    sleep(0.5)
-    
-    # Check if controller connected successfully
-    if controller.is_connected():
-        print("Setting up PlayStation controller event handlers...")
 
-        # Core controls must be registered before optional hardware.  A missing
-        # or misconfigured optional component must not disable speech or turret
-        # control for an otherwise connected controller.
-        controller.onOptionsButton(quit)
-        controller.onLeftJoystickMove(move)
-        controller.onCrossButton(sayit)
-        controller.onRightJoystickMove(watch)
+    # Poll briefly so startup logs reflect whether the handshake completed
+    # quickly. This no longer gates handler registration (see above) — it's
+    # purely diagnostic, so a slow handshake beyond this window still ends
+    # up with a fully working controller once it connects.
+    controller_connected, controller_wait_s = wait_for_connection(controller)
+    print("PlayStation controller connection check: connected={} after {:.1f}s".format(
+        controller_connected, controller_wait_s
+    ))
 
-        # Only set up pixy camera event handler if camera is available
-        if device_manager.is_device_available("pixy_camera"):
-            pixy_camera.onBlockDetected(blockDetected)
-
-        # Only set up light controls if pixy camera is available
-        if device_manager.is_device_available("pixy_camera"):
-            controller.onL1Button(lighton)
-            controller.onR1Button(lightoff)
-        
-        # Terrain scanning controls (if available)
-        if terrain_scanner:
-            controller.onSquareButton(perform_single_terrain_scan)
-            controller.onTriangleButton(perform_quick_terrain_scan)
-            controller.onL2Button(start_auto_terrain_scanning)
-            controller.onR2Button(stop_auto_terrain_scanning)
-            controller.onCircleButton(get_terrain_scan_status)
-        
-        # Only set up arrow controls if drive motors are available
-        if device_manager.are_devices_available(["drive_L_motor", "drive_R_motor"]):
-            # Left/Right arrows for drifting
-            controller.onLeftArrowPressed(driftLeft)
-            controller.onRightArrowPressed(driftRight)
-            controller.onLRArrowReleased(driftStop)
-            
-            # Up/Down arrows for forward/backward movement
-            controller.onUpArrowPressed(moveForward)
-            controller.onDownArrowPressed(moveBackward)
-            controller.onUDArrowReleased(moveStop)
-        else:
-            print("Drive motors not available - arrow controls disabled")
-            
+    if controller_connected:
         print("PlayStation controller (PS4/PS5) is ready for use!")
     else:
-        print("PlayStation controller not available - program running in manual mode")
+        print("PlayStation controller not yet connected - controls will activate "
+              "automatically once it pairs/connects")
         print("You can still use arrow buttons on the EV3 brick if available")
 
     # Set up Network Remote Controller event handlers
@@ -1223,13 +1232,13 @@ def main():
             print("================================================")
         else:
             print("=== PlayStation Controller Status ===")
-            print("PS4/PS5 controller not connected")
-            print("To connect a PlayStation controller:")
+            print("PS4/PS5 controller not connected yet")
+            print("Controls activate automatically once it connects - no restart needed.")
+            print("If it never connects:")
             print("- PS4: Hold PS + Share buttons to enter pairing mode")
             print("- PS5: Hold PS + Create buttons to enter pairing mode")
             print("- Pair the controller with EV3 Bluetooth")
             print("- Use EV3 Bluetooth menu to connect")
-            print("- Restart this program")
             print("=====================================")
         
         print("")
