@@ -282,6 +282,77 @@ class TestCreateHeartbeatEvent:
         event = c.create_heartbeat_event()
         validate_event(event)  # must not raise
 
+    # -- battery_info merging (PEN-234) -----------------------------------
+
+    def test_merges_battery_fields_when_available(self):
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event(
+            battery_info={
+                "voltage_mv": 7500,
+                "percentage": 90.0,
+                "current_ma": 500,
+                "battery_type": "rechargeable",
+                "available": True,
+            }
+        )
+        assert event["payload"]["voltage_mv"] == 7500
+        assert event["payload"]["percentage"] == 90.0
+        assert event["payload"]["battery_type"] == "rechargeable"
+        assert event["payload"]["device_name"] == "ev3"
+        assert event["payload"]["status"] == "connected"
+
+    def test_merged_battery_event_passes_schema_validation(self):
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event(
+            battery_info={"voltage_mv": 7500, "percentage": 90.0, "available": True}
+        )
+        validate_event(event)  # must not raise — device_status schema allows extra fields
+
+    def test_omits_battery_fields_when_battery_info_is_none(self):
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event(battery_info=None)
+        assert event["payload"] == {"device_name": "ev3", "status": "connected"}
+
+    def test_omits_battery_fields_when_unavailable(self):
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event(
+            battery_info={"voltage_mv": None, "percentage": None, "available": False}
+        )
+        assert event["payload"] == {"device_name": "ev3", "status": "connected"}
+
+    def test_omits_battery_fields_when_required_fields_missing(self):
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event(battery_info={"available": True})
+        assert event["payload"] == {"device_name": "ev3", "status": "connected"}
+
+    def test_omits_battery_fields_when_battery_info_is_malformed(self):
+        """A non-dict battery_info (e.g. a provider bug) must not raise —
+        the heartbeat still builds, just without battery fields."""
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event(battery_info="not-a-dict")
+        assert event["payload"] == {"device_name": "ev3", "status": "connected"}
+
+    def test_optional_battery_fields_included_when_present(self):
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event(
+            battery_info={
+                "voltage_mv": 7500,
+                "percentage": 90.0,
+                "voltage_v": 7.5,
+                "is_critical": False,
+                "battery_type": "rechargeable",
+                "available": True,
+            }
+        )
+        assert event["payload"]["voltage_v"] == 7.5
+        assert event["payload"]["is_critical"] is False
+        assert event["payload"]["battery_type"] == "rechargeable"
+
+    def test_does_not_buffer_event_with_battery_info(self):
+        c = TelemetryCollector()
+        c.create_heartbeat_event(battery_info={"voltage_mv": 7500, "percentage": 90.0})
+        assert c.buffer_size == 0
+
 
 # ---------------------------------------------------------------------------
 # collect_battery_status

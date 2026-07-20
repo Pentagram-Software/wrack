@@ -68,6 +68,19 @@ class TestConfiguration:
         hb = HeartbeatSender(c, s, interval=5)
         assert hb.interval == 5
 
+    def test_battery_info_provider_defaults_to_none(self):
+        c = TelemetryCollector()
+        s = _make_sender()
+        hb = HeartbeatSender(c, s)
+        assert hb.battery_info_provider is None
+
+    def test_custom_battery_info_provider(self):
+        c = TelemetryCollector()
+        s = _make_sender()
+        provider = MagicMock(return_value={"voltage_mv": 7500, "percentage": 90.0})
+        hb = HeartbeatSender(c, s, battery_info_provider=provider)
+        assert hb.battery_info_provider is provider
+
     def test_zero_interval_rejected(self):
         c = TelemetryCollector()
         s = _make_sender()
@@ -182,6 +195,76 @@ class TestSendNow:
         hb.send_now()
         _join_send_thread(hb)
         assert hb._send_thread is None
+
+
+# ---------------------------------------------------------------------------
+# battery_info_provider (PEN-234): merging battery data into the same
+# heartbeat payload, and isolating provider failures from the liveness
+# signal itself.
+# ---------------------------------------------------------------------------
+
+
+class TestBatteryInfoProvider:
+    def test_battery_fields_merged_into_sent_event(self):
+        c = TelemetryCollector()
+        s = _make_sender()
+        provider = MagicMock(
+            return_value={"voltage_mv": 7500, "percentage": 90.0, "battery_type": "rechargeable"}
+        )
+        hb = HeartbeatSender(c, s, battery_info_provider=provider)
+
+        event = hb.send_now()
+        _join_send_thread(hb)
+
+        provider.assert_called_once_with()
+        assert event["payload"]["voltage_mv"] == 7500
+        assert event["payload"]["percentage"] == 90.0
+        assert event["payload"]["status"] == "connected"
+        s.send_events.assert_called_once_with([event])
+
+    def test_no_provider_sends_liveness_only(self):
+        c = TelemetryCollector()
+        s = _make_sender()
+        hb = HeartbeatSender(c, s)
+
+        event = hb.send_now()
+
+        assert event["payload"] == {"device_name": "ev3", "status": "connected"}
+
+    def test_raising_provider_still_sends_liveness_heartbeat(self):
+        """A battery read failure must never block or skip the liveness
+        signal — the tick still sends, just without battery fields."""
+        c = TelemetryCollector()
+        s = _make_sender()
+        provider = MagicMock(side_effect=RuntimeError("battery read failed"))
+        hb = HeartbeatSender(c, s, battery_info_provider=provider)
+
+        event = hb.send_now()
+        _join_send_thread(hb)
+
+        assert event is not None
+        assert event["payload"] == {"device_name": "ev3", "status": "connected"}
+        s.send_events.assert_called_once_with([event])
+
+    def test_unavailable_battery_info_sends_liveness_only(self):
+        c = TelemetryCollector()
+        s = _make_sender()
+        provider = MagicMock(return_value={"voltage_mv": None, "percentage": None, "available": False})
+        hb = HeartbeatSender(c, s, battery_info_provider=provider)
+
+        event = hb.send_now()
+
+        assert event["payload"] == {"device_name": "ev3", "status": "connected"}
+
+    def test_provider_called_fresh_on_every_tick(self):
+        c = TelemetryCollector()
+        s = _make_sender()
+        provider = MagicMock(return_value={"voltage_mv": 7500, "percentage": 90.0})
+        hb = HeartbeatSender(c, s, battery_info_provider=provider, interval=1)
+
+        TestSendTiming()._run_fake_loop(hb, tick_seconds=1, ticks=30)
+
+        assert provider.call_count == s.send_events.call_count
 
 
 # ---------------------------------------------------------------------------

@@ -130,6 +130,42 @@ def _generate_event_id() -> str:
     return "{}-{}-{}-{}-{}".format(hex_str[0:8], hex_str[8:12], hex_str[12:16], hex_str[16:20], hex_str[20:32])
 
 
+#: Battery fields recognised by the ``battery_status`` payload schema
+#: (``telemetry.schemas._validate_battery_status_payload``) that
+#: :func:`_extract_battery_fields` will carry over onto a heartbeat's
+#: ``device_status`` payload when present.
+_OPTIONAL_BATTERY_FIELDS = ("voltage_v", "is_critical", "battery_type")
+
+
+def _extract_battery_fields(info: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Return usable battery fields from a raw ``get_battery_info()``-shaped
+    dict, or ``None`` if *info* is absent, unavailable, or missing the
+    required fields (PEN-234).
+
+    Mirrors ``StatusCollector._collect_battery_status``'s own
+    availability/required-field checks so a heartbeat's battery data uses
+    the same criteria as the (disabled-by-default) analytics battery event.
+    Deliberately tolerant of a malformed *info* (e.g. not a dict) — this is
+    called from the heartbeat's best-effort path, where a battery-data
+    problem must never raise and block the liveness signal itself.
+    """
+    if not isinstance(info, dict):
+        return None
+    if not info.get("available", True):
+        return None
+
+    voltage_mv = info.get("voltage_mv")
+    percentage = info.get("percentage")
+    if voltage_mv is None or percentage is None:
+        return None
+
+    fields = {"voltage_mv": voltage_mv, "percentage": percentage}
+    for key in _OPTIONAL_BATTERY_FIELDS:
+        if info.get(key) is not None:
+            fields[key] = info[key]
+    return fields
+
+
 def _utc_now_iso() -> str:
     """Return the current UTC time as an ISO 8601 string ending in ``Z``."""
     if _HAS_DATETIME:
@@ -253,6 +289,7 @@ class TelemetryCollector:
         *,
         device_name: str = "ev3",
         status: str = "connected",
+        battery_info: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Build (but do not buffer) a liveness heartbeat event (PEN-229).
 
@@ -265,8 +302,26 @@ class TelemetryCollector:
         a heartbeat is time-sensitive and must be sent immediately by the
         caller, not queued for the next analytics flush (which could be
         minutes away).
+
+        Parameters
+        ----------
+        battery_info:
+            Optional raw battery-info dict, in the same shape as
+            :class:`~ev3_devices.DeviceManager.get_battery_info` (PEN-234):
+            ``voltage_mv``, ``percentage``, optionally ``voltage_v``,
+            ``is_critical``, ``battery_type``, and ``available``. When
+            present and usable, its fields are merged into this heartbeat's
+            payload (device_status's payload schema permits unrecognised
+            extra fields, so no shared schema change is needed). Battery
+            data is best-effort — a missing, unavailable, or malformed
+            ``battery_info`` merges nothing rather than failing the
+            heartbeat, since liveness must never be blocked by a battery
+            read failure.
         """
         payload = {"device_name": device_name, "status": status}
+        battery_fields = _extract_battery_fields(battery_info)
+        if battery_fields:
+            payload.update(battery_fields)
         return self.create_event("device_status", payload, record_type="health")
 
     # ------------------------------------------------------------------

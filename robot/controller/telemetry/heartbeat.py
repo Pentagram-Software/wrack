@@ -7,6 +7,11 @@ the "currently-unscoped blocker" PEN-200 and PEN-203 both reference; interval
 tuning (target: 5s interval / 15s offline threshold) is PEN-203's job, not
 this one — :data:`DEFAULT_HEARTBEAT_INTERVAL` is a reasonable placeholder.
 
+As of PEN-234, the same heartbeat payload also carries battery state
+(voltage/percentage/etc., merged onto the ``device_status`` payload) when a
+``battery_info_provider`` callable is supplied — still one event, one bounded
+HTTP POST per tick, rather than a second sender.
+
 Usage::
 
     from telemetry.collector import TelemetryCollector
@@ -15,7 +20,10 @@ Usage::
 
     collector = TelemetryCollector(source="ev3")
     sender = TelemetrySender(endpoint=..., device_id=..., device_token=...)
-    heartbeat = HeartbeatSender(collector, sender)
+    heartbeat = HeartbeatSender(
+        collector, sender,
+        battery_info_provider=lambda: device_manager.get_battery_info(),
+    )
     heartbeat.start()
 
     # … robot runs …
@@ -33,13 +41,13 @@ from threading_compat import create_lock
 # subscriptable stub (``Optional[str]`` etc. resolve to the stub harmlessly)
 # that lets the module import on the EV3.
 try:
-    from typing import Any, Dict, Optional
+    from typing import Any, Callable, Dict, Optional
 except ImportError:  # pragma: no cover - MicroPython runtime path
     class _TypingStub:
         def __getitem__(self, item):
             return self
 
-    Any = Dict = Optional = _TypingStub()  # type: ignore[assignment,misc]
+    Any = Callable = Dict = Optional = _TypingStub()  # type: ignore[assignment,misc]
 
 try:
     import threading as _threading
@@ -98,6 +106,17 @@ class HeartbeatSender:
     interval:
         Seconds between heartbeats. Defaults to
         :data:`DEFAULT_HEARTBEAT_INTERVAL`.
+    battery_info_provider:
+        Optional zero-argument callable returning a raw battery-info dict
+        (same shape as ``ev3_devices.DeviceManager.get_battery_info()``),
+        called once per tick to merge battery fields into the heartbeat
+        payload (PEN-234). Kept as an injected callable, not a direct
+        ``DeviceManager`` reference, so ``telemetry/`` stays decoupled from
+        ``ev3_devices`` — consistent with ``collector``/``sender`` already
+        being injected rather than constructed internally. Omitting it (the
+        default, ``None``) preserves today's liveness-only heartbeat
+        unchanged. A failing or raising provider never blocks or skips the
+        heartbeat itself — see :meth:`_send_heartbeat`.
     """
 
     def __init__(
@@ -105,12 +124,14 @@ class HeartbeatSender:
         collector: Any,
         sender: Any,
         interval: int = DEFAULT_HEARTBEAT_INTERVAL,
+        battery_info_provider: Optional[Callable[[], Any]] = None,
     ) -> None:
         if interval <= 0:
             raise ValueError("interval must be a positive integer")
         self.collector = collector
         self.sender = sender
         self.interval = interval
+        self.battery_info_provider = battery_info_provider
 
         self._running = False
         self._thread = None
@@ -288,8 +309,10 @@ class HeartbeatSender:
                 print("HeartbeatSender: skipping tick — previous send still in flight")
                 return None
 
+            battery_info = self._read_battery_info()
+
             try:
-                event = self.collector.create_heartbeat_event()
+                event = self.collector.create_heartbeat_event(battery_info=battery_info)
             except Exception as exc:  # noqa: BLE001 — one bad build must never kill the loop
                 print("HeartbeatSender: failed to build heartbeat event: {}".format(exc))
                 return None
@@ -315,6 +338,23 @@ class HeartbeatSender:
             self._send_worker(event, generation)
 
         return event
+
+    def _read_battery_info(self) -> Optional[Any]:
+        """Call :attr:`battery_info_provider`, if set, isolating exceptions.
+
+        A battery read failing (e.g. a hardware glitch, or the EV3Brick
+        reporting an error) must never prevent the liveness signal itself
+        from being sent (PEN-234) — this returns ``None`` on any error, so
+        :meth:`create_heartbeat_event` simply omits battery fields for that
+        tick rather than skipping the heartbeat.
+        """
+        if self.battery_info_provider is None:
+            return None
+        try:
+            return self.battery_info_provider()
+        except Exception as exc:  # noqa: BLE001 — a bad battery read must never skip the heartbeat
+            print("HeartbeatSender: battery_info_provider failed: {}".format(exc))
+            return None
 
     def _send_worker(self, event: Dict[str, Any], generation: int) -> None:
         """Thread target: perform one blocking send, then clear the in-flight marker.
