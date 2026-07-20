@@ -33,6 +33,31 @@
     "error_message": {
       "type": ["string", "null"],
       "description": "Error detail when status is 'error'"
+    },
+    "voltage_mv": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Battery voltage in millivolts, merged in by the EV3 liveness heartbeat (PEN-234) — same field/shape as battery_status.voltage_mv, present only on heartbeat device_status events that carry battery state"
+    },
+    "percentage": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Estimated remaining battery charge as a percentage, merged in by the EV3 liveness heartbeat (PEN-234) — see voltage_mv"
+    },
+    "voltage_v": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Battery voltage in volts, merged in by the EV3 liveness heartbeat (PEN-234) — see voltage_mv"
+    },
+    "is_critical": {
+      "type": "boolean",
+      "description": "True when voltage is below the low-battery threshold, merged in by the EV3 liveness heartbeat (PEN-234) — see voltage_mv"
+    },
+    "battery_type": {
+      "type": "string",
+      "enum": ["rechargeable", "alkaline", "unknown"],
+      "description": "Physical battery type installed, merged in by the EV3 liveness heartbeat (PEN-234) — see voltage_mv"
     }
   }
 }

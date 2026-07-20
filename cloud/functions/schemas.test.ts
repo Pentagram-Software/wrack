@@ -407,6 +407,56 @@ describe('validateDeviceStatusPayload', () => {
       expect(validateDeviceStatusPayload(deviceStatusPayload({ device_type: dt })).valid).toBe(true);
     }
   });
+
+  // -- battery fields (PEN-234): optional, merged in only by the EV3
+  // liveness heartbeat, validated the same way as battery_status's own
+  // fields but never required here. ---------------------------------------
+
+  test('battery fields absent is valid', () => {
+    expect(validateDeviceStatusPayload(deviceStatusPayload()).valid).toBe(true);
+  });
+
+  test('valid battery fields accepted', () => {
+    expect(validateDeviceStatusPayload(deviceStatusPayload({
+      voltage_mv: 7500,
+      percentage: 90.0,
+      voltage_v: 7.5,
+      is_critical: false,
+      battery_type: 'rechargeable',
+    })).valid).toBe(true);
+  });
+
+  test('invalid voltage_mv fails', () => {
+    const result = validateDeviceStatusPayload(deviceStatusPayload({ voltage_mv: -1 }));
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.field.includes('voltage_mv'))).toBe(true);
+  });
+
+  test('invalid percentage fails', () => {
+    const result = validateDeviceStatusPayload(deviceStatusPayload({ percentage: 101 }));
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.field.includes('percentage'))).toBe(true);
+  });
+
+  test('invalid battery_type fails', () => {
+    const result = validateDeviceStatusPayload(deviceStatusPayload({ battery_type: 'lithium' }));
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.field.includes('battery_type'))).toBe(true);
+  });
+
+  test('invalid is_critical fails', () => {
+    const result = validateDeviceStatusPayload(deviceStatusPayload({ is_critical: 'yes' as unknown as boolean }));
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.field.includes('is_critical'))).toBe(true);
+  });
+
+  test('null battery fields treated as absent', () => {
+    expect(validateDeviceStatusPayload(deviceStatusPayload({
+      voltage_v: null,
+      is_critical: null,
+      battery_type: null,
+    })).valid).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -188,12 +188,27 @@ if (HeartbeatSender and TelemetrySender and _telemetry_collector
         max_retries=DEFAULT_HEARTBEAT_SEND_MAX_RETRIES,
         timeout=DEFAULT_HEARTBEAT_SEND_TIMEOUT_S,
     )
+    # battery_info_provider (PEN-234): a lambda closing over the module-level
+    # `device_manager` name rather than a direct reference, since
+    # `device_manager` is not assigned until later in this module's
+    # top-level execution (see `device_manager = DeviceManager(ev3)` below).
+    # The lambda's body only runs on a heartbeat tick, well after `main()`
+    # has started and `device_manager` exists, so this is safe despite the
+    # apparent forward reference.
+    def _heartbeat_battery_info_provider():
+        return device_manager.get_battery_info(battery_type="rechargeable")
+
     if _TELEMETRY_HEARTBEAT_INTERVAL_S:
         _heartbeat_sender = HeartbeatSender(
-            _telemetry_collector, _heartbeat_telemetry_sender, interval=_TELEMETRY_HEARTBEAT_INTERVAL_S
+            _telemetry_collector, _heartbeat_telemetry_sender,
+            interval=_TELEMETRY_HEARTBEAT_INTERVAL_S,
+            battery_info_provider=_heartbeat_battery_info_provider,
         )
     else:
-        _heartbeat_sender = HeartbeatSender(_telemetry_collector, _heartbeat_telemetry_sender)
+        _heartbeat_sender = HeartbeatSender(
+            _telemetry_collector, _heartbeat_telemetry_sender,
+            battery_info_provider=_heartbeat_battery_info_provider,
+        )
     print("Heartbeat sender initialised (interval={}s)".format(_heartbeat_sender.interval))
 
 

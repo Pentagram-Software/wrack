@@ -219,18 +219,31 @@ def _validate_envelope(event: Any) -> List[str]:
 # Payload validation (pure Python)
 # ---------------------------------------------------------------------------
 
-def _validate_battery_status_payload(payload: Any) -> List[str]:
+def _validate_battery_fields(payload: Dict[str, Any], *, require_core: bool) -> List[str]:
+    """Validate the battery-related fields shared by ``battery_status`` and
+    (as of PEN-234) ``device_status`` payloads.
+
+    ``voltage_mv``/``percentage`` are ``battery_status``'s required core
+    fields (always validated when *require_core* is ``True``, matching that
+    payload's original behavior exactly) but only optional decoration on a
+    heartbeat's ``device_status`` payload (validated only when present and
+    not ``None``, like the other optional fields below, when *require_core*
+    is ``False``). ``voltage_v``/``is_critical``/``battery_type`` are always
+    optional in both payloads.
+    """
     errors = []
-    if not isinstance(payload, dict):
-        return ["battery_status payload must be a dict"]
 
-    voltage_mv = payload.get("voltage_mv")
-    if not isinstance(voltage_mv, int) or voltage_mv < 0:
-        errors.append("payload.voltage_mv must be a non-negative integer")
+    has_voltage_mv = "voltage_mv" in payload and payload["voltage_mv"] is not None
+    if require_core or has_voltage_mv:
+        voltage_mv = payload.get("voltage_mv")
+        if not isinstance(voltage_mv, int) or voltage_mv < 0:
+            errors.append("payload.voltage_mv must be a non-negative integer")
 
-    percentage = payload.get("percentage")
-    if not isinstance(percentage, (int, float)) or not (0 <= percentage <= 100):
-        errors.append("payload.percentage must be a number between 0 and 100")
+    has_percentage = "percentage" in payload and payload["percentage"] is not None
+    if require_core or has_percentage:
+        percentage = payload.get("percentage")
+        if not isinstance(percentage, (int, float)) or not (0 <= percentage <= 100):
+            errors.append("payload.percentage must be a number between 0 and 100")
 
     if "voltage_v" in payload and payload["voltage_v"] is not None:
         if not isinstance(payload["voltage_v"], (int, float)) or payload["voltage_v"] < 0:
@@ -247,6 +260,12 @@ def _validate_battery_status_payload(payload: Any) -> List[str]:
             )
 
     return errors
+
+
+def _validate_battery_status_payload(payload: Any) -> List[str]:
+    if not isinstance(payload, dict):
+        return ["battery_status payload must be a dict"]
+    return _validate_battery_fields(payload, require_core=True)
 
 
 def _validate_command_received_payload(payload: Any) -> List[str]:
@@ -314,6 +333,10 @@ def _validate_device_status_payload(payload: Any) -> List[str]:
             errors.append(
                 "payload.device_type must be one of: " + ", ".join(VALID_DEVICE_TYPES)
             )
+
+    # Battery fields (PEN-234) — merged in only by the EV3 liveness
+    # heartbeat, so validated (via the shared helper) but never required.
+    errors.extend(_validate_battery_fields(payload, require_core=False))
 
     return errors
 

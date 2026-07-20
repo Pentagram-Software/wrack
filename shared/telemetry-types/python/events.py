@@ -118,6 +118,13 @@ try:
         port: Optional[str]
         previous_status: Optional[str]
         error_message: Optional[str]
+        # Battery fields (PEN-234) — merged in only by the EV3 liveness
+        # heartbeat, same field/shape as BatteryStatusPayload's own fields.
+        voltage_mv: Optional[int]
+        percentage: Optional[float]
+        voltage_v: Optional[float]
+        is_critical: Optional[bool]
+        battery_type: Optional[str]
 
     class ErrorPayload(TypedDict, total=False):
         error_type: str             # required

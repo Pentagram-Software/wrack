@@ -36,6 +36,15 @@ class _DeviceManager:
     def is_device_available(self, name):
         return False
 
+    def get_battery_info(self, battery_type="rechargeable"):
+        return {
+            "voltage_mv": 7500,
+            "current_ma": 500,
+            "percentage": 90.0,
+            "battery_type": battery_type,
+            "available": True,
+        }
+
     def print_device_status(self):
         pass
 
@@ -83,10 +92,11 @@ class _Collector:
 
 
 class _HeartbeatSender:
-    def __init__(self, collector, sender, interval=30):
+    def __init__(self, collector, sender, interval=30, battery_info_provider=None):
         self.collector = collector
         self.sender = sender
         self.interval = interval
+        self.battery_info_provider = battery_info_provider
         self.start = MagicMock()
         self.stop = MagicMock()
 
@@ -221,6 +231,20 @@ def test_health_only_main_disables_analytics_paths_and_starts_heartbeat(monkeypa
     status_collector.assert_not_called()
     flush_thread.assert_not_called()
     module._heartbeat_sender.start.assert_called_once_with()
+
+    # PEN-234: the heartbeat is wired with a battery_info_provider that reads
+    # from the module's device_manager, so the health-only baseline restores
+    # battery reporting via the same tracked heartbeat send, not a second
+    # (buffered/analytics) collection path.
+    assert module._heartbeat_sender.battery_info_provider is not None
+    battery_info = module._heartbeat_sender.battery_info_provider()
+    assert battery_info == {
+        "voltage_mv": 7500,
+        "current_ma": 500,
+        "percentage": 90.0,
+        "battery_type": "rechargeable",
+        "available": True,
+    }
 
     module.quit(None)
 

@@ -25,4 +25,13 @@ TELEMETRY_ANALYTICS_ENABLED = False
 
 # Optional: seconds between liveness heartbeats (PEN-229). Omit this line to
 # use HeartbeatSender's own default (telemetry.heartbeat.DEFAULT_HEARTBEAT_INTERVAL).
+# Still 30s as of PEN-234 — PEN-203 (5s interval / 15s offline threshold) is a
+# separate, not-yet-implemented follow-up.
 # TELEMETRY_HEARTBEAT_INTERVAL_S = 30
+
+# As of PEN-234, every heartbeat also carries battery state (voltage_mv,
+# percentage, and any of voltage_v/is_critical/battery_type the device
+# reports) merged onto the same device_status payload — main.py wires this
+# automatically from device_manager.get_battery_info(); no config needed
+# here. A battery read failure never blocks or delays the heartbeat itself:
+# that tick is simply sent without battery fields.
