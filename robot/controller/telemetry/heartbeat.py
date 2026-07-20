@@ -287,14 +287,23 @@ class HeartbeatSender:
         failure, must never kill the background loop — it should just skip
         this tick.
 
-        The check, event build, and (when threading is available) thread
-        launch all happen under ``_send_lock`` — without it, the periodic
-        tick and a concurrent ``send_now()`` call could both observe
-        ``_send_thread is None`` and both launch a worker, breaking the
-        one-worker guarantee (code review). The lock is held only long
+        The in-flight check, event build, and (when threading is available)
+        thread launch all happen under ``_send_lock`` — without it, the
+        periodic tick and a concurrent ``send_now()`` call could both
+        observe ``_send_thread is None`` and both launch a worker, breaking
+        the one-worker guarantee (code review). The lock is held only long
         enough to start the worker thread, never for the blocking send
         itself (that happens in ``_send_worker``, after ``Thread.start()``
-        has already returned).
+        has already returned) — and, as of PEN-234's ``battery_info_provider``
+        (code review), never for that call either: an injected provider is
+        arbitrary caller code with no guaranteed latency (unlike building the
+        event itself, which is just dict construction), so it's read via
+        :meth:`_read_battery_info` *before* acquiring the lock. The unlocked
+        ``self._send_thread is not None`` peek just below is a fast-path
+        optimisation only — it avoids running the battery read at all when a
+        send is already known to be in flight, but isn't authoritative on
+        its own (it can race a concurrent sender); the real decision is the
+        second, lock-protected check that follows.
 
         When threading isn't available, ``_send_worker`` runs synchronously
         on this same thread instead — deliberately *outside* the ``with``
@@ -302,14 +311,17 @@ class HeartbeatSender:
         ``_send_lock`` to clear the marker, and re-entering a non-reentrant
         lock from the thread that already holds it would deadlock.
         """
+        if self._send_thread is not None:
+            return None
+
+        battery_info = self._read_battery_info()
+
         run_synchronously = False
 
         with self._send_lock:
             if self._send_thread is not None:
                 print("HeartbeatSender: skipping tick — previous send still in flight")
                 return None
-
-            battery_info = self._read_battery_info()
 
             try:
                 event = self.collector.create_heartbeat_event(battery_info=battery_info)
