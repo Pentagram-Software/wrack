@@ -27,7 +27,7 @@ Usage:
 """
 
 from pybricks.hubs import EV3Brick
-from robot_controllers import MIN_JOYSTICK_MOVE, PS4Controller
+from robot_controllers import MIN_JOYSTICK_MOVE, PS4Controller, wait_for_connection
 from threading_compat import wait_for_workers
 from pixy_camera import Pixy2Camera
 from ev3_devices import DeviceManager
@@ -677,12 +677,18 @@ def main():
 
     # Start the controller thread first
     controller.start()
-    
-    # Give the controller a moment to attempt connection
-    sleep(0.5)
-    
+
+    # Poll for the controller's Bluetooth handshake to complete, rather than
+    # a single fixed sleep-then-check: the handshake time is variable and a
+    # fixed short wait can under-report connection even though the
+    # controller connects moments later (PEN-166 follow-up).
+    controller_connected, controller_wait_s = wait_for_connection(controller)
+    print("PlayStation controller connection check: connected={} after {:.1f}s".format(
+        controller_connected, controller_wait_s
+    ))
+
     # Check if controller connected successfully
-    if controller.is_connected():
+    if controller_connected:
         print("Setting up PlayStation controller event handlers...")
 
         # Core controls must be registered before optional hardware.  A missing

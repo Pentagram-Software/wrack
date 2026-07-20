@@ -2,10 +2,20 @@ import math
 from event_handler import EventHandler
 import threading
 import struct
+from time import sleep as _sleep
 # import traceback  # Commented out due to EV3 compatibility issues
 from error_reporting import report_controller_error, report_exception
 
 MIN_JOYSTICK_MOVE = 100  # The minimum value of joystick move to be considered as a move (for -1000 to 1000 range)
+
+# How long to poll for a controller connection after starting the reader
+# thread, and how often.  The Bluetooth device-open handshake takes a
+# variable amount of time (observed to occasionally exceed 500ms), so a
+# single fixed sleep-then-check can report "not connected" even though the
+# controller connects moments later. Polling avoids both a false negative
+# and an unnecessarily long fixed wait when the controller connects quickly.
+DEFAULT_CONNECT_TIMEOUT_S = 3.0
+DEFAULT_CONNECT_POLL_INTERVAL_S = 0.1
 
 # Joystick axis ranges reported by Linux evdev (PS4 = 8-bit, PS5/DualSense = 16-bit)
 AXIS_RANGE_8BIT = (0, 255)
@@ -103,6 +113,51 @@ def find_controller_device():
         print("Warning: Could not scan /proc/bus/input/devices:", e)
 
     return None
+
+
+def wait_for_connection(
+    controller,
+    timeout=DEFAULT_CONNECT_TIMEOUT_S,
+    poll_interval=DEFAULT_CONNECT_POLL_INTERVAL_S,
+    sleep_fn=None,
+):
+    """Poll ``controller.is_connected()`` until it is ``True`` or *timeout* elapses.
+
+    Intended to be called right after starting the controller's reader
+    thread, replacing a single fixed sleep-then-check with fine-grained
+    polling so callers don't have to guess a safe fixed delay, while still
+    returning promptly once connected rather than always blocking for the
+    full timeout.
+
+    Parameters
+    ----------
+    controller:
+        Any object exposing an ``is_connected() -> bool`` method.
+    timeout:
+        Maximum time (seconds) to wait before giving up.
+    poll_interval:
+        Time (seconds) between successive ``is_connected()`` checks.
+    sleep_fn:
+        Sleep function used between polls (defaults to ``time.sleep``).
+        Overridable in tests to avoid real delays.
+
+    Returns
+    -------
+    tuple(bool, float)
+        Whether the controller reported connected, and the elapsed wait
+        time in seconds.
+    """
+    if sleep_fn is None:
+        sleep_fn = _sleep
+
+    elapsed = 0.0
+    while True:
+        if controller.is_connected():
+            return True, elapsed
+        if elapsed >= timeout:
+            return False, elapsed
+        sleep_fn(poll_interval)
+        elapsed += poll_interval
 
 
 def printIn(x,y,text):
