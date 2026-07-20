@@ -13,6 +13,7 @@ class EventHandler(object):
     _telemetry_filter = None
     _telemetry_excluded_events = None
     _controller_type = "unknown"
+    _debug_events = False
 
     def on(self, event_name, callback):
         """
@@ -32,6 +33,58 @@ class EventHandler(object):
             self.callbacks[event_name] = [callback]
         else:
             self.callbacks[event_name].append(callback)
+
+    def get_registered_events(self):
+        """
+        Return a snapshot of currently registered events and callback counts.
+
+        Diagnostic helper (PEN-166 follow-up) for confirming that ``on()``
+        calls made during setup actually attached callbacks, independent of
+        whether any input has been received yet.
+
+        Returns
+        -------
+        dict
+            Maps event name to the number of callbacks registered for it.
+            Empty if no events have been registered.
+        """
+        if self.callbacks is None:
+            return {}
+        return dict((name, len(cbs)) for name, cbs in self.callbacks.items())
+
+    def print_registered_events(self, label=None):
+        """
+        Print a one-time snapshot of all registered events and their
+        callback counts, e.g. right before starting the reader thread, to
+        confirm setup completed as expected.
+
+        Parameters
+        ----------
+        label:
+            Optional string identifying the controller instance in the
+            printed output (e.g. ``"PS4Controller"``).
+        """
+        registered = self.get_registered_events()
+        prefix = "[{}] ".format(label) if label else ""
+        if not registered:
+            print("{}No event handlers registered".format(prefix))
+            return
+        print("{}Registered event handlers ({} event type(s)):".format(
+            prefix, len(registered)
+        ))
+        for name in sorted(registered.keys()):
+            print("  - {}: {} callback(s)".format(name, registered[name]))
+
+    def set_debug_events(self, enabled):
+        """
+        Enable or disable per-``trigger()`` diagnostic logging.
+
+        When enabled, every :meth:`trigger` call prints the event name and
+        how many callbacks were found for it (0 if none), so a missing
+        response to physical input can be narrowed down to "event never
+        fired" vs. "event fired but nothing was registered for it".
+        """
+        self._debug_events = bool(enabled)
 
     def trigger(self, event_name):
         """
@@ -74,7 +127,14 @@ class EventHandler(object):
         exc = None
         start = _time_now() if _HAS_TIME else 0
 
-        if self.callbacks is not None and event_name in self.callbacks:
+        has_callbacks = self.callbacks is not None and event_name in self.callbacks
+        if self._debug_events:
+            callback_count = len(self.callbacks[event_name]) if has_callbacks else 0
+            print("[event] trigger('{}') -> {} callback(s) registered".format(
+                event_name, callback_count
+            ))
+
+        if has_callbacks:
             try:
                 for callback in self.callbacks[event_name]:
                     callback(self)

@@ -308,4 +308,104 @@ class TestEventHandler:
         assert calls1[0] == "handler1"
         assert calls2[0] == "handler2"
 
+
+class TestGetRegisteredEvents:
+    """Tests for get_registered_events() (PEN-166 follow-up)."""
+
+    def test_returns_empty_dict_when_nothing_registered(self):
+        eh = EventHandler()
+        assert eh.get_registered_events() == {}
+
+    def test_returns_callback_count_per_event(self):
+        eh = EventHandler()
+        eh.on("left_joystick", lambda s: None)
+        eh.on("right_joystick", lambda s: None)
+        eh.on("right_joystick", lambda s: None)
+
+        registered = eh.get_registered_events()
+
+        assert registered == {"left_joystick": 1, "right_joystick": 2}
+
+    def test_reflects_state_at_call_time_not_a_stale_snapshot(self):
+        eh = EventHandler()
+        eh.on("cross_button", lambda s: None)
+        assert eh.get_registered_events() == {"cross_button": 1}
+
+        eh.on("cross_button", lambda s: None)
+        assert eh.get_registered_events() == {"cross_button": 2}
+
+
+class TestPrintRegisteredEvents:
+    """Tests for print_registered_events() (PEN-166 follow-up)."""
+
+    def test_prints_message_when_nothing_registered(self, capsys):
+        eh = EventHandler()
+        eh.print_registered_events()
+        out = capsys.readouterr().out
+        assert "No event handlers registered" in out
+
+    def test_prints_each_registered_event_with_count(self, capsys):
+        eh = EventHandler()
+        eh.on("left_joystick", lambda s: None)
+        eh.on("right_joystick", lambda s: None)
+        eh.on("right_joystick", lambda s: None)
+
+        eh.print_registered_events()
+
+        out = capsys.readouterr().out
+        assert "left_joystick: 1 callback(s)" in out
+        assert "right_joystick: 2 callback(s)" in out
+
+    def test_includes_label_when_provided(self, capsys):
+        eh = EventHandler()
+        eh.on("cross_button", lambda s: None)
+        eh.print_registered_events(label="PS4Controller")
+        out = capsys.readouterr().out
+        assert "[PS4Controller]" in out
+
+
+class TestSetDebugEvents:
+    """Tests for set_debug_events() and its effect on trigger() (PEN-166 follow-up)."""
+
+    def test_disabled_by_default(self):
+        eh = EventHandler()
+        assert eh._debug_events is False
+
+    def test_enabling_stores_boolean(self):
+        eh = EventHandler()
+        eh.set_debug_events(1)
+        assert eh._debug_events is True
+        eh.set_debug_events(0)
+        assert eh._debug_events is False
+
+    def test_trigger_logs_callback_count_when_enabled(self, capsys):
+        eh = EventHandler()
+        eh.set_debug_events(True)
+        eh.on("right_joystick", lambda s: None)
+
+        eh.trigger("right_joystick")
+
+        out = capsys.readouterr().out
+        assert "right_joystick" in out
+        assert "1 callback(s) registered" in out
+
+    def test_trigger_logs_zero_callbacks_when_none_registered(self, capsys):
+        eh = EventHandler()
+        eh.set_debug_events(True)
+
+        eh.trigger("right_joystick")
+
+        out = capsys.readouterr().out
+        assert "0 callback(s) registered" in out
+
+    def test_trigger_is_silent_when_disabled(self, capsys):
+        eh = EventHandler()
+        eh.on("right_joystick", lambda s: None)
+
+        eh.trigger("right_joystick")
+
+        out = capsys.readouterr().out
+        assert out == ""
+
+
 # Tests can be run with: pytest tests/test_event_handler.py 

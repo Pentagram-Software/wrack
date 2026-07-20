@@ -43,7 +43,7 @@ from pybricks.ev3devices import (Motor, TouchSensor, ColorSensor,
 import sys
 from time import sleep
 
-PS4_INPUT_DEBUG = False
+PS4_INPUT_DEBUG = False  # Also gates per-trigger event-dispatch debug logging (see EventHandler.set_debug_events)
 
 # Import TerrainScanner with error handling
 TerrainScanner = None
@@ -719,6 +719,15 @@ def main():
     else:
         print("Drive motors not available - arrow controls disabled")
 
+    # Diagnostic instrumentation (PEN-166 follow-up): confirm registration
+    # actually attached callbacks before the reader thread starts, and
+    # enable per-trigger dispatch logging so a lack of response can be
+    # narrowed down to "no input arriving" vs. "input arriving but nothing
+    # registered for it" vs. "callback registered and running but failing
+    # silently downstream (motor/device layer)".
+    controller.print_registered_events("PS4Controller")
+    controller.set_debug_events(PS4_INPUT_DEBUG)
+
     # Start the controller thread now that handlers are registered.
     controller.start()
 
@@ -1184,7 +1193,12 @@ def main():
         remote_controller.on("scan_inventory", remote_get_scan_inventory)
         remote_controller.on("get_scan_data", remote_get_scan_data)
         remote_controller.on("confirm_scan_retrieved", remote_confirm_scan_retrieved)
-    
+
+    # Diagnostic instrumentation (PEN-166 follow-up): see the matching
+    # PS4Controller block above for rationale.
+    remote_controller.print_registered_events("RemoteController")
+    remote_controller.set_debug_events(PS4_INPUT_DEBUG)
+
     # Start the network remote controller
     print("Starting Network Remote Controller on port 27700...")
     remote_controller.start()
