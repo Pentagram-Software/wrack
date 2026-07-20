@@ -311,9 +311,13 @@ class TelemetryCollector:
             ``voltage_mv``, ``percentage``, optionally ``voltage_v``,
             ``is_critical``, ``battery_type``, and ``available``. When
             present and usable, its fields are merged into this heartbeat's
-            payload (device_status's payload schema permits unrecognised
-            extra fields, so no shared schema change is needed). Battery
-            data is best-effort — a missing, unavailable, or malformed
+            payload as recognised, optional ``device_status`` fields — the
+            shared schema contract (``shared/telemetry-types/schemas/
+            device_status.json``, its TypeScript/Python counterparts, and
+            this module's own ``telemetry.schemas._validate_device_status_
+            payload``) was updated to declare them explicitly, rather than
+            relying on unrecognised-field leniency. Battery data is
+            best-effort — a missing, unavailable, or malformed
             ``battery_info`` merges nothing rather than failing the
             heartbeat, since liveness must never be blocked by a battery
             read failure.
