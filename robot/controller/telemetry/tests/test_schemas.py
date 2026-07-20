@@ -409,6 +409,67 @@ class TestDeviceStatusPayload:
         for dt in ["motor", "sensor", "controller", "unknown"]:
             validate_payload("device_status", _device_status_payload(device_type=dt))
 
+    # -- battery fields (PEN-234): optional, merged in only by the EV3
+    # liveness heartbeat, validated the same way as battery_status's own
+    # fields but never required here. -----------------------------------
+
+    def test_battery_fields_absent_is_valid(self):
+        """The vast majority of device_status events (analytics connect/
+        disconnect) never carry battery fields — must not raise."""
+        validate_payload("device_status", _device_status_payload())
+
+    def test_valid_battery_fields_accepted(self):
+        validate_payload(
+            "device_status",
+            _device_status_payload(
+                voltage_mv=7500,
+                percentage=90.0,
+                voltage_v=7.5,
+                is_critical=False,
+                battery_type="rechargeable",
+            ),
+        )
+
+    def test_invalid_voltage_mv_raises(self):
+        with pytest.raises(ValidationError) as exc_info:
+            validate_payload("device_status", _device_status_payload(voltage_mv=-1, percentage=90.0))
+        assert any("voltage_mv" in e for e in exc_info.value.errors)
+
+    def test_invalid_percentage_raises(self):
+        with pytest.raises(ValidationError) as exc_info:
+            validate_payload("device_status", _device_status_payload(voltage_mv=7500, percentage=101))
+        assert any("percentage" in e for e in exc_info.value.errors)
+
+    def test_invalid_battery_type_raises(self):
+        with pytest.raises(ValidationError) as exc_info:
+            validate_payload("device_status", _device_status_payload(battery_type="lithium"))
+        assert any("battery_type" in e for e in exc_info.value.errors)
+
+    def test_invalid_is_critical_raises(self):
+        with pytest.raises(ValidationError) as exc_info:
+            validate_payload("device_status", _device_status_payload(is_critical="yes"))
+        assert any("is_critical" in e for e in exc_info.value.errors)
+
+    def test_none_battery_fields_treated_as_absent(self):
+        """Explicit None (as create_heartbeat_event never sends, but a
+        generic caller might) must not raise — mirrors battery_status's own
+        optional-field convention."""
+        validate_payload(
+            "device_status",
+            _device_status_payload(voltage_v=None, is_critical=None, battery_type=None),
+        )
+
+    def test_heartbeat_event_with_battery_passes_full_validation(self):
+        """End-to-end: create_heartbeat_event's merged battery payload
+        (PEN-234) must pass validate_event, including the canonical JSON
+        Schema check when jsonschema is installed."""
+        from telemetry.collector import TelemetryCollector
+
+        event = TelemetryCollector().create_heartbeat_event(
+            battery_info={"voltage_mv": 7500, "percentage": 90.0, "battery_type": "rechargeable"}
+        )
+        validate_event(event)  # must not raise
+
 
 # ---------------------------------------------------------------------------
 # error payload

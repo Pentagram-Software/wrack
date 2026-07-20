@@ -101,6 +101,19 @@ export interface DeviceStatusPayload {
   status: DeviceStatusValue;
   previous_status?: DeviceStatusValue | 'unknown' | null;
   error_message?: string | null;
+  /**
+   * Battery voltage in millivolts. Present only when the EV3 liveness
+   * heartbeat (PEN-234) merges battery state onto this event — same
+   * field/shape as BatteryStatusPayload.voltage_mv.
+   */
+  voltage_mv?: number;
+  /** Estimated remaining battery charge 0–100 (PEN-234) — see voltage_mv. */
+  percentage?: number;
+  /** Battery voltage in volts (PEN-234) — see voltage_mv. */
+  voltage_v?: number;
+  /** True when voltage is below the low-battery threshold (PEN-234). */
+  is_critical?: boolean;
+  battery_type?: BatteryType;
 }
 
 export interface ErrorPayload {
@@ -426,6 +439,29 @@ export function validateDeviceStatusPayload(payload: unknown): ValidationResult 
         message: `Must be one of: ${VALID_DEVICE_TYPES.join(', ')}`,
       });
     }
+  }
+
+  // Optional battery fields (PEN-234) — merged in only by the EV3 liveness
+  // heartbeat, so validated the same way as battery_status's own fields
+  // (validateBatteryStatusPayload above) but never required here.
+  if (p.voltage_mv !== undefined && p.voltage_mv !== null &&
+      (typeof p.voltage_mv !== 'number' || !Number.isInteger(p.voltage_mv) || p.voltage_mv < 0)) {
+    errors.push({ field: 'payload.voltage_mv', message: 'Must be a non-negative integer' });
+  }
+  if (p.percentage !== undefined && p.percentage !== null &&
+      (typeof p.percentage !== 'number' || p.percentage < 0 || p.percentage > 100)) {
+    errors.push({ field: 'payload.percentage', message: 'Must be a number between 0 and 100' });
+  }
+  if (p.voltage_v !== undefined && p.voltage_v !== null &&
+      (typeof p.voltage_v !== 'number' || p.voltage_v < 0)) {
+    errors.push({ field: 'payload.voltage_v', message: 'Must be a non-negative number' });
+  }
+  if (p.is_critical !== undefined && p.is_critical !== null && typeof p.is_critical !== 'boolean') {
+    errors.push({ field: 'payload.is_critical', message: 'Must be a boolean' });
+  }
+  if (p.battery_type !== undefined && p.battery_type !== null &&
+      !(['rechargeable', 'alkaline', 'unknown'] as readonly string[]).includes(p.battery_type as string)) {
+    errors.push({ field: 'payload.battery_type', message: 'Must be one of: rechargeable, alkaline, unknown' });
   }
 
   return { valid: errors.length === 0, errors };
