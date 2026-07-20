@@ -162,7 +162,13 @@ jobs:
             --role="roles/secretmanager.secretAccessor" \
             --project ${{ secrets.GCP_PROJECT_ID }}
 
-          gcloud run services add-iam-policy-binding healthLegPush \
+          # Cloud Run service names are RFC 1035 labels (lowercase only), so
+          # Cloud Functions Gen2 lowercases the function name for the
+          # underlying Cloud Run resource ("healthLegPush" -> "healthlegpush").
+          # The `gcloud run services` surface only recognizes that lowercase
+          # form; passing the function's mixed-case name 404s here even
+          # though `gcloud functions describe healthLegPush` above works fine.
+          gcloud run services add-iam-policy-binding healthlegpush \
             --region europe-central2 \
             --project ${{ secrets.GCP_PROJECT_ID }} \
             --member="serviceAccount:${RUNTIME_SA}" \
