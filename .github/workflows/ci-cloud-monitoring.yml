@@ -28,3 +28,15 @@ jobs:
 
       - name: Run setup-grafana-secret.sh shell regression tests
         run: bash cloud/monitoring/tests/test_setup_grafana_secret.sh
+
+      - name: Run EV3 dashboard JSON unit tests (PEN-231)
+        run: python -m pytest cloud/monitoring/tests/test_dashboard_json.py -v
+
+      - name: Run write_dashboard_credentials.py unit tests (PEN-231)
+        run: python -m pytest cloud/monitoring/tests/test_write_dashboard_credentials.py -v
+
+      - name: Run build_dashboard_request.py unit tests (PEN-231)
+        run: python -m pytest cloud/monitoring/tests/test_build_dashboard_request.py -v
+
+      - name: Run provision-dashboard.sh shell regression tests (PEN-231)
+        run: bash cloud/monitoring/tests/test_provision_dashboard.sh
