@@ -2,8 +2,27 @@
 
 A standalone Grafana Cloud dashboard for EV3 robot health. v1 ships a single
 panel — EV3 battery percentage — and is expected to grow as more EV3 health
-metrics come online (e.g. [PEN-200](https://linear.app/pentagram-software/issue/PEN-200/ev3-live-battery-and-motor-health-metrics-in-grafana)'s
-voltage gauge + motor/turret availability indicators).
+metrics come online.
+
+[PEN-200](https://linear.app/pentagram-software/issue/PEN-200/ev3-live-battery-and-motor-health-metrics-in-grafana)
+has landed the *data* side of its scope: the heartbeat payload now also
+carries `voltage_mv` (already present since
+[PEN-234](https://linear.app/pentagram-software/issue/PEN-234/restore-ev3-health-only-telemetry-without-controller-lag))
+and `motor_l_available`/`motor_r_available`/`turret_available` (new), which
+auto-translate to `wrack.device_status.voltage_mv` /
+`wrack.device_status.motor_l_available` / `_motor_r_available` /
+`_turret_available` OTLP gauges via the same `wrack.<event_type>.<field>`
+naming this doc derives `wrack_device_status_percentage` from below — no
+`wrack_ev3_*`-prefixed metrics exist anywhere in the pipeline, so that's the
+expected Prometheus/Mimir name for these too, not the `wrack_ev3_battery_
+voltage_mv`/`wrack_ev3_motor_left_available`-style names PEN-200's
+description originally sketched. Adding this dashboard's battery-voltage
+gauge and motor-availability panels for them is left as a **follow-up**:
+each needs its own human-confirmed metric name in Grafana Cloud's Metrics
+Explorer (the same manual step #2 below), and `build_dashboard_request.py`'s
+placeholder-substitution currently supports exactly one `--metric-name` for
+the whole dashboard — extending it to four independently-confirmed names is
+part of that follow-up, not this doc's v1 scope.
 
 This replaces the EV3 portion of the unified dashboard originally planned in
 PEN-198 (canceled — split into per-component dashboards so each ships
