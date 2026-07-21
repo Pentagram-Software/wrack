@@ -158,6 +158,13 @@ explicitly on every change:
 - **Minimal HTTP libraries** (`urequests`): don't assume parity with `requests` — e.g. `post()` may
   not accept `timeout`. Try the full call first, catch `TypeError`, and retry with a reduced kwarg
   set (see `telemetry/sender.py::_http_post`).
+- **`urequests`/`ussl` cannot do HTTPS against Google Cloud Functions at all** — not a `requests`-parity
+  gap, a hard TLS-handshake failure (`ssl_handshake_status: -256` → `OSError: [Errno 5] EIO`,
+  reproducible on the very first attempt, every time). `telemetry/sender.py::_http_post` shells out to
+  `curl` instead whenever the detected HTTP library is `urequests` (EV3 MicroPython runs on ev3dev/Debian
+  Linux, which has a real OpenSSL via `curl`, unlike the bundled MicroPython TLS stack) — falls back to
+  `urequests` itself only if `curl` isn't on `PATH`. Any *new* on-device HTTPS call needs the same
+  treatment; don't assume `urequests.post()` works over TLS just because it imports successfully.
 - **`open()`**: no `encoding` kwarg — catch `TypeError` and retry without it (see
   `telemetry/collector.py::_open_text`).
 
