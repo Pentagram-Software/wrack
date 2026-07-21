@@ -58,6 +58,18 @@
       "type": "string",
       "enum": ["rechargeable", "alkaline", "unknown"],
       "description": "Physical battery type installed, merged in by the EV3 liveness heartbeat (PEN-234) — see voltage_mv"
+    },
+    "motor_l_available": {
+      "type": "boolean",
+      "description": "Left drive motor (drive_L_motor) availability, merged in by the EV3 liveness heartbeat (PEN-200) — true iff DeviceManager.is_device_available('drive_L_motor')"
+    },
+    "motor_r_available": {
+      "type": "boolean",
+      "description": "Right drive motor (drive_R_motor) availability, merged in by the EV3 liveness heartbeat (PEN-200) — see motor_l_available"
+    },
+    "turret_available": {
+      "type": "boolean",
+      "description": "Turret motor (turret_motor) availability, merged in by the EV3 liveness heartbeat (PEN-200) — see motor_l_available"
     }
   }
 }
