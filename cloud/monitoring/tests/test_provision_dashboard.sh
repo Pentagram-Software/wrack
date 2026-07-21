@@ -245,6 +245,22 @@ test_provision_dry_run_fails_on_invalid_json() {
   fi
 }
 
+# -- provision: refuses a real run without --metric-name ---------------------
+test_provision_requires_metric_name_for_real_run() {
+  local out="${TEST_TMP_DIR}/provision-no-metric-name.out"
+
+  PATH="${FAKE_BIN_DIR}:${PATH}" \
+    bash "${SCRIPT}" provision --dashboard-file "${DASHBOARD_FILE}" \
+    > "${out}" 2>&1
+  local rc=$?
+
+  if [[ ${rc} -ne 0 ]] && grep -q "Missing required input: --metric-name" "${out}"; then
+    pass "provision refuses a real run without --metric-name, instead of shipping the placeholder"
+  else
+    fail "expected provision without --metric-name to fail fast (rc=${rc})"
+  fi
+}
+
 # -- provision: fetches credentials, POSTs the dashboard, reports success ----
 test_provision_posts_dashboard_on_success() {
   local out="${TEST_TMP_DIR}/provision-success.out"
@@ -255,7 +271,7 @@ test_provision_posts_dashboard_on_success() {
   PATH="${FAKE_BIN_DIR}:${PATH}" CAPTURE_CURL_BODY="${body_cap}" CAPTURE_CURL_ARGS="${args_cap}" \
     CAPTURE_CURL_HEADERS_FILE="${headers_cap}" \
     FAKE_CREDS_JSON='{"grafana_url": "https://wrack.grafana.net", "token": "prov-token"}' \
-    bash "${SCRIPT}" provision --dashboard-file "${DASHBOARD_FILE}" \
+    bash "${SCRIPT}" provision --dashboard-file "${DASHBOARD_FILE}" --metric-name wrack_device_status_percentage \
     > "${out}" 2>&1
   local rc=$?
 
@@ -265,10 +281,11 @@ test_provision_posts_dashboard_on_success() {
      && ! grep -q "prov-token" "${args_cap}" \
      && grep -q "Bearer prov-token" "${headers_cap}" \
      && grep -q '"overwrite": true' "${body_cap}" \
-     && grep -q "wrack-ev3-health" "${body_cap}"; then
-    pass "provision fetches credentials, POSTs via -K (token never in curl argv), and reports success"
+     && grep -q "wrack-ev3-health" "${body_cap}" \
+     && grep -q '"expr": "wrack_device_status_percentage"' "${body_cap}"; then
+    pass "provision fetches credentials, substitutes --metric-name, POSTs via -K (token never in curl argv), and reports success"
   else
-    fail "expected provision to POST the dashboard with the token only in the -K file, not curl argv (rc=${rc})"
+    fail "expected provision to POST the substituted dashboard with the token only in the -K file (rc=${rc})"
   fi
 }
 
@@ -277,7 +294,7 @@ test_provision_fails_on_non_200_response() {
   local out="${TEST_TMP_DIR}/provision-failure.out"
 
   PATH="${FAKE_BIN_DIR}:${PATH}" FAKE_CURL_HTTP_CODE="401" \
-    bash "${SCRIPT}" provision --dashboard-file "${DASHBOARD_FILE}" \
+    bash "${SCRIPT}" provision --dashboard-file "${DASHBOARD_FILE}" --metric-name wrack_device_status_percentage \
     > "${out}" 2>&1
   local rc=$?
 
@@ -293,7 +310,7 @@ test_provision_cleans_up_scratch_files() {
   local out="${TEST_TMP_DIR}/provision-cleanup.out"
 
   PATH="${FAKE_BIN_DIR}:${PATH}" \
-    bash "${SCRIPT}" provision --dashboard-file "${DASHBOARD_FILE}" \
+    bash "${SCRIPT}" provision --dashboard-file "${DASHBOARD_FILE}" --metric-name wrack_device_status_percentage \
     > "${out}" 2>&1
 
   local creds_scratch
@@ -313,7 +330,7 @@ test_provision_headers_file_not_left_behind() {
   local headers_cap="${TEST_TMP_DIR}/provision-headers-cleanup.headers.txt"
 
   PATH="${FAKE_BIN_DIR}:${PATH}" CAPTURE_CURL_HEADERS_FILE="${headers_cap}" \
-    bash "${SCRIPT}" provision --dashboard-file "${DASHBOARD_FILE}" \
+    bash "${SCRIPT}" provision --dashboard-file "${DASHBOARD_FILE}" --metric-name wrack_device_status_percentage \
     > "${out}" 2>&1
 
   # The fake curl already copied the -K file's content to headers_cap before
@@ -363,6 +380,7 @@ test_store_credentials_cleans_up_scratch_file
 test_provision_dry_run_validates_dashboard
 test_provision_dry_run_fails_on_missing_dashboard
 test_provision_dry_run_fails_on_invalid_json
+test_provision_requires_metric_name_for_real_run
 test_provision_posts_dashboard_on_success
 test_provision_fails_on_non_200_response
 test_provision_cleans_up_scratch_files

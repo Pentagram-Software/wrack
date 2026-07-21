@@ -21,12 +21,38 @@ plots.
 
 Per `cloud/functions/otlp-mapper.js`'s `wrack.<event_type>.<field>` metric
 auto-naming, the pre-translation OTLP metric name is
-**`wrack.device_status.percentage`**. This dashboard's panel queries
-**`wrack_device_status_percentage`** — a best-derived guess for how Grafana
-Cloud's OTLP gateway translates that dot-separated name into its final
-Mimir/Prometheus metric name (the standard OTLP→Prometheus convention
-replaces `.` with `_`). **This has not been empirically confirmed against a
-real Grafana Cloud stack** — see [Manual steps](#manual-steps-required-before-this-is-live) below.
+**`wrack.device_status.percentage`**.
+
+### Deriving the expected Prometheus/Mimir metric name
+
+The expected final name, **`wrack_device_status_percentage`**, isn't a blind
+guess — it's derived from two code-verifiable facts plus Grafana's own
+published translation spec:
+
+1. **`cloud/functions/health-leg.js`** creates the metric via
+   `meterProvider.getMeter(...).createGauge(point.name)` — no `unit` is ever
+   set on the OTel gauge descriptor.
+2. **Grafana Cloud's documented OTLP-to-Prometheus translation**
+   ([OTLP: format considerations](https://grafana.com/docs/grafana-cloud/send-data/otlp/otlp-format-considerations/),
+   backed by [`grafana/mimir-otlptranslator`](https://github.com/grafana/mimir-otlptranslator))
+   converts `.`/`-` to `_` (`wrack.device_status.percentage` →
+   `wrack_device_status_percentage`), and only appends a suffix — e.g. the
+   `_ratio` suffix for a gauge — when the metric's OTel **unit is `1`**.
+   Since no unit is set at all here (not "1", just absent), no suffix
+   should apply under Mimir's default `UnderscoreEscapingWithSuffixes`
+   translation strategy.
+
+That's strong, citable evidence, but it stops short of a live confirmation:
+this repo can't verify that the specific Grafana Cloud stack in use is
+actually running that documented default translation strategy rather than a
+non-default override, since that's a live account/stack setting invisible
+from outside. **This is why `provision-dashboard.sh provision` requires an
+explicit `--metric-name` flag** (see [Usage](#usage) below) rather than the
+dashboard JSON shipping this derived value as its committed, active query —
+per PEN-231 code review, an unverified name (however well-derived) must
+never be the thing an automated provisioning run actually ships. The
+dashboard JSON's panel instead queries the placeholder
+`__CONFIRM_METRIC_NAME__`, substituted at provisioning time.
 
 ## Files
 
@@ -35,7 +61,7 @@ real Grafana Cloud stack** — see [Manual steps](#manual-steps-required-before-
 | `cloud/monitoring/dashboards/wrack-ev3-health.json` | The dashboard definition (Grafana dashboard JSON model). Fixed `uid: wrack-ev3-health` so re-provisioning updates the same dashboard rather than creating duplicates. |
 | `cloud/monitoring/provision-dashboard.sh` | Provisioning script — `store-credentials` (one-time credential setup) and `provision` (POST the dashboard to Grafana Cloud) subcommands. |
 | `cloud/monitoring/write_dashboard_credentials.py` | Builds the `{grafana_url, token}` JSON payload for `store-credentials`, called out of the shell script the same way `write_credentials.py` is for the OTLP push credentials. |
-| `cloud/monitoring/build_dashboard_request.py` | Wraps the dashboard JSON in the `/api/dashboards/db` request envelope (`{dashboard, overwrite: true, message}`), called out of the shell script for `provision`. |
+| `cloud/monitoring/build_dashboard_request.py` | Wraps the dashboard JSON in the `/api/dashboards/db` request envelope (`{dashboard, overwrite: true, message}`) and substitutes the `__CONFIRM_METRIC_NAME__` placeholder with the `--metric-name` value, called out of the shell script for `provision`. |
 | `cloud/monitoring/tests/test_dashboard_json.py`, `test_write_dashboard_credentials.py`, `test_build_dashboard_request.py`, `test_provision_dashboard.sh` | Unit/regression tests — see [Testing](#testing) below. |
 
 ## Usage
@@ -65,14 +91,24 @@ to preview without touching gcloud or Secret Manager.
 ### 2. Provision the dashboard
 
 ```bash
-GCP_PROJECT_ID=wrack-control bash cloud/monitoring/provision-dashboard.sh provision
+GCP_PROJECT_ID=wrack-control bash cloud/monitoring/provision-dashboard.sh provision \
+  --metric-name wrack_device_status_percentage
 ```
 
-Reads the credential back from Secret Manager and POSTs
-`cloud/monitoring/dashboards/wrack-ev3-health.json` to
-`<grafana_url>/api/dashboards/db`. Safe to re-run — `overwrite: true` plus the
-dashboard's fixed `uid` make this idempotent. Add `--dry-run` to validate the
-dashboard JSON and preview the plan without any network/gcloud calls.
+Reads the credential back from Secret Manager, substitutes `--metric-name`
+into the dashboard JSON's placeholder query, and POSTs the result to
+`<grafana_url>/api/dashboards/db`. Safe to re-run — `overwrite: true` plus
+the dashboard's fixed `uid` make this idempotent.
+
+`--metric-name` is **required** for a real (non-`--dry-run`) call — the
+committed dashboard JSON queries the placeholder `__CONFIRM_METRIC_NAME__`,
+never a live value, so this can't silently provision an unverified guess
+(PEN-231 code review). See [Deriving the expected Prometheus/Mimir metric
+name](#deriving-the-expected-prometheusmimir-metric-name) above for where
+`wrack_device_status_percentage` comes from and what's still worth
+confirming in Metrics Explorer before trusting it. Add `--dry-run` to
+validate the dashboard JSON and preview the plan without any network/gcloud
+calls — `--metric-name` is optional there.
 
 ## Manual steps required before this is live
 
@@ -82,17 +118,17 @@ human with real access, in this order:
 
 1. **Create the `dashboards:write` Access Policy token** in Grafana Cloud's
    UI and run `store-credentials` (above) to store it.
-2. **Run `provision-dashboard.sh provision`** for real (not `--dry-run`) to
-   actually create the dashboard in Grafana Cloud.
-3. **Confirm the real metric name.** Once
+2. **Confirm the real metric name before provisioning for real.** Once
    [PEN-234](https://linear.app/pentagram-software/issue/PEN-234/restore-ev3-health-only-telemetry-without-controller-lag)
    is live and the EV3 is posting heartbeats with battery data, open Grafana
    Cloud's Metrics Explorer and search for a metric derived from
-   `wrack.device_status.percentage`. If it isn't exactly
-   `wrack_device_status_percentage`, update the `expr` field in
-   `cloud/monitoring/dashboards/wrack-ev3-health.json` and in
-   `EXPECTED_METRIC_NAME` in `cloud/monitoring/tests/test_dashboard_json.py`,
-   then re-run `provision-dashboard.sh provision`.
+   `wrack.device_status.percentage`. [Deriving the expected Prometheus/Mimir
+   metric name](#deriving-the-expected-prometheusmimir-metric-name) above
+   explains why `wrack_device_status_percentage` is the well-reasoned
+   expectation — confirm it (or find the actual name, if it differs).
+3. **Run `provision-dashboard.sh provision --metric-name <confirmed-name>`**
+   for real (not `--dry-run`) to actually create the dashboard in Grafana
+   Cloud with that confirmed name substituted in.
 4. **Visually confirm** the panel renders without errors and shows live data
    with the EV3 online.
 

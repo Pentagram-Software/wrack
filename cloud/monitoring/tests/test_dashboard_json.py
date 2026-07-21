@@ -4,12 +4,16 @@ Structural validation for cloud/monitoring/dashboards/wrack-ev3-health.json (PEN
 This doesn't (and can't, in a sandbox with no live Grafana Cloud credentials
 -- see docs/monitoring/ev3-health-dashboard.md) assert the dashboard actually
 renders in Grafana Cloud. It only asserts the JSON is well-formed and matches
-the v1 scope decided for PEN-231: exactly one time-series panel, querying the
-EV3 battery-percentage metric, with the agreed default time range/refresh.
+the v1 scope decided for PEN-231: exactly one time-series panel, with the
+agreed default time range/refresh, querying the placeholder metric name
+provision-dashboard.sh's --metric-name substitutes at provisioning time --
+per PEN-231 code review, the committed JSON must never carry an unverified
+metric-name guess as its active query.
 
 Run from workspace root:
     python -m pytest cloud/monitoring/tests/test_dashboard_json.py -v
 """
+import importlib.util
 import json
 from pathlib import Path
 
@@ -19,10 +23,15 @@ DASHBOARD_PATH = (
     Path(__file__).parent.parent / "dashboards" / "wrack-ev3-health.json"
 )
 
-# Best-derived guess pending empirical confirmation in Grafana Cloud's Metrics
-# Explorer (PEN-231 Manual steps) -- kept as one constant so re-pointing the
-# query after verification only touches the dashboard JSON + this line.
-EXPECTED_METRIC_NAME = "wrack_device_status_percentage"
+# Single source of truth for the placeholder, shared with
+# build_dashboard_request.py's substitution logic -- see that module's
+# docstring for why the committed JSON isn't allowed to carry a live guess.
+_BUILD_REQUEST_MODULE_PATH = Path(__file__).parent.parent / "build_dashboard_request.py"
+_spec = importlib.util.spec_from_file_location("build_dashboard_request", _BUILD_REQUEST_MODULE_PATH)
+_build_request_mod = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
+_spec.loader.exec_module(_build_request_mod)  # type: ignore[union-attr]
+
+PLACEHOLDER_METRIC_NAME = _build_request_mod.PLACEHOLDER_METRIC_NAME
 
 
 @pytest.fixture()
@@ -85,9 +94,12 @@ class TestDashboardPanels:
         panel = dashboard["panels"][0]
         assert len(panel["targets"]) == 1
 
-    def test_panel_target_queries_the_expected_metric_name(self, dashboard):
+    def test_panel_target_queries_the_placeholder_metric_name(self, dashboard):
+        """The committed JSON must query the placeholder, never a live
+        guess -- provision-dashboard.sh's --metric-name substitutes the
+        real, confirmed value at provisioning time (PEN-231 code review)."""
         target = dashboard["panels"][0]["targets"][0]
-        assert target["expr"] == EXPECTED_METRIC_NAME
+        assert target["expr"] == PLACEHOLDER_METRIC_NAME
 
     def test_panel_target_uses_the_templated_prometheus_datasource(self, dashboard):
         target = dashboard["panels"][0]["targets"][0]

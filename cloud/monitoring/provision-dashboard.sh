@@ -18,6 +18,15 @@
 #   provision            Read that secret back and POST the dashboard JSON
 #                        (default: dashboards/wrack-ev3-health.json) to
 #                        Grafana Cloud's /api/dashboards/db HTTP API via curl.
+#                        The committed dashboard JSON's panel query is the
+#                        placeholder __CONFIRM_METRIC_NAME__, not a live
+#                        value -- --metric-name is REQUIRED for a real (non
+#                        --dry-run) call, so this can never silently
+#                        provision an unverified metric name (PEN-231 code
+#                        review). See docs/monitoring/ev3-health-dashboard.md
+#                        for how wrack_device_status_percentage was derived
+#                        and what's still worth confirming against the real
+#                        Grafana Cloud stack before trusting it blindly.
 #
 # Usage:
 #   GRAFANA_DASHBOARD_TOKEN=<access-policy-token> \
@@ -26,6 +35,7 @@
 #     [--secret-name grafana-cloud-dashboard-credentials] [--dry-run]
 #
 #   GCP_PROJECT_ID=wrack-control bash provision-dashboard.sh provision \
+#     --metric-name wrack_device_status_percentage \
 #     [--dashboard-file cloud/monitoring/dashboards/wrack-ev3-health.json] \
 #     [--secret-name grafana-cloud-dashboard-credentials] [--dry-run]
 #
@@ -62,6 +72,16 @@ DASHBOARD_TOKEN="${GRAFANA_DASHBOARD_TOKEN:-}"
 
 # provision-only inputs
 DASHBOARD_FILE="${DEFAULT_DASHBOARD_FILE}"
+# Required for a real (non-dry-run) `provision` call -- deliberately no
+# default. The committed dashboard JSON's query is the placeholder
+# __CONFIRM_METRIC_NAME__, not a live value, precisely so a real
+# provisioning run can't silently ship an unverified metric name (PEN-231
+# code review). docs/monitoring/ev3-health-dashboard.md derives
+# wrack_device_status_percentage as the expected value from otlp-mapper.js's
+# naming plus Grafana's published OTLP-to-Prometheus translation rules, but
+# that derivation still isn't the same as confirming it against the real
+# Grafana Cloud stack -- pass it explicitly once you have.
+METRIC_NAME=""
 
 # Scratch files — reserved lazily by the subcommand that needs them, cleaned
 # up unconditionally on exit/interrupt so no plaintext credential, request
@@ -80,7 +100,7 @@ HEADERS_FILE=""
 HEADERS_FILE_CREATED=false
 
 usage() {
-  sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,52p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # ── Argument parsing ────────────────────────────────────────────────────────────
@@ -108,6 +128,7 @@ while [[ $# -gt 0 ]]; do
     --grafana-url)     GRAFANA_URL="$2"; shift ;;
     --secret-name)     SECRET_NAME="$2"; shift ;;
     --dashboard-file)  DASHBOARD_FILE="$2"; shift ;;
+    --metric-name)     METRIC_NAME="$2"; shift ;;
     --dry-run)         DRY_RUN=true ;;
     -h|--help)         usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
@@ -152,7 +173,10 @@ print_banner() {
   echo "=================================================="
   echo "  Project:     ${PROJECT_ID}"
   echo "  Secret name: ${SECRET_NAME}"
-  [[ "${SUBCOMMAND}" == "provision" ]] && echo "  Dashboard:   ${DASHBOARD_FILE}"
+  if [[ "${SUBCOMMAND}" == "provision" ]]; then
+    echo "  Dashboard:   ${DASHBOARD_FILE}"
+    echo "  Metric name: ${METRIC_NAME:-<none -- required for a real run>}"
+  fi
   [[ "${DRY_RUN}" == "true" ]] && echo "  Mode:        DRY-RUN (no changes)"
   echo "=================================================="
   echo ""
@@ -289,8 +313,25 @@ cmd_provision() {
 
   if [[ "${DRY_RUN}" == "true" ]]; then
     echo "[DRY-RUN] Would fetch credentials from Secret Manager secret '${SECRET_NAME}' (project ${PROJECT_ID})"
+    if [[ -n "${METRIC_NAME}" ]]; then
+      echo "[DRY-RUN] Would substitute the placeholder query with metric name: ${METRIC_NAME}"
+    else
+      echo "[DRY-RUN] No --metric-name given -- a real run would refuse to provision the unverified placeholder"
+    fi
     echo "[DRY-RUN] Would POST ${DASHBOARD_FILE} to <grafana_url from secret>/api/dashboards/db"
     return
+  fi
+
+  # Required for any real provisioning call -- see METRIC_NAME's declaration
+  # comment and docs/monitoring/ev3-health-dashboard.md. Checked here (not
+  # just left to build_dashboard_request.py's own placeholder-not-found
+  # error) so the failure is immediate and unambiguous about why.
+  if [[ -z "${METRIC_NAME}" ]]; then
+    err "Missing required input: --metric-name"
+    err "The committed dashboard JSON queries the placeholder __CONFIRM_METRIC_NAME__, not a live value."
+    err "Pass the metric name confirmed in Grafana Cloud's Metrics Explorer --"
+    err "see docs/monitoring/ev3-health-dashboard.md for the derived expected value and how to confirm it."
+    exit 1
   fi
 
   reserve_creds_file
@@ -304,7 +345,7 @@ cmd_provision() {
   token="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['token'])" "${CREDS_FILE}")"
 
   reserve_request_file
-  python3 "${SCRIPT_DIR}/build_dashboard_request.py" "${DASHBOARD_FILE}" "${REQUEST_FILE}"
+  python3 "${SCRIPT_DIR}/build_dashboard_request.py" "${DASHBOARD_FILE}" "${REQUEST_FILE}" --metric-name "${METRIC_NAME}"
 
   reserve_headers_file
   {
