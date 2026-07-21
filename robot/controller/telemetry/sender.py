@@ -17,6 +17,23 @@ to the ``urequests`` module bundled with Pybricks, which exposes the same
 minimal API.  If neither is available, ``send_events()`` returns ``False``
 and logs a warning to stdout.
 
+HTTPS on Pybricks/EV3 MicroPython: curl subprocess, not ``urequests``
+-----------------------------------------------------------------------
+Pybricks EV3 MicroPython's bundled ``ussl``/``urequests`` cannot complete a
+TLS handshake with Google Cloud Functions' frontend — every attempt fails
+immediately with ``ssl_handshake_status: -256`` -> ``OSError: [Errno 5]
+EIO``, not just intermittently (a known class of MicroPython issue: old
+TLS ports choking on modern cert chains/handshake extensions, see
+micropython/micropython#3647 and micropython/micropython-lib#374). EV3
+MicroPython runs on top of ev3dev (real Debian Linux, not bare-metal
+firmware), which ships a modern, properly maintained OpenSSL via ``curl`` —
+so when the detected HTTP library is ``urequests``, :meth:`TelemetrySender.
+_http_post` shells out to ``curl`` instead of calling ``urequests.post()``,
+reusing the same ``os.popen()`` pattern ``ev3_devices.device_manager``
+already relies on from this exact runtime. Falls back to ``urequests``
+itself if ``curl`` isn't on ``PATH`` (e.g. a minimal image), so this can
+never regress the previous (broken) behavior.
+
 Usage::
 
     from telemetry.sender import TelemetrySender
@@ -30,6 +47,7 @@ Usage::
 """
 
 import json
+import os
 
 # ``typing`` and ``from __future__ import annotations`` are unavailable on
 # Pybricks/MicroPython.  Without the future import, function-signature
@@ -79,6 +97,65 @@ except ImportError:
         _HTTP_LIB = None
 
 # ---------------------------------------------------------------------------
+# curl-subprocess HTTPS backend (works around Pybricks urequests' broken TLS)
+# ---------------------------------------------------------------------------
+
+# Cached across calls — checking ``PATH`` for ``curl`` on every send would be
+# wasteful, and the answer never changes for the life of the process.
+_CURL_AVAILABLE = None
+
+
+def _curl_is_available() -> bool:
+    """Return whether ``curl`` is on ``PATH``, cached after the first check."""
+    global _CURL_AVAILABLE
+    if _CURL_AVAILABLE is None:
+        try:
+            which = _run_shell_capture("command -v curl 2>/dev/null").strip()
+            _CURL_AVAILABLE = bool(which)
+        except Exception:  # noqa: BLE001 — treat any check failure as "unavailable"
+            _CURL_AVAILABLE = False
+    return _CURL_AVAILABLE
+
+
+def _run_shell_capture(cmd: str) -> str:
+    """Run *cmd* via the shell and return its captured stdout.
+
+    Isolated as its own module-level function — rather than calling
+    ``os.popen()`` directly inline — purely so tests can monkeypatch process
+    execution without depending on ``curl`` actually being installed in CI,
+    or touching a real shell at all.
+    """
+    return os.popen(cmd).read()  # noqa: S605 — no untrusted input reaches cmd
+
+
+def _shell_quote(value: Any) -> str:
+    """POSIX single-quote *value* for safe inclusion in a shell command line.
+
+    MicroPython has no ``shlex.quote``. Wrapping in single quotes and
+    escaping any embedded single quote as ``'"'"'`` is the standard POSIX
+    trick: it closes the quoted string, emits a double-quoted single quote,
+    then reopens the quoted string — safe for arbitrary bytes, including
+    device tokens that might (in principle) contain shell metacharacters.
+    """
+    return "'" + str(value).replace("'", "'\"'\"'") + "'"
+
+
+class _CurlResponse:
+    """Minimal duck-typed response returned by :meth:`TelemetrySender.
+    _http_post_curl` — exposes just the ``status_code``/``text``/``close()``
+    surface :meth:`TelemetrySender._post_batch` already expects from
+    ``requests``/``urequests`` responses, so no other code needs to know a
+    curl subprocess was involved instead of a Python HTTP client.
+    """
+
+    def __init__(self, status_code: int, text: str) -> None:
+        self.status_code = status_code
+        self.text = text
+
+    def close(self) -> None:
+        pass
+
+# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
@@ -86,6 +163,7 @@ DEFAULT_BATCH_SIZE = 100
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_TIMEOUT_S = 10
 DEFAULT_RETRY_BASE_S = 1.0  # first retry wait; doubles each attempt
+DEFAULT_CURL_TEMP_DIR = "/tmp"
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -150,6 +228,14 @@ class TelemetrySender:
         Optional callback invoked with ``(sent_count: int)`` on success.
     on_error:
         Optional callback invoked with ``(error: Exception)`` on final failure.
+    curl_temp_dir:
+        Directory used to stage the request body / response / stderr temp
+        files when POSTing via the ``curl`` subprocess backend (see the
+        module docstring's "HTTPS on Pybricks/EV3 MicroPython" section).
+        Irrelevant when the detected HTTP library is ``requests`` or when
+        ``curl`` isn't on ``PATH``. Defaults to ``/tmp``, matching
+        :data:`telemetry.collector.DEFAULT_OVERFLOW_PATH`'s directory,
+        already proven writable on-device by that overflow-persistence path.
     """
 
     def __init__(
@@ -164,6 +250,7 @@ class TelemetrySender:
         threaded: bool = False,
         on_success: Optional[Callable[[int], None]] = None,
         on_error: Optional[Callable[[Exception], None]] = None,
+        curl_temp_dir: str = DEFAULT_CURL_TEMP_DIR,
     ) -> None:
         if batch_size <= 0:
             raise ValueError("batch_size must be a positive integer")
@@ -178,6 +265,7 @@ class TelemetrySender:
         self.threaded = threaded
         self.on_success = on_success
         self.on_error = on_error
+        self.curl_temp_dir = curl_temp_dir
         # Per-event error detail from the most recent 207 response, keyed by
         # event_id — used only to enrich the final give-up log message with
         # *why* the endpoint is rejecting events, not just how many.  Not
@@ -185,6 +273,11 @@ class TelemetrySender:
         # supports PEP 526 annotations on simple names, not attribute
         # targets — annotating this raises SyntaxError at compile time.
         self._last_207_errors = {}
+        # Combined with ``id(self)`` to build unique-enough curl temp file
+        # names (see ``_http_post_curl``) — two sends from the *same*
+        # instance never overlap in practice (one send at a time per
+        # sender), but this still guards against it cheaply.
+        self._curl_call_count = 0
 
     # ------------------------------------------------------------------
     # Public send interface
@@ -437,16 +530,28 @@ class TelemetrySender:
         )
 
     def _http_post(self, body: str, headers: Dict[str, str]):
-        """POST *body* to :attr:`endpoint`, tolerant of HTTP libraries that
-        don't accept a ``timeout`` kwarg.
+        """POST *body* to :attr:`endpoint`.
 
-        Pybricks MicroPython's bundled ``urequests`` — unlike CPython's
-        ``requests`` — does not accept ``timeout`` on ``post()``; passing it
-        raises ``TypeError: unexpected keyword argument 'timeout'`` (the same
+        On Pybricks/EV3 MicroPython (``_HTTP_LIB == "urequests"``), routes
+        through the ``curl`` subprocess backend instead of ``urequests.
+        post()`` — see the module docstring's "HTTPS on Pybricks/EV3
+        MicroPython" section for why ``urequests``' own TLS can't be used
+        here at all. Falls back to ``urequests`` itself if ``curl`` isn't on
+        ``PATH``, so a device/image without ``curl`` sees exactly today's
+        (broken) behavior rather than a new failure mode.
+
+        Otherwise (``requests`` on CPython/desktop/Raspberry Pi), tolerant of
+        HTTP libraries that don't accept a ``timeout`` kwarg: Pybricks
+        MicroPython's bundled ``urequests`` — unlike CPython's ``requests``
+        — does not accept ``timeout`` on ``post()``; passing it raises
+        ``TypeError: unexpected keyword argument 'timeout'`` (the same
         "unsupported kwarg" shape as the ``Thread(daemon=...)`` issue,
         PEN-188). Try with ``timeout`` first — needed so ``requests`` doesn't
         hang forever — and fall back without it.
         """
+        if _HTTP_LIB == "urequests" and _curl_is_available():
+            return self._http_post_curl(body, headers, self.timeout)
+
         try:
             return _http.post(  # type: ignore[union-attr]
                 self.endpoint, data=body, headers=headers, timeout=self.timeout
@@ -455,6 +560,98 @@ class TelemetrySender:
             return _http.post(  # type: ignore[union-attr]
                 self.endpoint, data=body, headers=headers
             )
+
+    def _http_post_curl(self, body: str, headers: Dict[str, str], timeout: int):
+        """POST *body* via a ``curl`` subprocess rather than ``urequests``.
+
+        Works around a hard TLS-handshake incompatibility between Pybricks
+        EV3 MicroPython's bundled ``ussl``/``urequests`` and Google Cloud
+        Functions' frontend (``ssl_handshake_status: -256`` ->
+        ``OSError: [Errno 5] EIO``, reproducible on the very first request,
+        every time — not a transient network issue). EV3 MicroPython runs on
+        top of ev3dev (real Debian Linux), which ships a modern, properly
+        maintained OpenSSL via ``curl``; ``ev3_devices.device_manager``
+        already shells out successfully from this exact runtime
+        (``os.popen("hostname -I")``), so this reuses that proven pattern
+        rather than introducing a new capability to the runtime.
+
+        The request body, response body, and curl's stderr are staged as
+        temp files under :attr:`curl_temp_dir` (``curl --data-binary @file``
+        avoids shell-escaping an arbitrary JSON payload; ``-o``/``2>``
+        capture the response/error text without curl's own stdout — which
+        is reserved for the ``-w '%{http_code}'`` status code, the one
+        signal this method actually needs from the shell pipeline). All temp
+        files are removed before returning, on every path, success or not.
+
+        Returns a :class:`_CurlResponse`. Raises ``OSError`` if curl reports
+        no valid HTTP response at all (exit status ``000`` — connection,
+        TLS, or DNS failure at the curl level too), so the caller's existing
+        transient-failure retry/back-off applies exactly as it would for a
+        network exception from a Python HTTP client.
+        """
+        suffix = "{}_{}".format(id(self), self._curl_call_count)
+        self._curl_call_count += 1
+        body_path = "{}/wrack_telemetry_body_{}.json".format(self.curl_temp_dir, suffix)
+        resp_path = "{}/wrack_telemetry_resp_{}.json".format(self.curl_temp_dir, suffix)
+        err_path = "{}/wrack_telemetry_err_{}.log".format(self.curl_temp_dir, suffix)
+
+        try:
+            with open(body_path, "w") as fh:
+                fh.write(body)
+        except Exception as exc:  # noqa: BLE001 — surfaced as a normal send failure
+            raise OSError("curl backend: failed to write request body: {}".format(exc))
+
+        try:
+            cmd_parts = ["curl", "-sS", "-X", "POST", _shell_quote(self.endpoint)]
+            for key, value in headers.items():
+                cmd_parts.append("-H")
+                cmd_parts.append(_shell_quote("{}: {}".format(key, value)))
+            cmd_parts.append("--data-binary")
+            cmd_parts.append("@" + _shell_quote(body_path))
+            cmd_parts.append("--max-time")
+            cmd_parts.append(str(timeout))
+            cmd_parts.append("-o")
+            cmd_parts.append(_shell_quote(resp_path))
+            cmd_parts.append("-w")
+            cmd_parts.append("'%{http_code}'")
+            cmd_parts.append("2>" + _shell_quote(err_path))
+
+            status_text = _run_shell_capture(" ".join(cmd_parts)).strip()
+        finally:
+            self._curl_remove(body_path)
+
+        status_code = int(status_text) if status_text.isdigit() else 0
+
+        if status_code == 0:
+            detail = self._curl_read_and_remove(err_path) or (
+                "no HTTP response (connection/TLS/DNS failure)"
+            )
+            self._curl_remove(resp_path)
+            raise OSError("curl POST failed: {}".format(detail))
+
+        response_text = self._curl_read_and_remove(resp_path) or ""
+        self._curl_remove(err_path)
+        return _CurlResponse(status_code, response_text)
+
+    @staticmethod
+    def _curl_remove(path: str) -> None:
+        """Best-effort delete of a curl temp file — must never raise."""
+        try:
+            os.remove(path)
+        except Exception:  # noqa: BLE001
+            pass
+
+    @staticmethod
+    def _curl_read_and_remove(path: str) -> Optional[str]:
+        """Read and delete a curl temp file, tolerating any failure."""
+        text = None
+        try:
+            with open(path, "r") as fh:
+                text = fh.read().strip()
+        except Exception:  # noqa: BLE001
+            text = None
+        TelemetrySender._curl_remove(path)
+        return text
 
     def _async_worker(
         self,
