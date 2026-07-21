@@ -114,6 +114,16 @@ export interface DeviceStatusPayload {
   /** True when voltage is below the low-battery threshold (PEN-234). */
   is_critical?: boolean;
   battery_type?: BatteryType;
+  /**
+   * Left drive motor (`drive_L_motor`) availability. Present only when the
+   * EV3 liveness heartbeat (PEN-200) merges motor availability onto this
+   * event — true iff `DeviceManager.is_device_available('drive_L_motor')`.
+   */
+  motor_l_available?: boolean;
+  /** Right drive motor (`drive_R_motor`) availability (PEN-200) — see motor_l_available. */
+  motor_r_available?: boolean;
+  /** Turret motor (`turret_motor`) availability (PEN-200) — see motor_l_available. */
+  turret_available?: boolean;
 }
 
 export interface ErrorPayload {
@@ -462,6 +472,15 @@ export function validateDeviceStatusPayload(payload: unknown): ValidationResult 
   if (p.battery_type !== undefined && p.battery_type !== null &&
       !(['rechargeable', 'alkaline', 'unknown'] as readonly string[]).includes(p.battery_type as string)) {
     errors.push({ field: 'payload.battery_type', message: 'Must be one of: rechargeable, alkaline, unknown' });
+  }
+
+  // Optional motor-availability fields (PEN-200) — same "merged in only by
+  // the EV3 liveness heartbeat, never required" treatment as the battery
+  // fields above.
+  for (const field of ['motor_l_available', 'motor_r_available', 'turret_available'] as const) {
+    if (p[field] !== undefined && p[field] !== null && typeof p[field] !== 'boolean') {
+      errors.push({ field: `payload.${field}`, message: 'Must be a boolean' });
+    }
   }
 
   return { valid: errors.length === 0, errors };
