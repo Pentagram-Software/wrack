@@ -1,0 +1,81 @@
+{
+  "title": "Wrack EV3 Health",
+  "uid": "wrack-ev3-health",
+  "description": "EV3 robot health dashboard (PEN-231). v1: battery percentage only, sourced from the device_status heartbeat payload PEN-234 pushes through the unified ingress health leg. NOTE: the panel's PromQL query is the placeholder __CONFIRM_METRIC_NAME__, not a live value -- provision-dashboard.sh's --metric-name substitutes the real, confirmed name at provisioning time so an unverified guess can never be shipped as the active query. docs/monitoring/ev3-health-dashboard.md derives wrack_device_status_percentage as the expected value from otlp-mapper.js's naming plus Grafana's published OTLP-to-Prometheus translation rules, and explains what's still worth confirming in Metrics Explorer before trusting it blindly.",
+  "tags": ["wrack", "ev3", "health"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "label": "Prometheus/Mimir data source"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "EV3 Battery %",
+      "description": "Estimated remaining battery charge, from the device_status heartbeat's percentage field (PEN-234). Query is a placeholder substituted at provisioning time -- see dashboard description.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 20 },
+              { "color": "green", "value": 40 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "__CONFIRM_METRIC_NAME__",
+          "legendFormat": "EV3 battery %"
+        }
+      ]
+    }
+  ]
+}
