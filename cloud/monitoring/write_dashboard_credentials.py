@@ -3,13 +3,18 @@
 Grafana Cloud dashboard-provisioning credentials JSON builder.
 
 Companion to write_credentials.py (PEN-189's OTLP push credentials), for the
-separate dashboards:write-scoped Access Policy token PEN-231's
-provision-dashboard.sh needs to call Grafana Cloud's /api/dashboards/db HTTP
-API. Kept as its own module rather than extending write_credentials.py: the
-two credentials are deliberately different secrets with different scopes
-(metrics:write + logs:write vs. dashboards:write) and must never be merged
-into one, per docs/monitoring/architecture.md's "Authenticating the ingress
--> health-leg call" precedent of keeping credentials narrowly scoped.
+separate Grafana Service Account token PEN-231's provision-dashboard.sh
+needs to call Grafana Cloud's /api/dashboards/db HTTP API. This is
+deliberately NOT a Cloud Access Policy token -- Grafana Cloud Access
+Policies (what write_credentials.py's OTLP credential uses) do not
+authorize the Grafana instance HTTP API at all (dashboards, users, data
+sources); only a Service Account token, created in the target stack's own
+Grafana UI, does. Kept as its own module rather than extending
+write_credentials.py: the two credentials are deliberately different
+secrets, of different token types, with different scopes (metrics:write +
+logs:write vs. dashboard write access) and must never be merged into one,
+per docs/monitoring/architecture.md's "Authenticating the ingress -> health-
+leg call" precedent of keeping credentials narrowly scoped.
 
 Reads GRAFANA_URL and GRAFANA_DASHBOARD_TOKEN from the environment -- never
 from argv or interpolated into a shell-built Python source string -- and

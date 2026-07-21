@@ -66,19 +66,35 @@ dashboard JSON's panel instead queries the placeholder
 
 ## Usage
 
-### 1. Store the dashboards:write credential (one-time, per environment)
+### 1. Store the dashboard-provisioning credential (one-time, per environment)
 
-Grafana Cloud has no self-service API to bootstrap this token — same
-limitation `setup-grafana-secret.sh` documents for the existing OTLP push
-credential. It must be created by hand in Grafana Cloud's UI (Security →
-Access Policies), scoped to `dashboards:write` **only**, and must **not**
-reuse or broaden the existing `grafana-cloud-push-credentials` secret (that
-one is scoped to `metrics:write` + `logs:write` for the health-leg push
-function and stays that way — see
-[docs/monitoring/architecture.md](architecture.md)).
+This needs a Grafana **Service Account token**, not a Cloud Access Policy
+token. Grafana Cloud Access Policies (what `setup-grafana-secret.sh` uses
+for the OTLP push credential) explicitly do **not** authorize the Grafana
+instance HTTP API — dashboards, users, data sources — per Grafana's own
+docs: *"Grafana Cloud Access Policies do not authorize access to the
+Grafana instance HTTP API. To automate Grafana UI tasks such as dashboard
+provisioning ... use service accounts instead."* Only a Service Account
+token does, and it must be created inside your specific stack's own Grafana
+instance, not the Cloud Portal:
+
+1. Log into your stack (e.g. `https://<your-stack-slug>.grafana.net`).
+2. Administration → Users and access → Service accounts → **Add service
+   account**. Give it a role with dashboard write access (**Editor** is
+   sufficient; don't grant Admin unless you need it for something else).
+3. Open the new service account → **Add service account token** → copy the
+   generated token (you only see it once).
+
+There's no self-service API to bootstrap this either — same "no API call
+generates the token itself" limitation `setup-grafana-secret.sh` documents
+for the OTLP push credential. This must **not** reuse or broaden the
+existing `grafana-cloud-push-credentials` secret (that one is a Cloud
+Access Policy token scoped to `metrics:write` + `logs:write` for the
+health-leg push function, a genuinely different mechanism, and stays that
+way — see [docs/monitoring/architecture.md](architecture.md)).
 
 ```bash
-GRAFANA_DASHBOARD_TOKEN=<access-policy-token> \
+GRAFANA_DASHBOARD_TOKEN=<service-account-token> \
   bash cloud/monitoring/provision-dashboard.sh store-credentials \
     --grafana-url https://<your-stack-slug>.grafana.net
 ```
@@ -116,8 +132,9 @@ This dashboard was authored and tested in a sandbox with no live Grafana
 Cloud credentials and no live EV3 — the following can only be done by a
 human with real access, in this order:
 
-1. **Create the `dashboards:write` Access Policy token** in Grafana Cloud's
-   UI and run `store-credentials` (above) to store it.
+1. **Create the Service Account token** in your stack's own Grafana UI (see
+   [Usage](#usage) above — not a Cloud Access Policy token) and run
+   `store-credentials` (above) to store it.
 2. **Confirm the real metric name before provisioning for real.** Once
    [PEN-234](https://linear.app/pentagram-software/issue/PEN-234/restore-ev3-health-only-telemetry-without-controller-lag)
    is live and the EV3 is posting heartbeats with battery data, open Grafana

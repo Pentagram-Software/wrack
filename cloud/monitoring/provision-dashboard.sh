@@ -4,16 +4,24 @@
 # Two subcommands, mirroring setup-grafana-secret.sh's conventions (PEN-189):
 # a one-time credential-storage step, and the actual provisioning call.
 #
-#   store-credentials   Store a dashboards:write-scoped Grafana Cloud Access
-#                        Policy token in GCP Secret Manager. The token is
-#                        created manually in Grafana Cloud's UI (Security ->
-#                        Access Policies) -- same "no self-service API to
-#                        bootstrap it" limitation setup-grafana-secret.sh
-#                        documents for the OTLP push credential. This is a
-#                        *separate* secret/scope from grafana-cloud-push-
-#                        credentials, which is scoped only to metrics:write +
-#                        logs:write and must never be reused/broadened for
-#                        dashboard writes (docs/monitoring/architecture.md).
+#   store-credentials   Store a Grafana **Service Account** token in GCP
+#                        Secret Manager. NOT a Cloud Access Policy token --
+#                        Grafana Cloud Access Policies (used by
+#                        setup-grafana-secret.sh's OTLP credential) do not
+#                        authorize the Grafana instance HTTP API at all
+#                        (dashboards, users, data sources); only a Service
+#                        Account token does. Created manually in your
+#                        stack's own Grafana UI (Administration -> Users
+#                        and access -> Service accounts -> Add service
+#                        account -> Add service account token), with at
+#                        least Editor role so it can write dashboards --
+#                        same "no self-service API to bootstrap it"
+#                        limitation setup-grafana-secret.sh documents for
+#                        the OTLP push credential. This is a *separate*
+#                        secret from grafana-cloud-push-credentials, which
+#                        is scoped only to metrics:write + logs:write and
+#                        must never be reused/broadened for dashboard
+#                        writes (docs/monitoring/architecture.md).
 #
 #   provision            Read that secret back and POST the dashboard JSON
 #                        (default: dashboards/wrack-ev3-health.json) to
@@ -29,7 +37,7 @@
 #                        Grafana Cloud stack before trusting it blindly.
 #
 # Usage:
-#   GRAFANA_DASHBOARD_TOKEN=<access-policy-token> \
+#   GRAFANA_DASHBOARD_TOKEN=<service-account-token> \
 #   bash provision-dashboard.sh store-credentials \
 #     --grafana-url https://<stack-slug>.grafana.net \
 #     [--secret-name grafana-cloud-dashboard-credentials] [--dry-run]
@@ -100,7 +108,7 @@ HEADERS_FILE=""
 HEADERS_FILE_CREATED=false
 
 usage() {
-  sed -n '2,52p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,60p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # ── Argument parsing ────────────────────────────────────────────────────────────
