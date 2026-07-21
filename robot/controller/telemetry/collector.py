@@ -166,6 +166,39 @@ def _extract_battery_fields(info: Optional[Dict[str, Any]]) -> Optional[Dict[str
     return fields
 
 
+#: Maps a DeviceManager motor device key to the heartbeat payload field name
+#: it merges onto (PEN-200). Order also drives the ``payload`` key order in
+#: :func:`_extract_motor_fields`.
+_MOTOR_FIELD_MAP = (
+    ("drive_L_motor", "motor_l_available"),
+    ("drive_R_motor", "motor_r_available"),
+    ("turret_motor", "turret_available"),
+)
+
+
+def _extract_motor_fields(motor_status: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Return motor-availability payload fields from a raw motor-status dict.
+
+    *motor_status* is expected in the shape of
+    :meth:`~ev3_devices.DeviceManager.get_motor_availability` (PEN-200):
+    ``{"drive_L_motor": bool, "drive_R_motor": bool, "turret_motor": bool}``.
+    Only recognised keys with an actual ``bool`` value are carried over —
+    missing keys are simply omitted (no ``None`` placeholders), and a
+    malformed *motor_status* (not a dict, or non-bool values) never raises,
+    mirroring :func:`_extract_battery_fields`'s tolerance: a motor-status
+    read problem must never block or delay the heartbeat's liveness signal.
+    """
+    if not isinstance(motor_status, dict):
+        return None
+
+    fields = {}
+    for device_key, field_name in _MOTOR_FIELD_MAP:
+        value = motor_status.get(device_key)
+        if isinstance(value, bool):
+            fields[field_name] = value
+    return fields or None
+
+
 def _utc_now_iso() -> str:
     """Return the current UTC time as an ISO 8601 string ending in ``Z``."""
     if _HAS_DATETIME:
@@ -290,6 +323,7 @@ class TelemetryCollector:
         device_name: str = "ev3",
         status: str = "connected",
         battery_info: Optional[Dict[str, Any]] = None,
+        motor_status: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Build (but do not buffer) a liveness heartbeat event (PEN-229).
 
@@ -321,11 +355,27 @@ class TelemetryCollector:
             ``battery_info`` merges nothing rather than failing the
             heartbeat, since liveness must never be blocked by a battery
             read failure.
+        motor_status:
+            Optional raw motor-availability dict, in the same shape as
+            :meth:`~ev3_devices.DeviceManager.get_motor_availability`
+            (PEN-200): ``{"drive_L_motor": bool, "drive_R_motor": bool,
+            "turret_motor": bool}``. When present, recognised keys are
+            merged into this heartbeat's payload as ``motor_l_available``,
+            ``motor_r_available``, and ``turret_available`` — the shared
+            schema contract (``shared/telemetry-types/schemas/
+            device_status.json``, its TypeScript/Python counterparts, and
+            this module's own ``telemetry.schemas._validate_device_status_
+            payload``) was updated to declare them explicitly. Best-effort,
+            like ``battery_info``: a missing or malformed ``motor_status``
+            merges nothing rather than failing the heartbeat.
         """
         payload = {"device_name": device_name, "status": status}
         battery_fields = _extract_battery_fields(battery_info)
         if battery_fields:
             payload.update(battery_fields)
+        motor_fields = _extract_motor_fields(motor_status)
+        if motor_fields:
+            payload.update(motor_fields)
         return self.create_event("device_status", payload, record_type="health")
 
     # ------------------------------------------------------------------

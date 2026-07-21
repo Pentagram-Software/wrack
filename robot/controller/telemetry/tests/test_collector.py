@@ -353,6 +353,86 @@ class TestCreateHeartbeatEvent:
         c.create_heartbeat_event(battery_info={"voltage_mv": 7500, "percentage": 90.0})
         assert c.buffer_size == 0
 
+    # -- motor_status merging (PEN-200) -----------------------------------
+
+    def test_merges_motor_fields_when_available(self):
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event(
+            motor_status={
+                "drive_L_motor": True,
+                "drive_R_motor": True,
+                "turret_motor": False,
+            }
+        )
+        assert event["payload"]["motor_l_available"] is True
+        assert event["payload"]["motor_r_available"] is True
+        assert event["payload"]["turret_available"] is False
+        assert event["payload"]["device_name"] == "ev3"
+        assert event["payload"]["status"] == "connected"
+
+    def test_merged_motor_event_passes_schema_validation(self):
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event(
+            motor_status={
+                "drive_L_motor": True,
+                "drive_R_motor": False,
+                "turret_motor": True,
+            }
+        )
+        validate_event(event)  # must not raise — device_status schema allows these fields
+
+    def test_omits_motor_fields_when_motor_status_is_none(self):
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event(motor_status=None)
+        assert event["payload"] == {"device_name": "ev3", "status": "connected"}
+
+    def test_omits_motor_fields_when_motor_status_is_malformed(self):
+        """A non-dict motor_status (e.g. a provider bug) must not raise —
+        the heartbeat still builds, just without motor fields."""
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event(motor_status="not-a-dict")
+        assert event["payload"] == {"device_name": "ev3", "status": "connected"}
+
+    def test_omits_motor_fields_when_motor_status_is_empty(self):
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event(motor_status={})
+        assert event["payload"] == {"device_name": "ev3", "status": "connected"}
+
+    def test_ignores_unrecognised_motor_status_keys(self):
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event(motor_status={"some_other_motor": True})
+        assert event["payload"] == {"device_name": "ev3", "status": "connected"}
+
+    def test_ignores_non_bool_motor_status_values(self):
+        """A malformed (non-bool) value for a recognised motor key must be
+        dropped rather than merged verbatim or raising."""
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event(motor_status={"drive_L_motor": "yes"})
+        assert event["payload"] == {"device_name": "ev3", "status": "connected"}
+
+    def test_partial_motor_status_merges_only_present_keys(self):
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event(motor_status={"turret_motor": True})
+        assert event["payload"]["turret_available"] is True
+        assert "motor_l_available" not in event["payload"]
+        assert "motor_r_available" not in event["payload"]
+
+    def test_does_not_buffer_event_with_motor_status(self):
+        c = TelemetryCollector()
+        c.create_heartbeat_event(motor_status={"drive_L_motor": True})
+        assert c.buffer_size == 0
+
+    def test_battery_and_motor_fields_merge_together(self):
+        c = TelemetryCollector()
+        event = c.create_heartbeat_event(
+            battery_info={"voltage_mv": 7500, "percentage": 90.0},
+            motor_status={"drive_L_motor": True, "drive_R_motor": True, "turret_motor": True},
+        )
+        assert event["payload"]["voltage_mv"] == 7500
+        assert event["payload"]["motor_l_available"] is True
+        assert event["payload"]["motor_r_available"] is True
+        assert event["payload"]["turret_available"] is True
+
 
 # ---------------------------------------------------------------------------
 # collect_battery_status

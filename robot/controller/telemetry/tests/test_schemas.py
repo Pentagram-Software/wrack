@@ -470,6 +470,58 @@ class TestDeviceStatusPayload:
         )
         validate_event(event)  # must not raise
 
+    # -- motor-availability fields (PEN-200): optional, merged in only by
+    # the EV3 liveness heartbeat, never required here. -------------------
+
+    def test_motor_availability_fields_absent_is_valid(self):
+        """The vast majority of device_status events (analytics connect/
+        disconnect) never carry motor-availability fields — must not raise."""
+        validate_payload("device_status", _device_status_payload())
+
+    def test_valid_motor_availability_fields_accepted(self):
+        validate_payload(
+            "device_status",
+            _device_status_payload(
+                motor_l_available=True,
+                motor_r_available=True,
+                turret_available=False,
+            ),
+        )
+
+    def test_invalid_motor_l_available_raises(self):
+        with pytest.raises(ValidationError) as exc_info:
+            validate_payload("device_status", _device_status_payload(motor_l_available="yes"))
+        assert any("motor_l_available" in e for e in exc_info.value.errors)
+
+    def test_invalid_motor_r_available_raises(self):
+        with pytest.raises(ValidationError) as exc_info:
+            validate_payload("device_status", _device_status_payload(motor_r_available=1))
+        assert any("motor_r_available" in e for e in exc_info.value.errors)
+
+    def test_invalid_turret_available_raises(self):
+        with pytest.raises(ValidationError) as exc_info:
+            validate_payload("device_status", _device_status_payload(turret_available="no"))
+        assert any("turret_available" in e for e in exc_info.value.errors)
+
+    def test_none_motor_availability_fields_treated_as_absent(self):
+        validate_payload(
+            "device_status",
+            _device_status_payload(
+                motor_l_available=None, motor_r_available=None, turret_available=None
+            ),
+        )
+
+    def test_heartbeat_event_with_motor_status_passes_full_validation(self):
+        """End-to-end: create_heartbeat_event's merged motor-availability
+        payload (PEN-200) must pass validate_event, including the canonical
+        JSON Schema check when jsonschema is installed."""
+        from telemetry.collector import TelemetryCollector
+
+        event = TelemetryCollector().create_heartbeat_event(
+            motor_status={"drive_L_motor": True, "drive_R_motor": True, "turret_motor": False}
+        )
+        validate_event(event)  # must not raise
+
 
 # ---------------------------------------------------------------------------
 # error payload

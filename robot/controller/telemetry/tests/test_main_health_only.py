@@ -45,6 +45,13 @@ class _DeviceManager:
             "available": True,
         }
 
+    def get_motor_availability(self):
+        return {
+            "drive_L_motor": True,
+            "drive_R_motor": True,
+            "turret_motor": False,
+        }
+
     def print_device_status(self):
         pass
 
@@ -92,11 +99,19 @@ class _Collector:
 
 
 class _HeartbeatSender:
-    def __init__(self, collector, sender, interval=30, battery_info_provider=None):
+    def __init__(
+        self,
+        collector,
+        sender,
+        interval=30,
+        battery_info_provider=None,
+        motor_status_provider=None,
+    ):
         self.collector = collector
         self.sender = sender
         self.interval = interval
         self.battery_info_provider = battery_info_provider
+        self.motor_status_provider = motor_status_provider
         self.start = MagicMock()
         self.stop = MagicMock()
 
@@ -244,6 +259,16 @@ def test_health_only_main_disables_analytics_paths_and_starts_heartbeat(monkeypa
         "percentage": 90.0,
         "battery_type": "rechargeable",
         "available": True,
+    }
+
+    # PEN-200: the heartbeat is likewise wired with a motor_status_provider
+    # that reads motor availability from the module's device_manager.
+    assert module._heartbeat_sender.motor_status_provider is not None
+    motor_status = module._heartbeat_sender.motor_status_provider()
+    assert motor_status == {
+        "drive_L_motor": True,
+        "drive_R_motor": True,
+        "turret_motor": False,
     }
 
     module.quit(None)

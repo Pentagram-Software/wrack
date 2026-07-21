@@ -12,6 +12,11 @@ As of PEN-234, the same heartbeat payload also carries battery state
 ``battery_info_provider`` callable is supplied — still one event, one bounded
 HTTP POST per tick, rather than a second sender.
 
+As of PEN-200, the payload can likewise carry drive/turret motor
+availability (``motor_l_available``/``motor_r_available``/
+``turret_available``) when a ``motor_status_provider`` callable is
+supplied — same one-event, best-effort merge pattern as the battery fields.
+
 Usage::
 
     from telemetry.collector import TelemetryCollector
@@ -23,6 +28,7 @@ Usage::
     heartbeat = HeartbeatSender(
         collector, sender,
         battery_info_provider=lambda: device_manager.get_battery_info(),
+        motor_status_provider=lambda: device_manager.get_motor_availability(),
     )
     heartbeat.start()
 
@@ -117,6 +123,16 @@ class HeartbeatSender:
         default, ``None``) preserves today's liveness-only heartbeat
         unchanged. A failing or raising provider never blocks or skips the
         heartbeat itself — see :meth:`_send_heartbeat`.
+    motor_status_provider:
+        Optional zero-argument callable returning a raw motor-availability
+        dict (same shape as
+        ``ev3_devices.DeviceManager.get_motor_availability()``), called
+        once per tick to merge ``motor_l_available``/``motor_r_available``/
+        ``turret_available`` fields into the heartbeat payload (PEN-200).
+        Injected for the same decoupling reason as
+        ``battery_info_provider``, and handled identically: read before the
+        send lock is acquired (see :meth:`_send_heartbeat`), and a failing
+        or raising provider never blocks or skips the heartbeat itself.
     """
 
     def __init__(
@@ -125,6 +141,7 @@ class HeartbeatSender:
         sender: Any,
         interval: int = DEFAULT_HEARTBEAT_INTERVAL,
         battery_info_provider: Optional[Callable[[], Any]] = None,
+        motor_status_provider: Optional[Callable[[], Any]] = None,
     ) -> None:
         if interval <= 0:
             raise ValueError("interval must be a positive integer")
@@ -132,6 +149,7 @@ class HeartbeatSender:
         self.sender = sender
         self.interval = interval
         self.battery_info_provider = battery_info_provider
+        self.motor_status_provider = motor_status_provider
 
         self._running = False
         self._thread = None
@@ -315,6 +333,7 @@ class HeartbeatSender:
             return None
 
         battery_info = self._read_battery_info()
+        motor_status = self._read_motor_status()
 
         run_synchronously = False
 
@@ -324,7 +343,9 @@ class HeartbeatSender:
                 return None
 
             try:
-                event = self.collector.create_heartbeat_event(battery_info=battery_info)
+                event = self.collector.create_heartbeat_event(
+                    battery_info=battery_info, motor_status=motor_status
+                )
             except Exception as exc:  # noqa: BLE001 — one bad build must never kill the loop
                 print("HeartbeatSender: failed to build heartbeat event: {}".format(exc))
                 return None
@@ -366,6 +387,23 @@ class HeartbeatSender:
             return self.battery_info_provider()
         except Exception as exc:  # noqa: BLE001 — a bad battery read must never skip the heartbeat
             print("HeartbeatSender: battery_info_provider failed: {}".format(exc))
+            return None
+
+    def _read_motor_status(self) -> Optional[Any]:
+        """Call :attr:`motor_status_provider`, if set, isolating exceptions.
+
+        Mirrors :meth:`_read_battery_info` (PEN-200): a motor-availability
+        read failing must never prevent the liveness signal itself from
+        being sent — this returns ``None`` on any error, so
+        :meth:`create_heartbeat_event` simply omits the motor-availability
+        fields for that tick rather than skipping the heartbeat.
+        """
+        if self.motor_status_provider is None:
+            return None
+        try:
+            return self.motor_status_provider()
+        except Exception as exc:  # noqa: BLE001 — a bad motor-status read must never skip the heartbeat
+            print("HeartbeatSender: motor_status_provider failed: {}".format(exc))
             return None
 
     def _send_worker(self, event: Dict[str, Any], generation: int) -> None:
