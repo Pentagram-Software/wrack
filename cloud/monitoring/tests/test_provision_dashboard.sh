@@ -87,13 +87,16 @@ esac
 FAKE_GCLOUD
 chmod +x "${FAKE_BIN_DIR}/gcloud"
 
-# Fake curl: records every arg it was called with (CAPTURE_CURL_ARGS) and the
-# contents of the --data-binary @<file> request body (CAPTURE_CURL_BODY), then
-# emits a body + trailing HTTP status line the way `curl -w '\n%{http_code}'`
+# Fake curl: records every arg it was called with (CAPTURE_CURL_ARGS -- must
+# never contain the bearer token, that's the whole point of the PEN-231 fix),
+# the contents of the -K config file (CAPTURE_CURL_HEADERS_FILE) it was
+# pointed at, and the --data-binary @<file> request body (CAPTURE_CURL_BODY).
+# Emits a body + trailing HTTP status line the way `curl -w '\n%{http_code}'`
 # does. FAKE_CURL_HTTP_CODE controls the simulated response status.
 cat > "${FAKE_BIN_DIR}/curl" <<'FAKE_CURL'
 #!/bin/bash
 [[ -n "${CAPTURE_CURL_ARGS:-}" ]] && printf '%s\n' "$@" > "${CAPTURE_CURL_ARGS}"
+prev_arg=""
 for arg in "$@"; do
   case "${arg}" in
     --data-binary=*|@*)
@@ -102,6 +105,10 @@ for arg in "$@"; do
       [[ -n "${CAPTURE_CURL_BODY:-}" && -f "${body_ref}" ]] && cp "${body_ref}" "${CAPTURE_CURL_BODY}"
       ;;
   esac
+  if [[ "${prev_arg}" == "-K" && -n "${CAPTURE_CURL_HEADERS_FILE:-}" && -f "${arg}" ]]; then
+    cp "${arg}" "${CAPTURE_CURL_HEADERS_FILE}"
+  fi
+  prev_arg="${arg}"
 done
 echo '{"id": 1, "status": "success"}'
 echo "${FAKE_CURL_HTTP_CODE:-200}"
@@ -243,8 +250,10 @@ test_provision_posts_dashboard_on_success() {
   local out="${TEST_TMP_DIR}/provision-success.out"
   local body_cap="${TEST_TMP_DIR}/provision-success.body.json"
   local args_cap="${TEST_TMP_DIR}/provision-success.args.txt"
+  local headers_cap="${TEST_TMP_DIR}/provision-success.headers.txt"
 
   PATH="${FAKE_BIN_DIR}:${PATH}" CAPTURE_CURL_BODY="${body_cap}" CAPTURE_CURL_ARGS="${args_cap}" \
+    CAPTURE_CURL_HEADERS_FILE="${headers_cap}" \
     FAKE_CREDS_JSON='{"grafana_url": "https://wrack.grafana.net", "token": "prov-token"}' \
     bash "${SCRIPT}" provision --dashboard-file "${DASHBOARD_FILE}" \
     > "${out}" 2>&1
@@ -253,12 +262,13 @@ test_provision_posts_dashboard_on_success() {
   if [[ ${rc} -eq 0 ]] \
      && grep -q "provisioned successfully" "${out}" \
      && grep -q "https://wrack.grafana.net/api/dashboards/db" "${args_cap}" \
-     && grep -q "Bearer prov-token" "${args_cap}" \
+     && ! grep -q "prov-token" "${args_cap}" \
+     && grep -q "Bearer prov-token" "${headers_cap}" \
      && grep -q '"overwrite": true' "${body_cap}" \
      && grep -q "wrack-ev3-health" "${body_cap}"; then
-    pass "provision fetches credentials, POSTs the wrapped dashboard, and reports success"
+    pass "provision fetches credentials, POSTs via -K (token never in curl argv), and reports success"
   else
-    fail "expected provision to POST the dashboard with the fetched credentials (rc=${rc})"
+    fail "expected provision to POST the dashboard with the token only in the -K file, not curl argv (rc=${rc})"
   fi
 }
 
@@ -278,7 +288,7 @@ test_provision_fails_on_non_200_response() {
   fi
 }
 
-# -- provision: scratch files are cleaned up after a run ----------------------
+# -- provision: scratch files (creds, request, and headers) are cleaned up ---
 test_provision_cleans_up_scratch_files() {
   local out="${TEST_TMP_DIR}/provision-cleanup.out"
 
@@ -294,6 +304,27 @@ test_provision_cleans_up_scratch_files() {
   else
     fail "expected the scratch credentials file (${creds_scratch}) to be removed after the run"
     [[ -n "${creds_scratch}" ]] && rm -f "${creds_scratch}"
+  fi
+}
+
+# -- provision: the headers scratch file never survives the run --------------
+test_provision_headers_file_not_left_behind() {
+  local out="${TEST_TMP_DIR}/provision-headers-cleanup.out"
+  local headers_cap="${TEST_TMP_DIR}/provision-headers-cleanup.headers.txt"
+
+  PATH="${FAKE_BIN_DIR}:${PATH}" CAPTURE_CURL_HEADERS_FILE="${headers_cap}" \
+    bash "${SCRIPT}" provision --dashboard-file "${DASHBOARD_FILE}" \
+    > "${out}" 2>&1
+
+  # The fake curl already copied the -K file's content to headers_cap before
+  # provision-dashboard.sh's cleanup trap ran, so headers_cap having captured
+  # something (checked here) plus the original path no longer existing (the
+  # real assertion) together prove the header file existed, was used, and
+  # was removed -- not just "never created".
+  if [[ -s "${headers_cap}" ]] && grep -q "Authorization: Bearer" "${headers_cap}"; then
+    pass "the curl -K headers file is used for the Authorization header and doesn't survive the run"
+  else
+    fail "expected the -K headers file to have been created with an Authorization header"
   fi
 }
 
@@ -335,6 +366,7 @@ test_provision_dry_run_fails_on_invalid_json
 test_provision_posts_dashboard_on_success
 test_provision_fails_on_non_200_response
 test_provision_cleans_up_scratch_files
+test_provision_headers_file_not_left_behind
 test_missing_subcommand_fails
 test_unknown_subcommand_fails
 echo ""

@@ -32,7 +32,9 @@
 # The token is deliberately NOT a CLI flag for store-credentials — it must
 # come from the GRAFANA_DASHBOARD_TOKEN environment variable so it never
 # appears in shell history or `ps` output (mirrors setup-grafana-secret.sh's
-# GRAFANA_TOKEN handling).
+# GRAFANA_TOKEN handling). The Authorization header curl sends for
+# `provision` is likewise never passed as a -H command-line argument -- see
+# reserve_headers_file() below for why.
 #
 # Prerequisites:
 #   gcloud (authenticated, with roles/secretmanager.admin or equivalent)
@@ -62,13 +64,20 @@ DASHBOARD_TOKEN="${GRAFANA_DASHBOARD_TOKEN:-}"
 DASHBOARD_FILE="${DEFAULT_DASHBOARD_FILE}"
 
 # Scratch files — reserved lazily by the subcommand that needs them, cleaned
-# up unconditionally on exit/interrupt so no plaintext credential or request
-# body is ever left behind (mirrors setup-grafana-secret.sh's KEY_FILE
-# lifecycle).
+# up unconditionally on exit/interrupt so no plaintext credential, request
+# body, or curl header (see HEADERS_FILE) is ever left behind (mirrors
+# setup-grafana-secret.sh's KEY_FILE lifecycle).
 CREDS_FILE=""
 CREDS_FILE_CREATED=false
 REQUEST_FILE=""
 REQUEST_FILE_CREATED=false
+# Holds the curl -K config file with the Authorization header. Passing the
+# bearer token via -H on the command line would put it in this process's
+# argv, visible to any other same-host user via `ps` for the life of the
+# curl call (PEN-231 code review) -- -K reads it from a 0600 file instead,
+# same rationale as CREDS_FILE/REQUEST_FILE never holding secrets in argv.
+HEADERS_FILE=""
+HEADERS_FILE_CREATED=false
 
 usage() {
   sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -112,6 +121,9 @@ cleanup() {
   fi
   if [[ "${REQUEST_FILE_CREATED}" == "true" && -n "${REQUEST_FILE}" && -f "${REQUEST_FILE}" ]]; then
     rm -f "${REQUEST_FILE}"
+  fi
+  if [[ "${HEADERS_FILE_CREATED}" == "true" && -n "${HEADERS_FILE}" && -f "${HEADERS_FILE}" ]]; then
+    rm -f "${HEADERS_FILE}"
   fi
 }
 trap cleanup EXIT
@@ -248,6 +260,22 @@ reserve_request_file() {
   REQUEST_FILE_CREATED=true
 }
 
+# Reserves a 0600 scratch file for curl's -K config-file option. Used to pass
+# the Authorization header without it ever appearing as a -H command-line
+# argument -- unlike CREDS_FILE/REQUEST_FILE's contents, a curl invocation's
+# argv (including any -H value) is visible to other same-host users via
+# `ps` for the life of the call, so the token has to go through a file
+# curl reads internally instead (PEN-231 code review).
+reserve_headers_file() {
+  HEADERS_FILE="$(mktemp "${TMPDIR:-/tmp}/grafana-dashboard-headers.XXXXXX")"
+  if [[ "${HEADERS_FILE}" == *XXXXXX* ]]; then
+    err "mktemp did not generate a unique filename on this platform (got: ${HEADERS_FILE})"
+    exit 1
+  fi
+  chmod 600 "${HEADERS_FILE}"
+  HEADERS_FILE_CREATED=true
+}
+
 cmd_provision() {
   if [[ ! -f "${DASHBOARD_FILE}" ]]; then
     err "Dashboard file not found: ${DASHBOARD_FILE}"
@@ -278,11 +306,16 @@ cmd_provision() {
   reserve_request_file
   python3 "${SCRIPT_DIR}/build_dashboard_request.py" "${DASHBOARD_FILE}" "${REQUEST_FILE}"
 
+  reserve_headers_file
+  {
+    printf 'header = "Authorization: Bearer %s"\n' "${token}"
+    printf 'header = "Content-Type: application/json"\n'
+  } > "${HEADERS_FILE}"
+  chmod 600 "${HEADERS_FILE}"
+
   info "POSTing dashboard to ${grafana_url%/}/api/dashboards/db ..."
   local response http_code body
-  response="$(curl -sS -w '\n%{http_code}' -X POST "${grafana_url%/}/api/dashboards/db" \
-    -H "Authorization: Bearer ${token}" \
-    -H "Content-Type: application/json" \
+  response="$(curl -sS -w '\n%{http_code}' -K "${HEADERS_FILE}" -X POST "${grafana_url%/}/api/dashboards/db" \
     --data-binary "@${REQUEST_FILE}")"
   http_code="$(echo "${response}" | tail -n1)"
   body="$(echo "${response}" | sed '$d')"
