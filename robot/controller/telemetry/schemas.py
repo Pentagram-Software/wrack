@@ -268,6 +268,27 @@ def _validate_battery_status_payload(payload: Any) -> List[str]:
     return _validate_battery_fields(payload, require_core=True)
 
 
+#: Motor-availability fields (PEN-200) merged onto a heartbeat's
+#: ``device_status`` payload by ``TelemetryCollector.create_heartbeat_event``.
+#: Always optional — most ``device_status`` events (analytics connect/
+#: disconnect) never carry them.
+_MOTOR_AVAILABILITY_FIELDS = ("motor_l_available", "motor_r_available", "turret_available")
+
+
+def _validate_motor_availability_fields(payload: Dict[str, Any]) -> List[str]:
+    """Validate the optional motor-availability fields on a ``device_status``
+    payload (PEN-200): ``motor_l_available``, ``motor_r_available``,
+    ``turret_available``. Each must be a boolean when present and not
+    ``None``; absent entirely is always valid.
+    """
+    errors = []
+    for field in _MOTOR_AVAILABILITY_FIELDS:
+        if field in payload and payload[field] is not None:
+            if not isinstance(payload[field], bool):
+                errors.append("payload.{} must be a boolean".format(field))
+    return errors
+
+
 def _validate_command_received_payload(payload: Any) -> List[str]:
     errors = []
     if not isinstance(payload, dict):
@@ -337,6 +358,10 @@ def _validate_device_status_payload(payload: Any) -> List[str]:
     # Battery fields (PEN-234) — merged in only by the EV3 liveness
     # heartbeat, so validated (via the shared helper) but never required.
     errors.extend(_validate_battery_fields(payload, require_core=False))
+
+    # Motor-availability fields (PEN-200) — same "merged in only by the
+    # heartbeat, never required" treatment as the battery fields above.
+    errors.extend(_validate_motor_availability_fields(payload))
 
     return errors
 

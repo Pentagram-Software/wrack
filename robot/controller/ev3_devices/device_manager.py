@@ -376,6 +376,22 @@ class DeviceManager:
         
         return readings
     
+    def get_motor_availability(self):
+        """
+        Get availability of the drive/turret motors as a lightweight snapshot.
+
+        Unlike get_motor_status(), this never touches the motor hardware
+        (no angle()/speed()/stalled() calls) -- just is_device_available()
+        lookups -- so it is cheap and safe to call on every heartbeat tick
+        (PEN-200) without any hardware I/O risk or exception surface.
+
+        Returns:
+            dict: motor device name -> bool availability, e.g.
+                {"drive_L_motor": True, "drive_R_motor": True, "turret_motor": False}
+        """
+        motor_names = ["drive_L_motor", "drive_R_motor", "turret_motor"]
+        return {name: self.is_device_available(name) for name in motor_names}
+
     def get_motor_status(self):
         """
         Get status of all motors (position, speed, stalled state).

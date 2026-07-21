@@ -198,16 +198,25 @@ if (HeartbeatSender and TelemetrySender and _telemetry_collector
     def _heartbeat_battery_info_provider():
         return device_manager.get_battery_info(battery_type="rechargeable")
 
+    # motor_status_provider (PEN-200): same forward-reference rationale as
+    # the battery provider above — a lambda closing over the module-level
+    # `device_manager` name, since this only runs on a heartbeat tick, well
+    # after `device_manager` is assigned below.
+    def _heartbeat_motor_status_provider():
+        return device_manager.get_motor_availability()
+
     if _TELEMETRY_HEARTBEAT_INTERVAL_S:
         _heartbeat_sender = HeartbeatSender(
             _telemetry_collector, _heartbeat_telemetry_sender,
             interval=_TELEMETRY_HEARTBEAT_INTERVAL_S,
             battery_info_provider=_heartbeat_battery_info_provider,
+            motor_status_provider=_heartbeat_motor_status_provider,
         )
     else:
         _heartbeat_sender = HeartbeatSender(
             _telemetry_collector, _heartbeat_telemetry_sender,
             battery_info_provider=_heartbeat_battery_info_provider,
+            motor_status_provider=_heartbeat_motor_status_provider,
         )
     print("Heartbeat sender initialised (interval={}s)".format(_heartbeat_sender.interval))
 

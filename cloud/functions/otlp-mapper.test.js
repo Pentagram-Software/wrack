@@ -51,6 +51,27 @@ describe('mapEventToMetricPoints()', () => {
     expect(points).toHaveLength(0);
   });
 
+  test('PEN-200: EV3 heartbeat motor-availability booleans map to wrack.device_status.<field> gauges', () => {
+    const points = mapEventToMetricPoints(
+      baseEvent({
+        event_type: 'device_status',
+        payload: {
+          device_name: 'ev3',
+          status: 'connected',
+          voltage_mv: 7500,
+          motor_l_available: true,
+          motor_r_available: true,
+          turret_available: false,
+        },
+      })
+    );
+    const byName = Object.fromEntries(points.map((p) => [p.name, p.value]));
+    expect(byName['wrack.device_status.voltage_mv']).toBe(7500);
+    expect(byName['wrack.device_status.motor_l_available']).toBe(1);
+    expect(byName['wrack.device_status.motor_r_available']).toBe(1);
+    expect(byName['wrack.device_status.turret_available']).toBe(0);
+  });
+
   test('excludes NaN/Infinity from payload values', () => {
     const points = mapEventToMetricPoints(baseEvent({ payload: { voltage_mv: NaN, percentage: Infinity, ok: 1 } }));
     expect(points).toHaveLength(1);

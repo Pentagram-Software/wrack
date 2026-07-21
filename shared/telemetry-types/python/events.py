@@ -125,6 +125,12 @@ try:
         voltage_v: Optional[float]
         is_critical: Optional[bool]
         battery_type: Optional[str]
+        # Motor-availability fields (PEN-200) — merged in only by the EV3
+        # liveness heartbeat, same "optional, never required" treatment as
+        # the battery fields above.
+        motor_l_available: Optional[bool]
+        motor_r_available: Optional[bool]
+        turret_available: Optional[bool]
 
     class ErrorPayload(TypedDict, total=False):
         error_type: str             # required

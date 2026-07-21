@@ -84,7 +84,48 @@ class TestDeviceManager:
     def test_are_devices_available_empty_list(self):
         """Test multiple device availability check with empty list"""
         assert self.device_manager.are_devices_available([]) == True
-    
+
+    def test_get_motor_availability_all_available(self):
+        """PEN-200: all three motor keys report True when initialized"""
+        self.device_manager.try_init_device(MockMotor, MockPort.A, "drive_L_motor")
+        self.device_manager.try_init_device(MockMotor, MockPort.D, "drive_R_motor")
+        self.device_manager.try_init_device(MockMotor, MockPort.C, "turret_motor")
+
+        assert self.device_manager.get_motor_availability() == {
+            "drive_L_motor": True,
+            "drive_R_motor": True,
+            "turret_motor": True,
+        }
+
+    def test_get_motor_availability_none_initialized(self):
+        """PEN-200: all three motor keys report False when never initialized"""
+        assert self.device_manager.get_motor_availability() == {
+            "drive_L_motor": False,
+            "drive_R_motor": False,
+            "turret_motor": False,
+        }
+
+    def test_get_motor_availability_partial(self):
+        """PEN-200: only the initialized motor reports True"""
+        self.device_manager.try_init_device(MockMotor, MockPort.A, "drive_L_motor")
+
+        result = self.device_manager.get_motor_availability()
+
+        assert result["drive_L_motor"] is True
+        assert result["drive_R_motor"] is False
+        assert result["turret_motor"] is False
+
+    def test_get_motor_availability_reflects_disconnect(self):
+        """PEN-200: a motor detected as disconnected must report False even
+        though it still exists in the devices dict (mirrors
+        is_device_available's own disconnected-set behavior)."""
+        self.device_manager.try_init_device(MockMotor, MockPort.A, "drive_L_motor")
+        self.device_manager._disconnected_devices.add("drive_L_motor")
+
+        result = self.device_manager.get_motor_availability()
+
+        assert result["drive_L_motor"] is False
+
     def test_safe_device_call_existing_method(self):
         """Test safe device call with existing device and method"""
         motor = self.device_manager.try_init_device(MockMotor, MockPort.A, "test_motor")

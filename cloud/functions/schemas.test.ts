@@ -457,6 +457,53 @@ describe('validateDeviceStatusPayload', () => {
       battery_type: null,
     })).valid).toBe(true);
   });
+
+  // -- motor-availability fields (PEN-200): optional, merged in only by
+  // the EV3 liveness heartbeat, never required here. -----------------------
+
+  test('motor-availability fields absent is valid', () => {
+    expect(validateDeviceStatusPayload(deviceStatusPayload()).valid).toBe(true);
+  });
+
+  test('valid motor-availability fields accepted', () => {
+    expect(validateDeviceStatusPayload(deviceStatusPayload({
+      motor_l_available: true,
+      motor_r_available: true,
+      turret_available: false,
+    })).valid).toBe(true);
+  });
+
+  test('invalid motor_l_available fails', () => {
+    const result = validateDeviceStatusPayload(deviceStatusPayload({
+      motor_l_available: 'yes' as unknown as boolean,
+    }));
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.field.includes('motor_l_available'))).toBe(true);
+  });
+
+  test('invalid motor_r_available fails', () => {
+    const result = validateDeviceStatusPayload(deviceStatusPayload({
+      motor_r_available: 1 as unknown as boolean,
+    }));
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.field.includes('motor_r_available'))).toBe(true);
+  });
+
+  test('invalid turret_available fails', () => {
+    const result = validateDeviceStatusPayload(deviceStatusPayload({
+      turret_available: 'no' as unknown as boolean,
+    }));
+    expect(result.valid).toBe(false);
+    expect(result.errors.some(e => e.field.includes('turret_available'))).toBe(true);
+  });
+
+  test('null motor-availability fields treated as absent', () => {
+    expect(validateDeviceStatusPayload(deviceStatusPayload({
+      motor_l_available: null,
+      motor_r_available: null,
+      turret_available: null,
+    })).valid).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

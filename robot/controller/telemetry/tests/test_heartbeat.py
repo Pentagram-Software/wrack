@@ -81,6 +81,19 @@ class TestConfiguration:
         hb = HeartbeatSender(c, s, battery_info_provider=provider)
         assert hb.battery_info_provider is provider
 
+    def test_motor_status_provider_defaults_to_none(self):
+        c = TelemetryCollector()
+        s = _make_sender()
+        hb = HeartbeatSender(c, s)
+        assert hb.motor_status_provider is None
+
+    def test_custom_motor_status_provider(self):
+        c = TelemetryCollector()
+        s = _make_sender()
+        provider = MagicMock(return_value={"drive_L_motor": True})
+        hb = HeartbeatSender(c, s, motor_status_provider=provider)
+        assert hb.motor_status_provider is provider
+
     def test_zero_interval_rejected(self):
         c = TelemetryCollector()
         s = _make_sender()
@@ -265,6 +278,96 @@ class TestBatteryInfoProvider:
         TestSendTiming()._run_fake_loop(hb, tick_seconds=1, ticks=30)
 
         assert provider.call_count == s.send_events.call_count
+
+
+# ---------------------------------------------------------------------------
+# motor_status_provider (PEN-200): merging motor-availability data into the
+# same heartbeat payload, and isolating provider failures from the liveness
+# signal itself. Mirrors TestBatteryInfoProvider above.
+# ---------------------------------------------------------------------------
+
+
+class TestMotorStatusProvider:
+    def test_motor_fields_merged_into_sent_event(self):
+        c = TelemetryCollector()
+        s = _make_sender()
+        provider = MagicMock(
+            return_value={"drive_L_motor": True, "drive_R_motor": True, "turret_motor": False}
+        )
+        hb = HeartbeatSender(c, s, motor_status_provider=provider)
+
+        event = hb.send_now()
+        _join_send_thread(hb)
+
+        provider.assert_called_once_with()
+        assert event["payload"]["motor_l_available"] is True
+        assert event["payload"]["motor_r_available"] is True
+        assert event["payload"]["turret_available"] is False
+        assert event["payload"]["status"] == "connected"
+        s.send_events.assert_called_once_with([event])
+
+    def test_no_provider_sends_liveness_only(self):
+        c = TelemetryCollector()
+        s = _make_sender()
+        hb = HeartbeatSender(c, s)
+
+        event = hb.send_now()
+
+        assert event["payload"] == {"device_name": "ev3", "status": "connected"}
+
+    def test_raising_provider_still_sends_liveness_heartbeat(self):
+        """A motor-status read failure must never block or skip the
+        liveness signal — the tick still sends, just without motor fields."""
+        c = TelemetryCollector()
+        s = _make_sender()
+        provider = MagicMock(side_effect=RuntimeError("motor status read failed"))
+        hb = HeartbeatSender(c, s, motor_status_provider=provider)
+
+        event = hb.send_now()
+        _join_send_thread(hb)
+
+        assert event is not None
+        assert event["payload"] == {"device_name": "ev3", "status": "connected"}
+        s.send_events.assert_called_once_with([event])
+
+    def test_empty_motor_status_sends_liveness_only(self):
+        c = TelemetryCollector()
+        s = _make_sender()
+        provider = MagicMock(return_value={})
+        hb = HeartbeatSender(c, s, motor_status_provider=provider)
+
+        event = hb.send_now()
+
+        assert event["payload"] == {"device_name": "ev3", "status": "connected"}
+
+    def test_provider_called_fresh_on_every_tick(self):
+        c = TelemetryCollector()
+        s = _make_sender()
+        provider = MagicMock(return_value={"drive_L_motor": True})
+        hb = HeartbeatSender(c, s, motor_status_provider=provider, interval=1)
+
+        TestSendTiming()._run_fake_loop(hb, tick_seconds=1, ticks=30)
+
+        assert provider.call_count == s.send_events.call_count
+
+    def test_battery_and_motor_providers_merge_into_same_event(self):
+        c = TelemetryCollector()
+        s = _make_sender()
+        battery_provider = MagicMock(return_value={"voltage_mv": 7500, "percentage": 90.0})
+        motor_provider = MagicMock(return_value={"drive_L_motor": True, "turret_motor": False})
+        hb = HeartbeatSender(
+            c, s,
+            battery_info_provider=battery_provider,
+            motor_status_provider=motor_provider,
+        )
+
+        event = hb.send_now()
+        _join_send_thread(hb)
+
+        assert event["payload"]["voltage_mv"] == 7500
+        assert event["payload"]["motor_l_available"] is True
+        assert event["payload"]["turret_available"] is False
+        s.send_events.assert_called_once_with([event])
 
 
 # ---------------------------------------------------------------------------
