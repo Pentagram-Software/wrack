@@ -34,6 +34,15 @@ already relies on from this exact runtime. Falls back to ``urequests``
 itself if ``curl`` isn't on ``PATH`` (e.g. a minimal image), so this can
 never regress the previous (broken) behavior.
 
+TODO(PEN-236): This is an interim fix, adequate for today's volume (30s
+heartbeat interval; 120s-interval batched analytics flushes when
+re-enabled) but not the most scalable transport long-term — no TLS session
+reuse (fresh handshake every call), per-call process-spawn + temp-file
+overhead. Revisit with a local relay daemon (persistent HTTP session,
+Pybricks POSTs to it over loopback instead of spawning curl) once PEN-203's
+5s heartbeat interval lands, analytics volume grows, or the EV3 fleet grows
+enough for per-device curl overhead to matter.
+
 Usage::
 
     from telemetry.sender import TelemetrySender
@@ -563,6 +572,13 @@ class TelemetrySender:
 
     def _http_post_curl(self, body: str, headers: Dict[str, str], timeout: int):
         """POST *body* via a ``curl`` subprocess rather than ``urequests``.
+
+        TODO(PEN-236): interim fix — a per-call ``curl`` subprocess spawn
+        with no TLS session reuse doesn't scale to a shorter heartbeat
+        interval (PEN-203's 5s target) or restored high-volume analytics.
+        Replace with a local relay daemon (persistent HTTP session on the
+        ev3dev Debian layer; this class POSTs to it over loopback instead
+        of spawning curl) if/when that volume actually shows up.
 
         Works around a hard TLS-handshake incompatibility between Pybricks
         EV3 MicroPython's bundled ``ussl``/``urequests`` and Google Cloud
