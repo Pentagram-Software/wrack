@@ -934,3 +934,208 @@ class TestNoHttpLibrary:
         with patch("telemetry.sender._http", None):
             result = s.send_events(events)
         assert result is False
+
+
+# ---------------------------------------------------------------------------
+# curl-subprocess HTTPS backend (works around Pybricks urequests' broken TLS
+# against Google Cloud Functions — ssl_handshake_status: -256 -> EIO)
+# ---------------------------------------------------------------------------
+
+def _fake_curl_run(status_code, response_text="", stderr_text=""):
+    """Build a fake replacement for ``telemetry.sender._run_shell_capture``.
+
+    Parses the ``-o '<path>'`` / ``2>'<path>'`` tokens out of the real curl
+    command line built by ``_http_post_curl`` and writes to those paths —
+    mimicking what curl itself would have written — rather than hardcoding
+    the sender's private temp-file naming scheme in the test.
+    """
+    import re
+
+    def _run(cmd):
+        resp_match = re.search(r"-o '([^']*)'", cmd)
+        err_match = re.search(r"2>'([^']*)'", cmd)
+        if resp_match:
+            with open(resp_match.group(1), "w") as fh:
+                fh.write(response_text)
+        if err_match:
+            with open(err_match.group(1), "w") as fh:
+                fh.write(stderr_text)
+        return str(status_code)
+
+    return _run
+
+
+class TestShellQuote:
+    def test_plain_value_is_wrapped_in_single_quotes(self):
+        from telemetry.sender import _shell_quote
+
+        assert _shell_quote("hello") == "'hello'"
+
+    def test_embedded_single_quote_is_escaped(self):
+        from telemetry.sender import _shell_quote
+
+        assert _shell_quote("o'brien") == "'o'\"'\"'brien'"
+
+    def test_non_string_value_is_stringified(self):
+        from telemetry.sender import _shell_quote
+
+        assert _shell_quote(5) == "'5'"
+
+
+class TestCurlBackend:
+    """``TelemetrySender._http_post_curl`` — the workaround for Pybricks EV3
+    MicroPython's ``urequests``/``ussl`` being unable to complete a TLS
+    handshake with Google Cloud Functions at all (not just intermittently).
+    """
+
+    def test_used_when_http_lib_is_urequests_and_curl_available(self, tmp_path):
+        s = _make_sender(curl_temp_dir=str(tmp_path))
+        events = [_make_event()]
+        with patch("telemetry.sender._HTTP_LIB", "urequests"), \
+             patch("telemetry.sender._curl_is_available", return_value=True), \
+             patch("telemetry.sender._run_shell_capture", side_effect=_fake_curl_run(200)), \
+             patch("telemetry.sender._http") as mock_http:
+            result = s.send_events(events)
+        assert result is True
+        mock_http.post.assert_not_called()
+
+    def test_falls_back_to_urequests_when_curl_unavailable(self, tmp_path):
+        s = _make_sender(curl_temp_dir=str(tmp_path))
+        events = [_make_event()]
+        resp = MagicMock(status_code=200)
+        with patch("telemetry.sender._HTTP_LIB", "urequests"), \
+             patch("telemetry.sender._curl_is_available", return_value=False), \
+             patch("telemetry.sender._run_shell_capture") as mock_shell, \
+             patch("telemetry.sender._http") as mock_http:
+            mock_http.post.return_value = resp
+            result = s.send_events(events)
+        assert result is True
+        mock_shell.assert_not_called()
+        mock_http.post.assert_called_once()
+
+    def test_requests_lib_never_uses_curl_backend(self, tmp_path):
+        """Desktop/CI (``requests`` installed) must be completely unaffected
+        by this workaround, even if ``curl`` happens to be on PATH there."""
+        s = _make_sender(curl_temp_dir=str(tmp_path))
+        events = [_make_event()]
+        resp = MagicMock(status_code=200)
+        with patch("telemetry.sender._HTTP_LIB", "requests"), \
+             patch("telemetry.sender._curl_is_available", return_value=True), \
+             patch("telemetry.sender._run_shell_capture") as mock_shell, \
+             patch("telemetry.sender._http") as mock_http:
+            mock_http.post.return_value = resp
+            result = s.send_events(events)
+        assert result is True
+        mock_shell.assert_not_called()
+
+    def test_response_status_and_body_are_parsed_from_curl_output(self, tmp_path):
+        s = _make_sender(curl_temp_dir=str(tmp_path), max_retries=0)
+        with patch("telemetry.sender._HTTP_LIB", "urequests"), \
+             patch("telemetry.sender._curl_is_available", return_value=True), \
+             patch(
+                 "telemetry.sender._run_shell_capture",
+                 side_effect=_fake_curl_run(207, response_text='{"failed": 1, "errors": []}'),
+             ):
+            response = s._http_post_curl("{}", {"Content-Type": "application/json"}, 5)
+        assert response.status_code == 207
+        assert response.text == '{"failed": 1, "errors": []}'
+
+    def test_status_000_raises_oserror_with_stderr_detail(self, tmp_path):
+        s = _make_sender(curl_temp_dir=str(tmp_path))
+        with patch("telemetry.sender._HTTP_LIB", "urequests"), \
+             patch("telemetry.sender._curl_is_available", return_value=True), \
+             patch(
+                 "telemetry.sender._run_shell_capture",
+                 side_effect=_fake_curl_run(0, stderr_text="curl: (35) TLS connect error"),
+             ):
+            with pytest.raises(OSError, match="TLS connect error"):
+                s._http_post_curl("{}", {}, 5)
+
+    def test_status_000_without_stderr_still_raises(self, tmp_path):
+        s = _make_sender(curl_temp_dir=str(tmp_path))
+        with patch("telemetry.sender._HTTP_LIB", "urequests"), \
+             patch("telemetry.sender._curl_is_available", return_value=True), \
+             patch("telemetry.sender._run_shell_capture", side_effect=_fake_curl_run(0)):
+            with pytest.raises(OSError):
+                s._http_post_curl("{}", {}, 5)
+
+    def test_temp_files_are_removed_after_success(self, tmp_path):
+        s = _make_sender(curl_temp_dir=str(tmp_path))
+        with patch("telemetry.sender._HTTP_LIB", "urequests"), \
+             patch("telemetry.sender._curl_is_available", return_value=True), \
+             patch("telemetry.sender._run_shell_capture", side_effect=_fake_curl_run(200, "ok")):
+            s._http_post_curl("{}", {}, 5)
+        assert list(tmp_path.iterdir()) == []
+
+    def test_temp_files_are_removed_after_failure(self, tmp_path):
+        s = _make_sender(curl_temp_dir=str(tmp_path))
+        with patch("telemetry.sender._HTTP_LIB", "urequests"), \
+             patch("telemetry.sender._curl_is_available", return_value=True), \
+             patch("telemetry.sender._run_shell_capture", side_effect=_fake_curl_run(0, stderr_text="boom")):
+            with pytest.raises(OSError):
+                s._http_post_curl("{}", {}, 5)
+        assert list(tmp_path.iterdir()) == []
+
+    def test_request_body_is_written_to_temp_file(self, tmp_path):
+        """The exact payload curl would upload — verifies the temp file
+        actually contains the JSON body at the moment curl "runs", not just
+        that a file was written at some point."""
+        s = _make_sender(curl_temp_dir=str(tmp_path))
+        seen_body = {}
+
+        def _run(cmd):
+            import re
+
+            body_match = re.search(r"--data-binary @'([^']*)'", cmd)
+            with open(body_match.group(1), "r") as fh:
+                seen_body["content"] = fh.read()
+            resp_match = re.search(r"-o '([^']*)'", cmd)
+            with open(resp_match.group(1), "w") as fh:
+                fh.write("")
+            return "200"
+
+        with patch("telemetry.sender._HTTP_LIB", "urequests"), \
+             patch("telemetry.sender._curl_is_available", return_value=True), \
+             patch("telemetry.sender._run_shell_capture", side_effect=_run):
+            s._http_post_curl('{"events": []}', {}, 5)
+        assert seen_body["content"] == '{"events": []}'
+
+    def test_device_headers_are_passed_as_curl_dash_h_args(self, tmp_path):
+        s = _make_sender(
+            curl_temp_dir=str(tmp_path), device_id="ev3-001", device_token="secret-token"
+        )
+        seen_cmd = {}
+
+        def _run(cmd):
+            seen_cmd["cmd"] = cmd
+            return _fake_curl_run(200)(cmd)
+
+        with patch("telemetry.sender._HTTP_LIB", "urequests"), \
+             patch("telemetry.sender._curl_is_available", return_value=True), \
+             patch("telemetry.sender._run_shell_capture", side_effect=_run):
+            s._http_post_curl(
+                "{}", {"X-Device-Id": "ev3-001", "X-Device-Token": "secret-token"}, 5
+            )
+        assert "X-Device-Id: ev3-001" in seen_cmd["cmd"]
+        assert "X-Device-Token: secret-token" in seen_cmd["cmd"]
+
+    def test_curl_availability_check_is_cached(self):
+        import telemetry.sender as sender_module
+
+        sender_module._CURL_AVAILABLE = None
+        with patch("telemetry.sender._run_shell_capture", return_value="/usr/bin/curl") as mock_shell:
+            first = sender_module._curl_is_available()
+            second = sender_module._curl_is_available()
+        assert first is True
+        assert second is True
+        mock_shell.assert_called_once()
+        sender_module._CURL_AVAILABLE = None  # reset for other tests
+
+    def test_curl_availability_false_when_not_on_path(self):
+        import telemetry.sender as sender_module
+
+        sender_module._CURL_AVAILABLE = None
+        with patch("telemetry.sender._run_shell_capture", return_value=""):
+            result = sender_module._curl_is_available()
+        assert result is False
+        sender_module._CURL_AVAILABLE = None  # reset for other tests
