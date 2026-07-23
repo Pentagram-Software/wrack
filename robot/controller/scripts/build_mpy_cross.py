@@ -88,7 +88,10 @@ def micropython_src_dir(cache_dir: Path) -> Path:
 
 
 def mpy_cross_binary_path(cache_dir: Path) -> Path:
-    return micropython_src_dir(cache_dir) / "mpy-cross" / "build" / "mpy-cross"
+    # mpy-cross/Makefile's $(PROG) rule links the final binary directly into
+    # the directory `make` was invoked from (mpy-cross/mpy-cross) -- the
+    # `build/` subdirectory it also creates only holds intermediate .o files.
+    return micropython_src_dir(cache_dir) / "mpy-cross" / "mpy-cross"
 
 
 def is_binary_usable(binary_path: Path, verbose: bool = False) -> bool:
@@ -162,7 +165,8 @@ def build_mpy_cross(src_dir: Path, jobs: Optional[int] = None, verbose: bool = F
         ],
         check=True,
     )
-    return mpy_cross_dir / "build" / "mpy-cross"
+    # See mpy_cross_binary_path()'s comment: PROG links directly into mpy_cross_dir.
+    return mpy_cross_dir / "mpy-cross"
 
 
 def ensure_mpy_cross(

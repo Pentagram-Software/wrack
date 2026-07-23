@@ -31,7 +31,7 @@ class TestPaths(unittest.TestCase):
         cache_dir = Path("/tmp/cache")
         self.assertEqual(
             build_mpy_cross.mpy_cross_binary_path(cache_dir),
-            Path("/tmp/cache/micropython/mpy-cross/build/mpy-cross"),
+            Path("/tmp/cache/micropython/mpy-cross/mpy-cross"),
         )
 
     def test_default_cache_dir_is_outside_robot_controller(self):
@@ -140,7 +140,7 @@ class TestBuildMpyCross(unittest.TestCase):
             f"{build_mpy_cross.EXTRA_CFLAGS_VAR}={build_mpy_cross.EXTRA_CFLAGS}",
             called_args,
         )
-        self.assertEqual(result, src_dir / "mpy-cross" / "build" / "mpy-cross")
+        self.assertEqual(result, src_dir / "mpy-cross" / "mpy-cross")
 
     @patch("build_mpy_cross.subprocess.run")
     def test_propagates_build_failures(self, mock_run):
