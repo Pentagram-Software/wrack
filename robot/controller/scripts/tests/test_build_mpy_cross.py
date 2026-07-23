@@ -65,6 +65,34 @@ class TestIsBinaryUsable(unittest.TestCase):
         with patch.object(Path, "is_file", return_value=True):
             self.assertFalse(build_mpy_cross.is_binary_usable(Path("/fake/mpy-cross")))
 
+    @patch(
+        "build_mpy_cross.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd=["mpy-cross"], timeout=10),
+    )
+    @patch("build_mpy_cross.os.access", return_value=True)
+    def test_binary_that_times_out_is_not_usable(self, mock_access, mock_run):
+        with patch.object(Path, "is_file", return_value=True):
+            self.assertFalse(build_mpy_cross.is_binary_usable(Path("/fake/mpy-cross")))
+
+    @patch("build_mpy_cross.subprocess.run")
+    @patch("build_mpy_cross.os.access", return_value=True)
+    def test_verbose_failure_prints_diagnostics_to_stderr(self, mock_access, mock_run):
+        # A crashing (e.g. segfaulting) mpy-cross binary is exactly the failure
+        # mode that motivated adding diagnostics: it builds and links fine but
+        # exits non-zero (or worse) when actually run -- print what it said so
+        # CI logs show *why*, instead of just "is not usable".
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="segfault")
+        with patch.object(Path, "is_file", return_value=True):
+            with patch("build_mpy_cross.sys.stderr") as mock_stderr:
+                self.assertFalse(
+                    build_mpy_cross.is_binary_usable(Path("/fake/mpy-cross"), verbose=True)
+                )
+        printed = "".join(
+            call.args[0] for call in mock_stderr.write.call_args_list if call.args
+        )
+        self.assertIn("segfault", printed)
+        self.assertIn("exited 1", printed)
+
 
 class TestCloneSource(unittest.TestCase):
     @patch("build_mpy_cross.subprocess.run")

@@ -91,9 +91,11 @@ def mpy_cross_binary_path(cache_dir: Path) -> Path:
     return micropython_src_dir(cache_dir) / "mpy-cross" / "build" / "mpy-cross"
 
 
-def is_binary_usable(binary_path: Path) -> bool:
+def is_binary_usable(binary_path: Path, verbose: bool = False) -> bool:
     """Check whether a previously built mpy-cross binary still runs."""
     if not binary_path.is_file() or not os.access(binary_path, os.X_OK):
+        if verbose:
+            print(f"{binary_path} does not exist or is not executable", file=sys.stderr)
         return False
     try:
         result = subprocess.run(
@@ -102,8 +104,16 @@ def is_binary_usable(binary_path: Path) -> bool:
             text=True,
             timeout=10,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        if verbose:
+            print(f"running {binary_path} --version raised {exc!r}", file=sys.stderr)
         return False
+    if result.returncode != 0 and verbose:
+        print(
+            f"{binary_path} --version exited {result.returncode}\n"
+            f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}",
+            file=sys.stderr,
+        )
     return result.returncode == 0
 
 
@@ -165,7 +175,7 @@ def ensure_mpy_cross(
     cache_dir = cache_dir or default_cache_dir()
     binary_path = mpy_cross_binary_path(cache_dir)
 
-    if not force_rebuild and is_binary_usable(binary_path):
+    if not force_rebuild and is_binary_usable(binary_path, verbose=verbose):
         if verbose:
             print(f"Reusing cached mpy-cross at {binary_path}")
         return binary_path
@@ -173,7 +183,7 @@ def ensure_mpy_cross(
     src_dir = clone_source(cache_dir, verbose=verbose)
     build_mpy_cross(src_dir, jobs=jobs, verbose=verbose)
 
-    if not is_binary_usable(binary_path):
+    if not is_binary_usable(binary_path, verbose=True):
         raise RuntimeError(
             f"mpy-cross build finished but binary at {binary_path} is not usable"
         )
@@ -208,6 +218,12 @@ def main(argv=None) -> int:
     parser.add_argument("--jobs", "-j", type=int, default=None, help="Parallel make jobs")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args(argv)
+
+    # stdout defaults to block-buffered when not a tty (e.g. piped into a CI
+    # log), which interleaves our own prints out of order relative to the
+    # subprocess (git/make) output that writes directly to the inherited fd.
+    # Line-buffer so `--verbose` output stays in chronological order in logs.
+    sys.stdout.reconfigure(line_buffering=True)
 
     tooling_error = _check_tooling()
     if tooling_error:
