@@ -21,7 +21,7 @@ import socketserver
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from config import parse_stream_config
 from monitoring import StreamMetrics, write_metrics, write_stopped_metrics
-from telemetry import VideoTelemetry
+from video_telemetry import VideoTelemetry
 
 LOGGER = logging.getLogger("streamer")
 
