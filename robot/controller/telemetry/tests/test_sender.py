@@ -594,6 +594,100 @@ class TestFlushAndSend:
             if os.path.exists(path):
                 os.remove(path)
 
+    def test_overflow_file_not_deleted_before_send_attempt(self):
+        """Regression (PEN-221): the overflow file used to be deleted
+        unconditionally before the send was even attempted, so a crash
+        between the delete and a confirmed successful send would lose those
+        events permanently. It must stay on disk, untouched, until the send
+        outcome is known.
+        """
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            os.remove(path)
+            c = TelemetryCollector(max_buffer_size=1, overflow_path=path)
+            c.collect_battery_status(7000, 80.0)  # evicted to disk
+            c.collect_battery_status(7001, 81.0)  # stays buffered
+            assert os.path.exists(path)
+
+            s = _make_sender(max_retries=0)
+            with patch("telemetry.sender._http") as mock_http:
+                mock_http.post.side_effect = ConnectionError("down")
+                result = s.flush_and_send(c)
+
+            assert result is False
+            assert os.path.exists(path)
+            assert len(c.load_overflow()) == 1
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_overflow_file_cleared_only_after_confirmed_success(self):
+        """The overflow file must only be cleared once the send has actually
+        succeeded, never on the mere assumption that it will.
+        """
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            os.remove(path)
+            c = TelemetryCollector(max_buffer_size=1, overflow_path=path)
+            c.collect_battery_status(7000, 80.0)  # evicted to disk
+            c.collect_battery_status(7001, 81.0)  # stays buffered
+            assert os.path.exists(path)
+
+            ok_response = MagicMock()
+            ok_response.status_code = 200
+            s = _make_sender(batch_size=100)
+            with patch("telemetry.sender._http") as mock_http:
+                mock_http.post.return_value = ok_response
+                result = s.flush_and_send(c)
+
+            assert result is True
+            assert not os.path.exists(path)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_partial_overflow_failure_keeps_only_the_failing_subset_on_disk(self):
+        """A partial failure (HTTP 207) must rewrite the overflow file to
+        contain only the still-unsent subset, not the whole original set.
+        """
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            os.remove(path)
+            c = TelemetryCollector(max_buffer_size=1, overflow_path=path)
+            c.collect_battery_status(7000, 80.0)  # evicted to disk
+            c.collect_battery_status(7001, 81.0)  # evicted to disk
+            c.collect_battery_status(7002, 82.0)  # stays buffered
+            c.clear()  # drop the buffered one so only the 2 on-disk events matter
+            overflow_events = c.load_overflow()
+            assert len(overflow_events) == 2
+            failing_id = overflow_events[0]["event_id"]
+            succeeding_id = overflow_events[1]["event_id"]
+
+            partial_response = MagicMock()
+            partial_response.status_code = 207
+            partial_response.text = json.dumps({
+                "success": False,
+                "inserted": 1,
+                "failed": 1,
+                "errors": [{"event_id": failing_id, "errors": ["backendError"]}],
+            })
+            s = _make_sender(max_retries=0, batch_size=100)
+            with patch("telemetry.sender._http") as mock_http:
+                mock_http.post.return_value = partial_response
+                result = s.flush_and_send(c)
+
+            assert result is False
+            remaining = c.load_overflow()
+            assert len(remaining) == 1
+            assert remaining[0]["event_id"] == failing_id
+            assert succeeding_id not in [e["event_id"] for e in remaining]
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
     def test_async_flush_restores_unsent_events_on_failure(self):
         """Async flush should also re-buffer events when send ultimately fails."""
         s = _make_sender(max_retries=0)
