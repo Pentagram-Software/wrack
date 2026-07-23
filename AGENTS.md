@@ -25,9 +25,11 @@ Other components (robot firmware, Raspberry Pi edge, iOS app) require physical h
 
 - **Robot controller** (Python): `cd robot/controller && source .venv/bin/activate && python -m pytest event_handler/tests/ robot_controllers/tests/ wake_word/tests/ error_reporting/tests/ telemetry/tests/ -q`. The top-level `tests/` dir and `ev3_devices/tests/` have import issues (legacy module paths and missing pybricks mocks) that are pre-existing.
 - **Cloud functions** (Jest): `cd cloud/functions && npm test` — runs Jest unit tests covering authentication, command validation, dispatching, error handling, and telemetry event schema validation (`schemas.test.ts`).
+- **Robot controller MicroPython compatibility check** (PEN-220): `make check-mpy` (from repo root) — compiles every file that ships to the EV3 with `mpy-cross`, pinned to the exact MicroPython version (v1.11) the EV3's frozen Pybricks firmware uses. First run clones+builds `mpy-cross` from source (needs `git` + a C compiler); cached after that. See `robot/controller/scripts/build_mpy_cross.py` and the "MicroPython compatibility" section of `CLAUDE.md`.
 - Refer to `robot/controller/AGENTS.md` for Python-specific dev guidance.
 
 ### System dependencies
 
 - `python3.12-venv` and `python3.12-dev` plus `portaudio19-dev` are required for the robot controller Python venv (the `precise-runner` dep needs `pyaudio` which needs these C headers).
+- `build-essential` (or equivalent: `git` + a C compiler + `make`) is required to build `mpy-cross` for the MicroPython compatibility check (`make check-mpy`) — a one-time build, cached in `.mpy-cross-cache/` afterward.
 - Node.js 22 works fine for both `clients/web` and `cloud/functions` despite `cloud/functions/package.json` declaring `engines.node: "20"`.

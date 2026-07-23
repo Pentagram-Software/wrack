@@ -49,6 +49,9 @@ cd cloud/functions && npm test
 # Robot controller tests (Python — includes telemetry schema tests)
 cd robot/controller && source .venv/bin/activate && python -m pytest event_handler/tests/ robot_controllers/tests/ wake_word/tests/ error_reporting/tests/ telemetry/tests/ -q
 
+# Robot controller MicroPython compatibility check (PEN-220) — builds/caches mpy-cross on first run
+make check-mpy
+
 # Deploy GCP functions
 make deploy-cloud   # runs gcloud functions deploy
 
@@ -132,6 +135,19 @@ CPython and will not catch any MicroPython-only incompatibility below** — pass
 necessary but not sufficient for a change in this tree. Production has repeatedly hit bugs where
 code was syntactically/semantically valid CPython but broke on-device; check for these classes
 explicitly on every change:
+
+**Automated coverage (PEN-220):** `make check-mpy` (also run in `ci-robot.yml` on every PR/push
+touching `robot/controller/`, and as a pre-deployment gate in `deploy-robot.yml`) runs every file
+that ships to the EV3 through `mpy-cross`, the real MicroPython cross-compiler — pinned to
+MicroPython v1.11 to match the EV3's frozen Pybricks "2.0" firmware, *not* the current PyPI
+`mpy-cross-v6.x` packages, which are built from present-day upstream MicroPython and no longer
+reject some of the syntax below (see `robot/controller/scripts/build_mpy_cross.py` for the full
+reasoning). This catches the **"No PEP 526 annotations"** bullet below (any annotated assignment,
+not just non-simple targets — v1.11 has no annotation grammar at all) plus other CPython-only
+syntax such as `match`/`case` and positional-only (`def f(x, /)`) parameters. It is a *syntax-only*
+check (`mpy-cross` never executes code) and **cannot** catch any of the other bullets below — those
+are all import/runtime-level gaps (partial stdlib modules, missing builtins, kwarg incompatibilities)
+that only surface when the code actually runs. Keep doing the manual review for those.
 
 - **Partial stdlib modules**: `import x` succeeding does not mean the whole module works. Some
   MicroPython builds ship partial modules that import fine but raise `AttributeError` (not
