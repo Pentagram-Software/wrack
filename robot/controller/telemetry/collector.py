@@ -23,6 +23,8 @@ Usage::
 import json
 import os
 
+from threading_compat import create_lock
+
 # ``typing`` and ``from __future__ import annotations`` are unavailable on
 # Pybricks/MicroPython.  Without the future import, function-signature
 # annotations are evaluated at import time, so the fallback below provides a
@@ -265,6 +267,13 @@ class TelemetryCollector:
         self._buffer = []
         self._dropped_count = 0
         self._invalid_count = 0
+        # Guards every read/modify/write of the overflow file. The control
+        # loop (evicting into _persist_to_disk) and the telemetry sender
+        # (loading/removing on a background send thread, see PEN-221) touch
+        # the same file from different threads; without this, a concurrent
+        # append could be silently wiped out by a reconciliation rewrite
+        # based on a now-stale snapshot.
+        self._overflow_lock = create_lock()
 
     # ------------------------------------------------------------------
     # Core factory method
@@ -581,29 +590,44 @@ class TelemetryCollector:
             self._persist_to_disk(evicted)
         self._buffer.append(event)
 
-    def _persist_to_disk(self, event: Dict[str, Any]) -> None:
-        """Append a single event to the overflow file (if enabled)."""
+    def _persist_to_disk(self, event: Dict[str, Any]) -> bool:
+        """Append a single event to the overflow file (if enabled).
+
+        Returns ``True`` only once the event has actually been written to
+        disk, ``False`` for every failure mode (persistence disabled, the
+        write raising, or the event being rejected for exceeding
+        ``max_disk_bytes``). Every failure path here is intentionally
+        swallowed -- via ``except Exception`` or an early ``return`` -- so
+        callers that must know whether an event actually became durable
+        (e.g. :meth:`telemetry.sender.TelemetrySender._reconcile_overflow`,
+        deciding whether to fall back to restoring it in memory) cannot rely
+        on an exception ever propagating out of this method; they must
+        check the return value instead.
+        """
         if not self.overflow_path:
             self._dropped_count += 1
-            return
+            return False
         try:
             line = json.dumps(event) + "\n"
             try:
                 line_bytes = len(line.encode("utf-8"))
             except Exception:  # noqa: BLE001 — fall back to char count
                 line_bytes = len(line)
-            current_size = 0
-            if os.path.exists(self.overflow_path):
-                current_size = os.path.getsize(self.overflow_path)
-            # Reject before writing so a single large event cannot push the
-            # file past the configured cap.
-            if current_size + line_bytes > self.max_disk_bytes:
-                self._dropped_count += 1
-                return
-            with _open_text(self.overflow_path, "a") as fh:
-                fh.write(line)
+            with self._overflow_lock:
+                current_size = 0
+                if os.path.exists(self.overflow_path):
+                    current_size = os.path.getsize(self.overflow_path)
+                # Reject before writing so a single large event cannot push
+                # the file past the configured cap.
+                if current_size + line_bytes > self.max_disk_bytes:
+                    self._dropped_count += 1
+                    return False
+                with _open_text(self.overflow_path, "a") as fh:
+                    fh.write(line)
+            return True
         except Exception:  # noqa: BLE001 — best-effort overflow must never crash collect_*()
             self._dropped_count += 1
+            return False
 
     # ------------------------------------------------------------------
     # Public buffer accessors
@@ -647,29 +671,138 @@ class TelemetryCollector:
     def load_overflow(self) -> List[Dict[str, Any]]:
         """Read and return events from the overflow file (one JSON per line).
 
-        The overflow file is *not* deleted by this method — call
-        ``clear_overflow()`` once the events have been sent successfully.
+        The overflow file is *not* deleted by this method. Prefer
+        ``remove_overflow_events()`` to drop specific, confirmed-sent events
+        once known (safe against concurrent appends); ``clear_overflow()``
+        remains available for an unconditional wipe.
         """
-        if not self.overflow_path or not os.path.exists(self.overflow_path):
+        if not self.overflow_path:
             return []
         events = []
         try:
-            with _open_text(self.overflow_path, "r") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if line:
-                        try:
-                            events.append(json.loads(line))
-                        except (ValueError, KeyError):
-                            pass
+            with self._overflow_lock:
+                if not os.path.exists(self.overflow_path):
+                    return []
+                with _open_text(self.overflow_path, "r") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if line:
+                            try:
+                                events.append(json.loads(line))
+                            except (ValueError, KeyError):
+                                pass
         except OSError:
-            pass
+            return []
         return events
 
     def clear_overflow(self) -> None:
-        """Delete the overflow file if it exists."""
-        if self.overflow_path and os.path.exists(self.overflow_path):
+        """Delete the overflow file unconditionally, if it exists.
+
+        Prefer ``remove_overflow_events()`` when only specific events are
+        known to be safely sent -- this method wipes the file outright, so
+        calling it after loading a snapshot risks discarding anything
+        appended to the file since (see PEN-221).
+        """
+        with self._overflow_lock:
+            if self.overflow_path and os.path.exists(self.overflow_path):
+                try:
+                    os.remove(self.overflow_path)
+                except OSError:
+                    pass
+
+    def remove_overflow_events(self, event_ids) -> None:
+        """Remove only the given ``event_id``s from the overflow file,
+        preserving every other line -- including any event appended by a
+        concurrent thread (e.g. the control loop evicting into
+        ``_persist_to_disk``) after the caller's ``load_overflow()`` snapshot
+        was taken.
+
+        Re-reads the file's *current* contents under the same lock used by
+        ``_persist_to_disk()`` immediately before rewriting it, so this is
+        safe to call an arbitrary amount of time (including across a
+        blocking network send) after loading the snapshot that *event_ids*
+        came from -- unlike ``clear_overflow()`` followed by re-persisting a
+        remembered subset, which silently loses anything appended in
+        between (PEN-221). Best-effort: never raises.
+        """
+        if not self.overflow_path or not event_ids:
+            return
+        ids_to_remove = set(event_ids)
+        with self._overflow_lock:
+            if not os.path.exists(self.overflow_path):
+                return
             try:
-                os.remove(self.overflow_path)
+                with _open_text(self.overflow_path, "r") as fh:
+                    lines = list(fh)
+            except OSError:
+                return
+            remaining = []
+            for line in lines:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    event = json.loads(stripped)
+                except (ValueError, KeyError):
+                    # Keep unparsable lines rather than silently dropping data.
+                    remaining.append(stripped + "\n")
+                    continue
+                if event.get("event_id") not in ids_to_remove:
+                    remaining.append(stripped + "\n")
+            if remaining:
+                self._atomic_rewrite_overflow(remaining)
+            else:
+                try:
+                    os.remove(self.overflow_path)
+                except OSError:
+                    pass
+
+    def _atomic_rewrite_overflow(self, lines: List[str]) -> bool:
+        """Write *lines* as the new overflow file contents via a temp file
+        plus atomic rename, never by truncating the existing file in place.
+
+        Opening the real overflow file with mode ``"w"`` truncates it
+        immediately, before a single byte of the replacement content is
+        written; a crash between that truncation and the final write/close
+        would then permanently lose every event still on disk -- exactly
+        the failure PEN-221 exists to prevent. Writing to a separate
+        ``.tmp`` file first means a crash or write failure at any point
+        before the rename leaves the original overflow file completely
+        untouched (the rename/replace step itself is a single atomic
+        filesystem operation). Caller must already hold ``_overflow_lock``.
+        Best-effort: never raises; returns ``False`` (leaving the original
+        file as-is) on any failure.
+        """
+        if not self.overflow_path:
+            return False
+        tmp_path = self.overflow_path + ".tmp"
+        try:
+            with _open_text(tmp_path, "w") as fh:
+                fh.writelines(lines)
+                try:
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                except (AttributeError, OSError):
+                    pass
+        except OSError:
+            try:
+                os.remove(tmp_path)
             except OSError:
                 pass
+            return False
+        try:
+            # os.replace is unavailable on some MicroPython builds; fall
+            # back to os.rename, which is atomic-overwrite on the POSIX
+            # (ev3dev/Linux) filesystems this runs on.
+            replace = getattr(os, "replace", None)
+            if callable(replace):
+                replace(tmp_path, self.overflow_path)
+            else:
+                os.rename(tmp_path, self.overflow_path)
+            return True
+        except OSError:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            return False

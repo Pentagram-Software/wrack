@@ -319,6 +319,7 @@ class TelemetrySender:
         events: List[Dict[str, Any]],
         *,
         collector: Optional[Any] = None,
+        overflow_events: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         """Send *events* in a background daemon thread (fire-and-forget).
 
@@ -327,19 +328,28 @@ class TelemetrySender:
 
         When ``threading`` is unavailable (some MicroPython builds) the send
         runs synchronously so events are never silently dropped.
+
+        Parameters
+        ----------
+        overflow_events:
+            The subset of *events* that originated from the on-disk overflow
+            file (see :meth:`flush_and_send`). When provided, the background
+            worker reconciles the overflow file once the send outcome is
+            known — the same PEN-221 guarantee the synchronous path makes —
+            instead of leaving the file untouched (and re-sent) forever.
         """
         if not events:
             return
         if not _HAS_THREADING:
             # No threads on this runtime — fall back to a blocking send rather
             # than dropping the events.
-            self._async_worker(list(events), collector)
+            self._async_worker(list(events), collector, overflow_events)
             return
         # Pybricks MicroPython's Thread() accepts only ``target``/``args`` —
         # passing ``daemon`` raises TypeError (PEN-188).
         t = _threading.Thread(
             target=self._async_worker,
-            args=(list(events), collector),
+            args=(list(events), collector, overflow_events),
         )
         t.start()
 
@@ -673,11 +683,26 @@ class TelemetrySender:
         self,
         events: List[Dict[str, Any]],
         collector: Optional[Any] = None,
+        overflow_events: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
-        """Thread target for :meth:`send_events_async`."""
+        """Thread target for :meth:`send_events_async`.
+
+        Mirrors the reconciliation the synchronous :meth:`flush_and_send`
+        branch performs: overflow-origin events are split out of *unsent*
+        and reconciled against the overflow file via
+        :meth:`_split_and_reconcile_overflow` regardless of *ok*, so the file
+        is cleared on success and rewritten (not left stale) on failure —
+        this is the dominant, steady-state send path in production (the
+        120s periodic flush in ``main.py``), so skipping reconciliation here
+        would silently defeat PEN-221 for real-world usage.
+        """
         ok, unsent = self._send_events_with_unsent(events)
-        if not ok and collector is not None:
-            self._restore_events_to_collector(collector, unsent)
+        if collector is not None:
+            unsent = self._split_and_reconcile_overflow(
+                collector, overflow_events or [], unsent
+            )
+            if unsent:
+                self._restore_events_to_collector(collector, unsent)
 
     def _fire_error(self, exc: Exception) -> None:
         """Invoke the ``on_error`` callback, or log if none is registered."""
@@ -784,11 +809,13 @@ class TelemetrySender:
         """Flush *collector* and send all collected events.
 
         This drains both the on-disk overflow file (oldest events, persisted
-        when the in-memory buffer overflowed) and the in-memory buffer, sending
-        the overflow events first to preserve ordering.  The overflow file is
-        cleared once its events have been taken into memory; any event that
-        ultimately fails to send is restored to the collector (and re-persisted
-        on overflow), so nothing is silently lost or sent twice.
+        when the in-memory buffer overflowed) and the in-memory buffer,
+        sending the overflow events first to preserve ordering.
+
+        The overflow file is only ever cleared or rewritten *after* the send
+        attempt completes (see :meth:`_reconcile_overflow`) — never deleted
+        up front — so a crash or kill between loading and sending can never
+        lose events that were sitting safely on disk.
 
         Parameters
         ----------
@@ -808,20 +835,24 @@ class TelemetrySender:
         if not events:
             return True
         if async_send:
-            self.send_events_async(events, collector=collector)
+            self.send_events_async(
+                events, collector=collector, overflow_events=overflow_events
+            )
             return None
         ok, unsent = self._send_events_with_unsent(events)
-        if not ok:
+        unsent = self._split_and_reconcile_overflow(collector, overflow_events, unsent)
+        if unsent:
             self._restore_events_to_collector(collector, unsent)
         return ok
 
     def _drain_overflow(self, collector: Any) -> List[Dict[str, Any]]:
-        """Load persisted overflow events and clear the overflow file.
+        """Load persisted overflow events without touching the file.
 
-        Best-effort: the events are taken into memory so they can be sent
-        alongside the in-memory buffer.  Clearing the file up front means a
-        send failure re-persists only the events that still need retrying
-        (via :meth:`_restore_events_to_collector`), avoiding duplicate sends.
+        The file is deliberately left untouched here — it is only cleared or
+        rewritten once the send outcome is known, by
+        :meth:`_reconcile_overflow`. Clearing it up front (the previous
+        behavior) created a window where a crash between the clear and a
+        confirmed successful send would lose the events permanently.
         Returns ``[]`` if the collector has no overflow support.
         """
         load = getattr(collector, "load_overflow", None)
@@ -831,14 +862,79 @@ class TelemetrySender:
             events = load() or []
         except Exception:  # noqa: BLE001 — overflow drain must never crash a send
             return []
-        if events:
-            clear = getattr(collector, "clear_overflow", None)
-            if callable(clear):
-                try:
-                    clear()
-                except Exception:  # noqa: BLE001
-                    pass
         return list(events)
+
+    def _split_and_reconcile_overflow(
+        self,
+        collector: Any,
+        overflow_events: List[Dict[str, Any]],
+        unsent: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Split *unsent* into overflow-origin and buffer-origin subsets,
+        reconcile the overflow file for the former via
+        :meth:`_reconcile_overflow`, and return the latter for the caller
+        to restore to the in-memory buffer.
+
+        Shared by both the synchronous ``flush_and_send`` branch and
+        :meth:`_async_worker` so the overflow file is reconciled identically
+        regardless of which path a given send took (PEN-221 follow-up: the
+        async path — the one actually used in steady-state production —
+        used to skip this entirely). A no-op that returns *unsent* unchanged
+        when *overflow_events* is empty, so :meth:`_reconcile_overflow` never
+        touches the file when nothing came from disk this round.
+        """
+        if not overflow_events:
+            return unsent
+        overflow_ids = {e.get("event_id") for e in overflow_events}
+        still_unsent_overflow = [e for e in unsent if e.get("event_id") in overflow_ids]
+        buffer_origin_unsent = [e for e in unsent if e.get("event_id") not in overflow_ids]
+        self._reconcile_overflow(collector, overflow_events, still_unsent_overflow)
+        return buffer_origin_unsent
+
+    def _reconcile_overflow(
+        self,
+        collector: Any,
+        overflow_events: List[Dict[str, Any]],
+        still_unsent_overflow_events: List[Dict[str, Any]],
+    ) -> None:
+        """Remove exactly the overflow-origin events confirmed sent by this
+        attempt from the overflow file, once the send outcome is known.
+
+        Deliberately a *removal*, not the earlier clear-then-rewrite
+        approach: this method can run an arbitrary amount of time (an
+        entire blocking network send, on the async path) after *its own
+        caller* loaded the ``overflow_events`` snapshot passed in here, and
+        in that window the control loop can concurrently evict a new event
+        into the same file via ``_persist_to_disk``. A clear-then-rewrite
+        based on the stale snapshot would delete that new event outright —
+        it was never part of this send attempt, so it wouldn't be in
+        *still_unsent_overflow_events* either, and would vanish permanently
+        (PEN-221 follow-up). Removing only the confirmed-sent IDs is safe
+        because :meth:`TelemetryCollector.remove_overflow_events` re-reads
+        the file's *current* contents under its own lock immediately before
+        rewriting it, so anything appended concurrently -- or any event in
+        *still_unsent_overflow_events*, which is simply never touched here
+        -- survives untouched. If the removal call itself fails, the
+        confirmed-sent events are left on disk rather than lost: at worst
+        they're resent (and de-duplicated) on the next cycle, never dropped.
+        """
+        if not overflow_events:
+            return
+        still_unsent_ids = {e.get("event_id") for e in still_unsent_overflow_events}
+        confirmed_sent_ids = {
+            e.get("event_id")
+            for e in overflow_events
+            if e.get("event_id") not in still_unsent_ids
+        }
+        if not confirmed_sent_ids:
+            return
+        remove = getattr(collector, "remove_overflow_events", None)
+        if not callable(remove):
+            return
+        try:
+            remove(confirmed_sent_ids)
+        except Exception:  # noqa: BLE001 — overflow bookkeeping must never crash a send
+            pass
 
     def _restore_events_to_collector(
         self,
