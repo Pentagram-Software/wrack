@@ -92,7 +92,7 @@ NEXT_PUBLIC_GCP_REGION=europe-central2
 - ✅ Interactive Leaflet map with vehicle tracking and trail visualization
 - ✅ Toast notifications for user feedback
 - ✅ GCP connection testing
-- ✅ Camera view placeholder with HLS.js integration
+- ✅ Camera view with live WebSocket video streaming (H.264 via WebCodecs + JPEG fallback)
 
 ### Key Components
 
@@ -186,7 +186,7 @@ npm run type-check
 1. **Security**: Generate secure API key, production CORS
 2. **Real Testing**: Test with actual EV3 device
 3. **Mobile**: Optimize responsive layout
-4. **Camera**: Implement HLS streaming
+4. **Camera**: Start `edge/ws-bridge` server; set `NEXT_PUBLIC_WS_BRIDGE_URL` in `.env.local`
 5. **Mapping**: Add GPS integration and data persistence
 
 ## GCP Deployment

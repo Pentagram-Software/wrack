@@ -23,7 +23,16 @@
 
 ### Video flow
 1. Camera on Raspberry Pi → UDP video stream (see `shared/video-protocol/`)
-2. iOS App and Web Controller receive and decode stream
+2. **iOS App**: receives and decodes UDP stream directly (Swift `VideoStreamClient`)
+3. **Web browser**: cannot use raw UDP; instead:
+   - `edge/ws-bridge/` runs alongside the Pi streamer (or on any reachable host)
+   - Bridge registers as a UDP client, reassembles frames, and forwards them over WebSocket
+   - Browser connects to the WebSocket bridge via `clients/web/src/lib/videoStream.ts`
+   - H.264 frames decoded via the WebCodecs API; JPEG frames displayed via blob URL
+
+```
+Pi Camera ──H.264/JPEG UDP──► ws-bridge ──WebSocket (binary)──► Browser (WebCodecs / canvas)
+```
 
 ### Telemetry flow
 1. EV3 sensors → Raspberry Pi vision model → BigQuery

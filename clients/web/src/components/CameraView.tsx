@@ -1,80 +1,171 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
-import { XMarkIcon, PlayIcon, PauseIcon, CameraIcon } from '@heroicons/react/24/solid';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { XMarkIcon, PlayIcon, PauseIcon, CameraIcon, SignalIcon } from '@heroicons/react/24/solid';
+import { WebSocketVideoClient, VideoStreamState, VideoStreamStats } from '@/lib/videoStream';
+
+// Default bridge URL — override with NEXT_PUBLIC_WS_BRIDGE_URL in .env.local
+const DEFAULT_WS_URL =
+  process.env.NEXT_PUBLIC_WS_BRIDGE_URL ?? 'ws://localhost:8765';
 
 interface CameraViewProps {
   onClose: () => void;
   isExpanded: boolean;
+  /** Override the WebSocket bridge URL (useful for testing). */
+  wsBridgeUrl?: string;
 }
 
-export default function CameraView({ onClose, isExpanded }: CameraViewProps) {
+export default function CameraView({
+  onClose,
+  isExpanded,
+  wsBridgeUrl = DEFAULT_WS_URL,
+}: CameraViewProps) {
   const [isStreaming, setIsStreaming] = useState(false);
-  const [streamUrl, setStreamUrl] = useState<string>('');
-  const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const [connectionStatus, setConnectionStatus] = useState<VideoStreamState>('idle');
+  const [stats, setStats] = useState<VideoStreamStats>({
+    fps: 0,
+    framesReceived: 0,
+    framesDecoded: 0,
+    codec: null,
+  });
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (isStreaming && videoRef.current) {
-      setConnectionStatus('connecting');
-      
-      setTimeout(() => {
-        setConnectionStatus('connected');
-        if (videoRef.current) {
-          videoRef.current.src = '/api/placeholder/640/480';
-        }
-      }, 2000);
-    } else {
-      setConnectionStatus('disconnected');
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const clientRef = useRef<WebSocketVideoClient | null>(null);
+
+  // ─── Canvas ref callback ───────────────────────────────────────────────────
+  // Keep the canvas element in sync with the video client.
+  const canvasCallbackRef = useCallback((node: HTMLCanvasElement | null) => {
+    canvasRef.current = node;
+  }, []);
+
+  // ─── Stream lifecycle ──────────────────────────────────────────────────────
+
+  const startStream = useCallback(() => {
+    if (clientRef.current) return; // already running
+
+    const client = new WebSocketVideoClient({
+      url: wsBridgeUrl,
+      canvas: canvasRef.current ?? undefined,
+      onStateChange: (state) => {
+        setConnectionStatus(state);
+        if (state === 'connected') setErrorMessage(null);
+      },
+      onError: (err) => {
+        setErrorMessage(err.message);
+      },
+      onFrame: (s) => {
+        setStats(s);
+      },
+    });
+
+    clientRef.current = client;
+    client.connect();
+  }, [wsBridgeUrl]);
+
+  const stopStream = useCallback(() => {
+    clientRef.current?.disconnect();
+    clientRef.current = null;
+    setConnectionStatus('idle');
+    setStats({ fps: 0, framesReceived: 0, framesDecoded: 0, codec: null });
+    setErrorMessage(null);
+
+    // Clear canvas
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      ctx?.clearRect(0, 0, canvas.width, canvas.height);
     }
-  }, [isStreaming]);
+  }, []);
+
+  // ─── Toggle handler ────────────────────────────────────────────────────────
 
   const toggleStream = () => {
-    setIsStreaming(!isStreaming);
+    if (isStreaming) {
+      setIsStreaming(false);
+      stopStream();
+    } else {
+      setIsStreaming(true);
+      startStream();
+    }
   };
 
-  const getStatusColor = () => {
+  // Disconnect when component unmounts
+  useEffect(() => {
+    return () => {
+      clientRef.current?.disconnect();
+      clientRef.current = null;
+    };
+  }, []);
+
+  // ─── Status helpers ────────────────────────────────────────────────────────
+
+  const getStatusColor = (): string => {
     switch (connectionStatus) {
       case 'connected': return 'text-green-400';
       case 'connecting': return 'text-yellow-400';
-      case 'disconnected': return 'text-red-400';
+      case 'error': return 'text-red-400';
       default: return 'text-gray-400';
     }
   };
 
-  const getStatusDot = () => {
+  const getStatusDot = (): string => {
     switch (connectionStatus) {
       case 'connected': return 'bg-green-500';
       case 'connecting': return 'bg-yellow-500 animate-pulse';
-      case 'disconnected': return 'bg-red-500';
+      case 'error': return 'bg-red-500';
       default: return 'bg-gray-500';
     }
   };
 
+  const getStatusLabel = (): string => {
+    switch (connectionStatus) {
+      case 'idle': return 'Idle';
+      case 'connecting': return 'Connecting…';
+      case 'connected': return 'Live';
+      case 'error': return 'Error';
+      case 'disconnected': return 'Disconnected';
+    }
+  };
+
+  const isConnecting = connectionStatus === 'connecting';
+  const isConnected = connectionStatus === 'connected';
+  const hasError = connectionStatus === 'error';
+
   return (
     <div className="h-full flex flex-col bg-gray-800">
-      {/* Camera Header */}
+      {/* Header */}
       <div className="bg-gray-700 border-b border-gray-600 p-3 flex justify-between items-center">
         <div className="flex items-center space-x-4">
           <div className="flex items-center space-x-2">
             <CameraIcon className="w-5 h-5 text-blue-400" />
             <h3 className="text-lg font-semibold text-white">Camera Feed</h3>
           </div>
-          
+
           <div className="flex items-center space-x-2">
             <div className={`w-2 h-2 rounded-full ${getStatusDot()}`} />
-            <span className={`text-sm capitalize ${getStatusColor()}`}>
-              {connectionStatus}
+            <span className={`text-sm ${getStatusColor()}`}>
+              {getStatusLabel()}
             </span>
           </div>
+
+          {isConnected && stats.fps > 0 && (
+            <div className="flex items-center space-x-1 text-xs text-gray-400">
+              <SignalIcon className="w-3 h-3" />
+              <span>{stats.fps} fps</span>
+              {stats.codec && (
+                <span className="uppercase text-gray-500">{stats.codec}</span>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="flex items-center space-x-2">
           <button
             onClick={toggleStream}
             className={`px-3 py-1 rounded text-sm font-medium flex items-center space-x-1 transition-colors ${
-              isStreaming 
-                ? 'bg-red-600 hover:bg-red-700 text-white' 
+              isStreaming
+                ? 'bg-red-600 hover:bg-red-700 text-white'
                 : 'bg-green-600 hover:bg-green-700 text-white'
             }`}
           >
@@ -100,71 +191,85 @@ export default function CameraView({ onClose, isExpanded }: CameraViewProps) {
         </div>
       </div>
 
-      {/* Camera Content */}
-      <div className="flex-1 relative bg-black">
-        {!isStreaming ? (
-          <div className="h-full flex flex-col items-center justify-center text-gray-400">
+      {/* Video area */}
+      <div className="flex-1 relative bg-black overflow-hidden">
+        {/* Canvas — always mounted so the ref is available before connect() */}
+        <canvas
+          ref={canvasCallbackRef}
+          className={`w-full h-full object-contain ${isConnected ? 'block' : 'hidden'}`}
+          data-testid="video-canvas"
+        />
+
+        {/* Idle overlay */}
+        {!isStreaming && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
             <CameraIcon className="w-16 h-16 mb-4 text-gray-600" />
             <h4 className="text-lg font-medium mb-2">Camera Feed Disabled</h4>
-            <p className="text-sm text-center max-w-md">
-              Click "Start" to begin streaming from the EV3 camera. 
-              Make sure the camera is connected to the device.
+            <p className="text-sm text-center max-w-md px-4">
+              Click &ldquo;Start&rdquo; to begin streaming. Make sure the
+              WebSocket bridge is running and the Raspberry Pi is streaming
+              video.
             </p>
           </div>
-        ) : connectionStatus === 'connecting' ? (
-          <div className="h-full flex flex-col items-center justify-center text-gray-400">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-400 mb-4"></div>
-            <h4 className="text-lg font-medium mb-2">Connecting to Camera</h4>
-            <p className="text-sm">Establishing connection with EV3 device...</p>
-          </div>
-        ) : (
-          <div className="h-full relative">
-            {/* Placeholder for actual video stream */}
-            <div className="h-full bg-gradient-to-br from-gray-800 to-gray-900 flex items-center justify-center">
-              <div className="text-center text-gray-400">
-                <div className="w-32 h-24 bg-gray-700 rounded mb-4 mx-auto flex items-center justify-center">
-                  <CameraIcon className="w-8 h-8" />
-                </div>
-                <p className="text-sm">Camera feed will appear here</p>
-                <p className="text-xs text-gray-500 mt-1">
-                  Future: HLS video stream from EV3
-                </p>
-              </div>
-            </div>
+        )}
 
-            {/* Video overlay controls */}
-            <div className="absolute bottom-4 left-4 right-4">
-              <div className="bg-black bg-opacity-50 rounded p-2 flex justify-between items-center">
-                <div className="flex items-center space-x-2 text-white text-sm">
-                  <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
-                  <span>LIVE</span>
-                </div>
-                
-                <div className="flex space-x-2">
-                  <button className="px-2 py-1 bg-white bg-opacity-20 rounded text-white text-xs hover:bg-opacity-30 transition-colors">
-                    Snapshot
-                  </button>
-                  <button className="px-2 py-1 bg-white bg-opacity-20 rounded text-white text-xs hover:bg-opacity-30 transition-colors">
-                    Fullscreen
-                  </button>
-                </div>
+        {/* Connecting overlay */}
+        {isConnecting && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-400 mb-4" />
+            <h4 className="text-lg font-medium mb-2">Connecting…</h4>
+            <p className="text-sm text-gray-500">{wsBridgeUrl}</p>
+          </div>
+        )}
+
+        {/* Error overlay */}
+        {hasError && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400 px-4">
+            <div className="w-12 h-12 rounded-full bg-red-900 flex items-center justify-center mb-4">
+              <XMarkIcon className="w-6 h-6 text-red-400" />
+            </div>
+            <h4 className="text-lg font-medium mb-2 text-red-400">Connection Error</h4>
+            {errorMessage && (
+              <p className="text-sm text-center text-gray-400 max-w-sm">{errorMessage}</p>
+            )}
+            <button
+              onClick={toggleStream}
+              className="mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm transition-colors"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {/* Live badge */}
+        {isConnected && (
+          <div className="absolute bottom-4 left-4 right-4 pointer-events-none">
+            <div className="flex justify-between items-center">
+              <div className="flex items-center space-x-2 bg-black bg-opacity-50 rounded px-2 py-1">
+                <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                <span className="text-white text-xs font-medium">LIVE</span>
+              </div>
+
+              <div className="bg-black bg-opacity-50 rounded px-2 py-1 text-xs text-gray-300">
+                {stats.framesDecoded} frames
               </div>
             </div>
           </div>
         )}
       </div>
 
-      {/* Camera Info */}
+      {/* Footer stats */}
       <div className="bg-gray-700 border-t border-gray-600 p-2">
         <div className="flex justify-between items-center text-xs text-gray-400">
           <div className="flex space-x-4">
-            <span>Resolution: 640x480</span>
-            <span>FPS: 30</span>
-            <span>Quality: HD</span>
+            <span>Resolution: 640×480</span>
+            {isExpanded && <span>Target: 30 FPS</span>}
           </div>
-          <div>
-            {connectionStatus === 'connected' && <span>Latency: ~200ms</span>}
-          </div>
+          {isConnected && (
+            <span className="text-green-400">
+              {stats.fps} fps · {stats.codec?.toUpperCase() ?? '—'}
+            </span>
+          )}
         </div>
       </div>
     </div>

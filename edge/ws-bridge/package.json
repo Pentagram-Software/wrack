@@ -1,0 +1,21 @@
+{
+  "name": "@wrack/ws-bridge",
+  "version": "1.0.0",
+  "description": "WebSocket bridge that forwards UDP video frames from the Raspberry Pi to browser clients",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest --testEnvironment node",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
