@@ -749,11 +749,60 @@ class TelemetryCollector:
                     continue
                 if event.get("event_id") not in ids_to_remove:
                     remaining.append(stripped + "\n")
-            try:
-                if remaining:
-                    with _open_text(self.overflow_path, "w") as fh:
-                        fh.writelines(remaining)
-                else:
+            if remaining:
+                self._atomic_rewrite_overflow(remaining)
+            else:
+                try:
                     os.remove(self.overflow_path)
+                except OSError:
+                    pass
+
+    def _atomic_rewrite_overflow(self, lines: List[str]) -> bool:
+        """Write *lines* as the new overflow file contents via a temp file
+        plus atomic rename, never by truncating the existing file in place.
+
+        Opening the real overflow file with mode ``"w"`` truncates it
+        immediately, before a single byte of the replacement content is
+        written; a crash between that truncation and the final write/close
+        would then permanently lose every event still on disk -- exactly
+        the failure PEN-221 exists to prevent. Writing to a separate
+        ``.tmp`` file first means a crash or write failure at any point
+        before the rename leaves the original overflow file completely
+        untouched (the rename/replace step itself is a single atomic
+        filesystem operation). Caller must already hold ``_overflow_lock``.
+        Best-effort: never raises; returns ``False`` (leaving the original
+        file as-is) on any failure.
+        """
+        if not self.overflow_path:
+            return False
+        tmp_path = self.overflow_path + ".tmp"
+        try:
+            with _open_text(tmp_path, "w") as fh:
+                fh.writelines(lines)
+                try:
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                except (AttributeError, OSError):
+                    pass
+        except OSError:
+            try:
+                os.remove(tmp_path)
             except OSError:
                 pass
+            return False
+        try:
+            # os.replace is unavailable on some MicroPython builds; fall
+            # back to os.rename, which is atomic-overwrite on the POSIX
+            # (ev3dev/Linux) filesystems this runs on.
+            replace = getattr(os, "replace", None)
+            if callable(replace):
+                replace(tmp_path, self.overflow_path)
+            else:
+                os.rename(tmp_path, self.overflow_path)
+            return True
+        except OSError:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            return False

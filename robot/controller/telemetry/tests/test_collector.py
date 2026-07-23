@@ -895,6 +895,91 @@ class TestRemoveOverflowEvents:
             if os.path.exists(path):
                 os.remove(path)
 
+    def test_removal_leaves_original_file_intact_when_rewrite_write_fails(self):
+        """Regression: a write failure on the *destination* (temp) file
+        after it has already been successfully opened must never touch --
+        let alone truncate -- the original overflow file. The old in-place
+        ``open(path, "w")`` rewrite truncated the durable copy before a
+        single byte of the replacement content was written, so any failure
+        (or crash) after that point permanently lost every still-unsent
+        event on disk (PEN-221 follow-up).
+        """
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        tmp_path = path + ".tmp"
+        try:
+            os.remove(path)
+            c = TelemetryCollector(max_buffer_size=1, overflow_path=path)
+            c.collect_battery_status(7000, 80.0)
+            c.collect_battery_status(7001, 81.0)  # evicts 7000 to disk
+            c.collect_battery_status(7002, 82.0)  # evicts 7001 to disk
+            original = c.load_overflow()
+            assert len(original) == 2
+            with open(path, "rb") as fh:
+                original_bytes = fh.read()
+
+            real_open_text = collector_module._open_text
+
+            def open_then_fail_write(target_path, mode, *args, **kwargs):
+                fh = real_open_text(target_path, mode, *args, **kwargs)
+                if mode == "w":
+                    # Whatever file is being rewritten opened successfully --
+                    # simulate the write itself then failing (disk full).
+                    # Targeting *any* "w" open (not just the temp path) is
+                    # deliberate: it also demonstrates the bug this guards
+                    # against -- an implementation that opens the *original*
+                    # overflow file directly with "w" truncates it before
+                    # this failure fires, permanently losing its contents.
+                    def failing_writelines(_lines):
+                        raise OSError("disk full mid-write")
+
+                    fh.writelines = failing_writelines
+                return fh
+
+            with patch("telemetry.collector._open_text", side_effect=open_then_fail_write):
+                c.remove_overflow_events({original[0]["event_id"]})
+
+            # The original overflow file must be byte-for-byte unchanged --
+            # not truncated, not partially rewritten -- and the failed
+            # temp file must not be left behind.
+            with open(path, "rb") as fh:
+                assert fh.read() == original_bytes
+            assert not os.path.exists(tmp_path)
+            remaining_ids = {e["event_id"] for e in c.load_overflow()}
+            assert remaining_ids == {e["event_id"] for e in original}
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    def test_removal_replaces_file_atomically_on_success(self):
+        """Sanity check for the happy path: a successful removal actually
+        goes through the temp-file-plus-rename mechanism (no leftover
+        .tmp file) and the final content is exactly the surviving events.
+        """
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        tmp_path = path + ".tmp"
+        try:
+            os.remove(path)
+            c = TelemetryCollector(max_buffer_size=1, overflow_path=path)
+            c.collect_battery_status(7000, 80.0)
+            c.collect_battery_status(7001, 81.0)  # evicts 7000 to disk
+            c.collect_battery_status(7002, 82.0)  # evicts 7001 to disk
+            overflow = c.load_overflow()
+            keep_id = overflow[1]["event_id"]
+
+            c.remove_overflow_events({overflow[0]["event_id"]})
+
+            assert not os.path.exists(tmp_path)
+            assert [e["event_id"] for e in c.load_overflow()] == [keep_id]
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
 
 # ---------------------------------------------------------------------------
 # Generic collect() API + invalid_count (PEN-121 graft)
