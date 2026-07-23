@@ -1,4 +1,4 @@
-.PHONY: help setup web deploy-edge deploy-cloud deploy-ev3 deploy-ev3-release deploy-ev3-debug deploy-robot deploy-robot-dry-run test test-deploy
+.PHONY: help setup web deploy-edge deploy-cloud deploy-ev3 deploy-ev3-release deploy-ev3-debug deploy-robot deploy-robot-dry-run test test-deploy check-mpy
 
 # ---------------------------------------------------------------------------
 # EV3 rsync-based deployment configuration
@@ -36,6 +36,7 @@ help:
 	@echo "  make deploy-ev3-debug       - Deploy to EV3 in debug mode (requires EV3_HOST)"
 	@echo "  make test                   - Run all tests"
 	@echo "  make test-deploy            - Run deployment script tests"
+	@echo "  make check-mpy              - Check robot/controller for MicroPython compatibility"
 	@echo ""
 	@echo "EV3 rsync deployment (deploy-robot / deploy-robot-dry-run):"
 	@echo "  Reads defaults from robot/controller/deploy.conf; override via env vars:"
@@ -112,6 +113,15 @@ test:
 
 test-deploy:
 	cd robot/controller && python -m pytest scripts/tests/ -v
+
+# ---------------------------------------------------------------------------
+# MicroPython compatibility check (PEN-220): compiles every file that would
+# be deployed to the EV3 with mpy-cross, pinned to the exact MicroPython
+# version the EV3's frozen Pybricks firmware uses. Builds/caches mpy-cross on
+# first run (see robot/controller/scripts/build_mpy_cross.py).
+# ---------------------------------------------------------------------------
+check-mpy:
+	cd robot/controller && python3 scripts/build_mpy_cross.py && python3 scripts/check_mpy_compat.py
 
 # EV3 Deployment targets
 # Usage: make deploy-ev3 EV3_HOST=<ip_address>
