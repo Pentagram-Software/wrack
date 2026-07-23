@@ -688,59 +688,34 @@ class TestFlushAndSend:
             if os.path.exists(path):
                 os.remove(path)
 
-    def test_reconcile_overflow_restores_event_to_memory_when_persist_fails(self):
-        """Regression: if clear_overflow() succeeds but re-persisting a
-        still-unsent overflow event back to disk then fails, that event
-        must be restored to the in-memory buffer rather than silently
-        dropped -- the file has already been cleared at that point, so
-        "it's still on disk" is no longer a valid fallback.
-
-        ``TelemetryCollector._persist_to_disk`` reports failure via its
-        return value, never by raising (see the dedicated test below using
-        the real method), so this exercises the return-value contract
-        directly against a mock.
+    def test_reconcile_overflow_removes_only_confirmed_sent_ids(self):
+        """``_reconcile_overflow`` must remove exactly the overflow-origin
+        events confirmed sent (the ones from *overflow_events* that are
+        *not* in the still-unsent subset), and leave everything else --
+        including the still-failing ones -- untouched on disk.
         """
-        s = _make_sender()
-        c = TelemetryCollector(overflow_path=None)
-        event = _make_event()
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            os.remove(path)
+            s = _make_sender()
+            c = TelemetryCollector(overflow_path=path)
+            sent_event = _make_event()
+            failing_event = _make_event()
+            c._persist_to_disk(sent_event)
+            c._persist_to_disk(failing_event)
 
-        with patch.object(c, "clear_overflow") as mock_clear, \
-             patch.object(c, "_persist_to_disk", return_value=False) as mock_persist:
-            s._reconcile_overflow(c, [event])
+            s._reconcile_overflow(c, [sent_event, failing_event], [failing_event])
 
-        mock_clear.assert_called_once_with()
-        mock_persist.assert_called_once_with(event)
-        assert c.buffer_size == 1
-        assert c.peek()[0]["event_id"] == event["event_id"]
+            remaining_ids = {e["event_id"] for e in c.load_overflow()}
+            assert remaining_ids == {failing_event["event_id"]}
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
 
-    def test_reconcile_overflow_tolerates_a_persist_that_still_raises(self):
-        """Defensive: even though the real ``_persist_to_disk`` never raises
-        (it swallows and reports failure via its return value instead), a
-        different collector implementation might raise directly. That must
-        still be treated as a failure -- restore to memory -- rather than
-        propagating and aborting the reconciliation of any later events.
-        """
-        s = _make_sender()
-        c = TelemetryCollector(overflow_path=None)
-        event = _make_event()
-
-        with patch.object(c, "clear_overflow"), \
-             patch.object(c, "_persist_to_disk", side_effect=OSError("disk full")):
-            s._reconcile_overflow(c, [event])
-
-        assert c.buffer_size == 1
-        assert c.peek()[0]["event_id"] == event["event_id"]
-
-    def test_reconcile_overflow_restores_event_when_real_persist_swallows_failure(self):
-        """Regression: ``TelemetryCollector._persist_to_disk`` intentionally
-        swallows its own write failures (disk I/O errors, the
-        ``max_disk_bytes`` cap) and reports them via its return value --
-        it never raises. A ``_reconcile_overflow`` that only reacted to a
-        raised exception would never detect this in production: the
-        overflow file is already cleared by the time this runs, so a
-        silently-swallowed failure here means the event is gone for good.
-        Exercises the *real* ``_persist_to_disk`` (not a mock of the method
-        itself) by injecting a failure in the underlying file write.
+    def test_reconcile_overflow_is_noop_when_nothing_confirmed_sent(self):
+        """If every overflow-origin event is still unsent, nothing should be
+        removed from the file at all.
         """
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
             path = f.name
@@ -749,36 +724,73 @@ class TestFlushAndSend:
             s = _make_sender()
             c = TelemetryCollector(overflow_path=path)
             event = _make_event()
+            c._persist_to_disk(event)
 
-            with patch("telemetry.collector._open_text", side_effect=OSError("disk full")):
-                s._reconcile_overflow(c, [event])
+            with patch.object(c, "remove_overflow_events") as mock_remove:
+                s._reconcile_overflow(c, [event], [event])
 
-            # The real method swallowed the failure internally (proving this
-            # test exercises the actual production contract, not a mock of
-            # the exception-raising behavior that never happens for real).
-            assert c.dropped_count == 1
-            assert c.buffer_size == 1
-            assert c.peek()[0]["event_id"] == event["event_id"]
-            assert not os.path.exists(path)  # cleared, and never rewritten
+            mock_remove.assert_not_called()
+            assert len(c.load_overflow()) == 1
         finally:
             if os.path.exists(path):
                 os.remove(path)
 
-    def test_reconcile_overflow_restores_events_when_collector_cannot_persist(self):
-        """If the collector has no ``_persist_to_disk`` hook at all, the
-        still-unsent events must be restored to memory rather than silently
-        discarded after the file has already been cleared.
+    def test_reconcile_overflow_tolerates_missing_removal_hook(self):
+        """A collector without ``remove_overflow_events`` must not raise --
+        this degrades to "confirmed-sent events stay on disk and get
+        resent" rather than crashing the send path.
         """
         s = _make_sender()
         c = TelemetryCollector(overflow_path=None)
         event = _make_event()
 
-        with patch.object(c, "clear_overflow"), \
-             patch.object(TelemetryCollector, "_persist_to_disk", new=None):
-            s._reconcile_overflow(c, [event])
+        with patch.object(TelemetryCollector, "remove_overflow_events", new=None):
+            s._reconcile_overflow(c, [event], [])  # must not raise
 
-        assert c.buffer_size == 1
-        assert c.peek()[0]["event_id"] == event["event_id"]
+    def test_reconcile_overflow_tolerates_a_removal_that_raises(self):
+        """A disk error inside ``remove_overflow_events`` must not propagate
+        and crash the send path -- the confirmed-sent event simply stays on
+        disk (resent, not lost, next cycle).
+        """
+        s = _make_sender()
+        c = TelemetryCollector(overflow_path=None)
+        event = _make_event()
+
+        with patch.object(c, "remove_overflow_events", side_effect=OSError("disk full")):
+            s._reconcile_overflow(c, [event], [])  # must not raise
+
+    def test_reconcile_overflow_preserves_event_appended_after_the_snapshot(self):
+        """Regression (PEN-221 follow-up): reconciling a send attempt must
+        not delete an overflow event that was appended to the file *after*
+        the snapshot passed to ``_reconcile_overflow`` was loaded -- e.g. by
+        the control loop evicting into ``_persist_to_disk`` on another
+        thread while an async send was in flight. The old clear-then-rewrite
+        approach wiped the whole file and only restored the snapshot's own
+        still-unsent subset, silently losing anything appended in between.
+        """
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            os.remove(path)
+            s = _make_sender()
+            c = TelemetryCollector(overflow_path=path)
+            snapshot_event = _make_event()
+            c._persist_to_disk(snapshot_event)  # the only event in the loaded snapshot
+
+            # Simulate a concurrent control-loop eviction landing *after* the
+            # snapshot was loaded but *before* reconciliation runs.
+            concurrent_event = _make_event()
+            c._persist_to_disk(concurrent_event)
+
+            # snapshot_event was confirmed sent; nothing from the snapshot is
+            # still unsent.
+            s._reconcile_overflow(c, [snapshot_event], [])
+
+            remaining_ids = {e["event_id"] for e in c.load_overflow()}
+            assert remaining_ids == {concurrent_event["event_id"]}
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
 
     def test_async_flush_restores_unsent_events_on_failure(self):
         """Async flush should also re-buffer events when send ultimately fails."""
@@ -849,6 +861,74 @@ class TestFlushAndSend:
 
             # All four events preserved across buffer + overflow, none lost.
             assert c.buffer_size + len(c.load_overflow()) == 4
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+
+# ---------------------------------------------------------------------------
+# Concurrent control-loop writes during an in-flight async send (PEN-221
+# follow-up)
+# ---------------------------------------------------------------------------
+
+class TestConcurrentOverflowReconciliation:
+    """The async flush -- the dominant, steady-state send path -- runs the
+    network call on a background thread while the control loop keeps
+    collecting telemetry (and potentially evicting into the overflow file)
+    concurrently. Reconciliation must never lose an event the control loop
+    appends *after* the send's overflow snapshot was loaded but *before*
+    reconciliation runs, regardless of how long the network call takes.
+
+    Uses ``threading.Event`` to force a deterministic interleaving (the mocked
+    HTTP POST blocks until the test signals it to proceed) rather than relying
+    on sleep-based timing, so this test cannot flake based on scheduling.
+    """
+
+    def test_concurrently_evicted_event_survives_async_reconciliation(self):
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            os.remove(path)
+            c = TelemetryCollector(max_buffer_size=1, overflow_path=path)
+            c.collect_battery_status(7000, 80.0)  # evicted to disk -- the snapshot event
+            c.collect_battery_status(7001, 81.0)  # stays buffered
+            snapshot_event_id = c.load_overflow()[0]["event_id"]
+
+            send_started = threading.Event()
+            proceed_with_send = threading.Event()
+            ok_response = MagicMock()
+            ok_response.status_code = 200
+
+            def blocking_post(*args, **kwargs):
+                send_started.set()
+                # Hold the network call open until the test has performed a
+                # concurrent control-loop eviction into the same file.
+                proceed_with_send.wait(timeout=2)
+                return ok_response
+
+            s = _make_sender(batch_size=100)
+            with patch("telemetry.sender._http") as mock_http:
+                mock_http.post.side_effect = blocking_post
+                result = s.flush_and_send(c, async_send=True)
+                assert result is None
+
+                assert send_started.wait(timeout=2), "send never reached the HTTP call"
+                # Control loop, on the main thread here, evicts a brand new
+                # event into the same overflow file while the send above is
+                # still blocked in-flight on the background thread.
+                c.collect_battery_status(7002, 82.0)  # fills the 1-slot buffer
+                c.collect_battery_status(7003, 83.0)  # evicts 7002 to disk
+                concurrent_ids = {e["event_id"] for e in c.load_overflow()} - {snapshot_event_id}
+                assert len(concurrent_ids) == 1
+
+                proceed_with_send.set()
+                time.sleep(0.2)  # let the async worker finish reconciling
+
+            remaining_ids = {e["event_id"] for e in c.load_overflow()}
+            # The snapshot event was confirmed sent and removed; the event
+            # concurrently evicted afterwards must have survived untouched.
+            assert snapshot_event_id not in remaining_ids
+            assert concurrent_ids == remaining_ids
         finally:
             if os.path.exists(path):
                 os.remove(path)

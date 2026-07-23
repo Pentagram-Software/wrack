@@ -780,6 +780,123 @@ class TestBufferManagement:
 
 
 # ---------------------------------------------------------------------------
+# remove_overflow_events (PEN-221 follow-up)
+# ---------------------------------------------------------------------------
+
+class TestRemoveOverflowEvents:
+    """``remove_overflow_events`` removes only specific IDs, unlike
+    ``clear_overflow()``'s unconditional wipe -- see ``TelemetrySender.
+    _reconcile_overflow`` for why that distinction matters (PEN-221).
+    """
+
+    def test_removes_only_matching_ids_and_keeps_the_rest(self):
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            os.remove(path)
+            c = TelemetryCollector(max_buffer_size=1, overflow_path=path)
+            c.collect_battery_status(7000, 80.0)
+            c.collect_battery_status(7001, 81.0)  # evicts 7000 to disk
+            c.collect_battery_status(7002, 82.0)  # evicts 7001 to disk
+            overflow = c.load_overflow()
+            assert len(overflow) == 2
+            to_remove = {overflow[0]["event_id"]}
+            keep_id = overflow[1]["event_id"]
+
+            c.remove_overflow_events(to_remove)
+
+            remaining = c.load_overflow()
+            assert [e["event_id"] for e in remaining] == [keep_id]
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_removing_every_id_deletes_the_file(self):
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            c = TelemetryCollector(max_buffer_size=1, overflow_path=path)
+            os.remove(path)
+            c.collect_battery_status(7000, 80.0)
+            c.collect_battery_status(7001, 81.0)  # evicts 7000 to disk
+            overflow_id = c.load_overflow()[0]["event_id"]
+
+            c.remove_overflow_events({overflow_id})
+
+            assert not os.path.exists(path)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_noop_when_no_ids_match(self):
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            c = TelemetryCollector(max_buffer_size=1, overflow_path=path)
+            os.remove(path)
+            c.collect_battery_status(7000, 80.0)
+            c.collect_battery_status(7001, 81.0)  # evicts 7000 to disk
+
+            c.remove_overflow_events({"some-unrelated-id"})
+
+            assert len(c.load_overflow()) == 1
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_noop_with_no_overflow_path_or_empty_ids(self):
+        c = TelemetryCollector(overflow_path=None)
+        c.remove_overflow_events({"anything"})  # must not raise
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            c2 = TelemetryCollector(overflow_path=path)
+            c2.remove_overflow_events(set())  # must not raise, no-op
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_concurrent_append_survives_a_removal_in_progress(self):
+        """A real second thread appending via ``_persist_to_disk`` while
+        ``remove_overflow_events`` is mid read-modify-write must not lose
+        its write -- the shared ``_overflow_lock`` serializes the two.
+        """
+        import threading
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            os.remove(path)
+            c = TelemetryCollector(overflow_path=path)
+            existing_event = c.create_event("battery_status", {"voltage_mv": 7000, "percentage": 80.0})
+            c._persist_to_disk(existing_event)
+            new_event = c.create_event("battery_status", {"voltage_mv": 7001, "percentage": 81.0})
+
+            errors = []
+
+            def append_concurrently():
+                try:
+                    ok = c._persist_to_disk(new_event)
+                    if not ok:
+                        errors.append("persist reported failure")
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(exc)
+
+            t = threading.Thread(target=append_concurrently)
+            t.start()
+            c.remove_overflow_events({existing_event["event_id"]})
+            t.join(timeout=2)
+
+            assert not errors
+            remaining_ids = {e["event_id"] for e in c.load_overflow()}
+            assert remaining_ids == {new_event["event_id"]}
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+
+# ---------------------------------------------------------------------------
 # Generic collect() API + invalid_count (PEN-121 graft)
 # ---------------------------------------------------------------------------
 

@@ -888,61 +888,53 @@ class TelemetrySender:
         overflow_ids = {e.get("event_id") for e in overflow_events}
         still_unsent_overflow = [e for e in unsent if e.get("event_id") in overflow_ids]
         buffer_origin_unsent = [e for e in unsent if e.get("event_id") not in overflow_ids]
-        self._reconcile_overflow(collector, still_unsent_overflow)
+        self._reconcile_overflow(collector, overflow_events, still_unsent_overflow)
         return buffer_origin_unsent
 
     def _reconcile_overflow(
         self,
         collector: Any,
+        overflow_events: List[Dict[str, Any]],
         still_unsent_overflow_events: List[Dict[str, Any]],
     ) -> None:
-        """Rewrite the overflow file to contain only overflow-origin events
-        that are still unsent after the send attempt.
+        """Remove exactly the overflow-origin events confirmed sent by this
+        attempt from the overflow file, once the send outcome is known.
 
-        Called only after the send outcome is known, so the file is never
-        cleared or rewritten based on an assumption of success. If every
-        overflow-origin event was accepted, this clears the now-stale file;
-        if some are still failing, it rewrites the file to hold exactly
-        those, dropping only the ones confirmed sent.
-
-        The file has already been cleared by the time any event is
-        re-persisted below, so a disk-write failure at that point can no
-        longer rely on "the file still has it" as a safety net. Any event
-        that can't be persisted at all (no hook on the collector) or whose
-        persist() call reports failure is restored to the in-memory buffer
-        instead, so a disk error degrades the event to "in-memory only"
-        rather than losing it outright.
-
-        Note ``_persist_to_disk`` deliberately swallows every failure mode
-        it can hit (disk I/O errors, the ``max_disk_bytes`` cap) and reports
-        them via its return value, never by raising -- so success/failure is
-        read from that return value.  A raised exception is still tolerated
-        defensively (treated the same as a ``False`` return) in case a
-        different collector implementation doesn't follow that contract.
+        Deliberately a *removal*, not the earlier clear-then-rewrite
+        approach: this method can run an arbitrary amount of time (an
+        entire blocking network send, on the async path) after *its own
+        caller* loaded the ``overflow_events`` snapshot passed in here, and
+        in that window the control loop can concurrently evict a new event
+        into the same file via ``_persist_to_disk``. A clear-then-rewrite
+        based on the stale snapshot would delete that new event outright —
+        it was never part of this send attempt, so it wouldn't be in
+        *still_unsent_overflow_events* either, and would vanish permanently
+        (PEN-221 follow-up). Removing only the confirmed-sent IDs is safe
+        because :meth:`TelemetryCollector.remove_overflow_events` re-reads
+        the file's *current* contents under its own lock immediately before
+        rewriting it, so anything appended concurrently -- or any event in
+        *still_unsent_overflow_events*, which is simply never touched here
+        -- survives untouched. If the removal call itself fails, the
+        confirmed-sent events are left on disk rather than lost: at worst
+        they're resent (and de-duplicated) on the next cycle, never dropped.
         """
-        clear = getattr(collector, "clear_overflow", None)
-        if not callable(clear):
+        if not overflow_events:
+            return
+        still_unsent_ids = {e.get("event_id") for e in still_unsent_overflow_events}
+        confirmed_sent_ids = {
+            e.get("event_id")
+            for e in overflow_events
+            if e.get("event_id") not in still_unsent_ids
+        }
+        if not confirmed_sent_ids:
+            return
+        remove = getattr(collector, "remove_overflow_events", None)
+        if not callable(remove):
             return
         try:
-            clear()
+            remove(confirmed_sent_ids)
         except Exception:  # noqa: BLE001 — overflow bookkeeping must never crash a send
-            return
-        if not still_unsent_overflow_events:
-            return
-        persist = getattr(collector, "_persist_to_disk", None)
-        if not callable(persist):
-            self._restore_events_to_collector(collector, still_unsent_overflow_events)
-            return
-        failed_to_persist = []
-        for event in still_unsent_overflow_events:
-            try:
-                persisted = persist(event)
-            except Exception:  # noqa: BLE001
-                persisted = False
-            if not persisted:
-                failed_to_persist.append(event)
-        if failed_to_persist:
-            self._restore_events_to_collector(collector, failed_to_persist)
+            pass
 
     def _restore_events_to_collector(
         self,

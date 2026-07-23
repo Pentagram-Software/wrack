@@ -23,6 +23,8 @@ Usage::
 import json
 import os
 
+from threading_compat import create_lock
+
 # ``typing`` and ``from __future__ import annotations`` are unavailable on
 # Pybricks/MicroPython.  Without the future import, function-signature
 # annotations are evaluated at import time, so the fallback below provides a
@@ -265,6 +267,13 @@ class TelemetryCollector:
         self._buffer = []
         self._dropped_count = 0
         self._invalid_count = 0
+        # Guards every read/modify/write of the overflow file. The control
+        # loop (evicting into _persist_to_disk) and the telemetry sender
+        # (loading/removing on a background send thread, see PEN-221) touch
+        # the same file from different threads; without this, a concurrent
+        # append could be silently wiped out by a reconciliation rewrite
+        # based on a now-stale snapshot.
+        self._overflow_lock = create_lock()
 
     # ------------------------------------------------------------------
     # Core factory method
@@ -604,16 +613,17 @@ class TelemetryCollector:
                 line_bytes = len(line.encode("utf-8"))
             except Exception:  # noqa: BLE001 — fall back to char count
                 line_bytes = len(line)
-            current_size = 0
-            if os.path.exists(self.overflow_path):
-                current_size = os.path.getsize(self.overflow_path)
-            # Reject before writing so a single large event cannot push the
-            # file past the configured cap.
-            if current_size + line_bytes > self.max_disk_bytes:
-                self._dropped_count += 1
-                return False
-            with _open_text(self.overflow_path, "a") as fh:
-                fh.write(line)
+            with self._overflow_lock:
+                current_size = 0
+                if os.path.exists(self.overflow_path):
+                    current_size = os.path.getsize(self.overflow_path)
+                # Reject before writing so a single large event cannot push
+                # the file past the configured cap.
+                if current_size + line_bytes > self.max_disk_bytes:
+                    self._dropped_count += 1
+                    return False
+                with _open_text(self.overflow_path, "a") as fh:
+                    fh.write(line)
             return True
         except Exception:  # noqa: BLE001 — best-effort overflow must never crash collect_*()
             self._dropped_count += 1
@@ -661,29 +671,89 @@ class TelemetryCollector:
     def load_overflow(self) -> List[Dict[str, Any]]:
         """Read and return events from the overflow file (one JSON per line).
 
-        The overflow file is *not* deleted by this method — call
-        ``clear_overflow()`` once the events have been sent successfully.
+        The overflow file is *not* deleted by this method. Prefer
+        ``remove_overflow_events()`` to drop specific, confirmed-sent events
+        once known (safe against concurrent appends); ``clear_overflow()``
+        remains available for an unconditional wipe.
         """
-        if not self.overflow_path or not os.path.exists(self.overflow_path):
+        if not self.overflow_path:
             return []
         events = []
         try:
-            with _open_text(self.overflow_path, "r") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if line:
-                        try:
-                            events.append(json.loads(line))
-                        except (ValueError, KeyError):
-                            pass
+            with self._overflow_lock:
+                if not os.path.exists(self.overflow_path):
+                    return []
+                with _open_text(self.overflow_path, "r") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if line:
+                            try:
+                                events.append(json.loads(line))
+                            except (ValueError, KeyError):
+                                pass
         except OSError:
-            pass
+            return []
         return events
 
     def clear_overflow(self) -> None:
-        """Delete the overflow file if it exists."""
-        if self.overflow_path and os.path.exists(self.overflow_path):
+        """Delete the overflow file unconditionally, if it exists.
+
+        Prefer ``remove_overflow_events()`` when only specific events are
+        known to be safely sent -- this method wipes the file outright, so
+        calling it after loading a snapshot risks discarding anything
+        appended to the file since (see PEN-221).
+        """
+        with self._overflow_lock:
+            if self.overflow_path and os.path.exists(self.overflow_path):
+                try:
+                    os.remove(self.overflow_path)
+                except OSError:
+                    pass
+
+    def remove_overflow_events(self, event_ids) -> None:
+        """Remove only the given ``event_id``s from the overflow file,
+        preserving every other line -- including any event appended by a
+        concurrent thread (e.g. the control loop evicting into
+        ``_persist_to_disk``) after the caller's ``load_overflow()`` snapshot
+        was taken.
+
+        Re-reads the file's *current* contents under the same lock used by
+        ``_persist_to_disk()`` immediately before rewriting it, so this is
+        safe to call an arbitrary amount of time (including across a
+        blocking network send) after loading the snapshot that *event_ids*
+        came from -- unlike ``clear_overflow()`` followed by re-persisting a
+        remembered subset, which silently loses anything appended in
+        between (PEN-221). Best-effort: never raises.
+        """
+        if not self.overflow_path or not event_ids:
+            return
+        ids_to_remove = set(event_ids)
+        with self._overflow_lock:
+            if not os.path.exists(self.overflow_path):
+                return
             try:
-                os.remove(self.overflow_path)
+                with _open_text(self.overflow_path, "r") as fh:
+                    lines = list(fh)
+            except OSError:
+                return
+            remaining = []
+            for line in lines:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    event = json.loads(stripped)
+                except (ValueError, KeyError):
+                    # Keep unparsable lines rather than silently dropping data.
+                    remaining.append(stripped + "\n")
+                    continue
+                if event.get("event_id") not in ids_to_remove:
+                    remaining.append(stripped + "\n")
+            try:
+                if remaining:
+                    with _open_text(self.overflow_path, "w") as fh:
+                        fh.writelines(remaining)
+                else:
+                    os.remove(self.overflow_path)
             except OSError:
                 pass
