@@ -6,10 +6,11 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
-    "test": "node --test dist/packets.test.js",
+    "test": "tsc && node --test dist/packets.test.js",
     "prepublish": "npm run build"
   },
   "devDependencies": {
+    "@types/node": "^25.9.1",
     "typescript": "^5.4.0"
   },
   "engines": {
