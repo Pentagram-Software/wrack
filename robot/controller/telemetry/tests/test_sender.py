@@ -738,6 +738,65 @@ class TestFlushAndSend:
 
         assert c.buffer_size == 1
 
+    def test_async_flush_reconciles_overflow_file_on_confirmed_success(self):
+        """Regression: the overflow file used to never be reconciled on the
+        async path at all -- since the periodic 120s flush in main.py always
+        calls flush_and_send(async_send=True), that meant the file was never
+        cleared in steady-state production usage, and the same events would
+        be re-sent forever. Mirrors
+        test_overflow_file_cleared_only_after_confirmed_success but for the
+        async branch.
+        """
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            os.remove(path)
+            c = TelemetryCollector(max_buffer_size=1, overflow_path=path)
+            c.collect_battery_status(7000, 80.0)  # evicted to disk
+            c.collect_battery_status(7001, 81.0)  # stays buffered
+            assert os.path.exists(path)
+
+            ok_response = MagicMock()
+            ok_response.status_code = 200
+            s = _make_sender(batch_size=100)
+            with patch("telemetry.sender._http") as mock_http:
+                mock_http.post.return_value = ok_response
+                result = s.flush_and_send(c, async_send=True)
+                assert result is None
+                time.sleep(0.1)
+
+            assert not os.path.exists(path)
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_async_flush_preserves_overflow_events_on_failure(self):
+        """A failed async send must not lose overflow-origin events either --
+        they must remain recoverable (on disk and/or restored to memory),
+        not silently dropped because reconciliation was skipped.
+        """
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            os.remove(path)
+            c = TelemetryCollector(max_buffer_size=2, overflow_path=path)
+            for i in range(4):
+                c.collect_battery_status(7000 + i, float(i))
+            assert len(c.load_overflow()) == 2
+
+            s = _make_sender(max_retries=0)
+            with patch("telemetry.sender._http") as mock_http:
+                mock_http.post.side_effect = ConnectionError("down")
+                result = s.flush_and_send(c, async_send=True)
+                assert result is None
+                time.sleep(0.1)
+
+            # All four events preserved across buffer + overflow, none lost.
+            assert c.buffer_size + len(c.load_overflow()) == 4
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
 
 # ---------------------------------------------------------------------------
 # HTTP 207 Multi-Status — partial batch failure
