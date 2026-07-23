@@ -44,6 +44,7 @@ flowchart LR
     PiServer["RaspberryPiServer"]
     Camera["PiCamera"]
     HttpServer["NginxHttpServer"]
+    Signaling["SignalingServer"]
     IOS["IOSClient"]
     Web["WebClient"]
     Mac["MacTestReceiver"]
@@ -53,6 +54,9 @@ flowchart LR
     HttpServer -->|"HTTPS_HLS"| IOS
     HttpServer -->|"HTTPS_HLS"| Web
     PiServer -->|"UDP_H264_Test"| Mac
+    PiServer -->|"SDP_offers"| Signaling
+    Signaling -->|"SDP_exchange"| Web
+    PiServer -->|"DTLS_SRTP_RTP"| Web
 ```
 
 ### 3.2 Technical Context
@@ -119,10 +123,33 @@ sequenceDiagram
     end
 ```
 
-### 6.3 Future: WebRTC Mode
-1. Pi captures and encodes frames
-2. WebRTC pipeline streams to browser
-3. Browser plays stream with low latency
+### 6.3 WebRTC Mode (M3)
+
+Architecture reference: `docs/architecture/WebRTC.md`  
+Integration test checklist: `docs/testing/webrtc-integration-checklist.md`
+
+1. Pi captures and encodes frames (H.264, same pipeline as HLS)
+2. WebRTC pipeline (GStreamer `webrtcbin` or `aiortc`) packetises RTP over DTLS/SRTP
+3. Minimal signaling server (HTTP/WebSocket on Pi) exchanges SDP offer/answer with browser
+4. ICE negotiation establishes a direct UDP path (STUN for NAT, TURN for relay)
+5. Browser plays stream via `RTCPeerConnection` + `<video>` element; target latency < 500 ms on LAN
+
+```mermaid
+sequenceDiagram
+    participant Browser as Browser (RTCPeerConnection)
+    participant Sig as SignalingServer (:8080)
+    participant Pi as Pi WebRTC Pipeline
+
+    Browser->>Sig: GET /offer (X-API-Key)
+    Sig->>Pi: request SDP offer
+    Pi-->>Sig: SDP offer (H.264 video, ICE candidates)
+    Sig-->>Browser: SDP offer
+    Browser->>Sig: POST /answer (SDP answer)
+    Sig->>Pi: forward SDP answer
+    Note over Browser,Pi: ICE negotiation (STUN/TURN)
+    Pi-->>Browser: DTLS/SRTP RTP stream (UDP)
+    Browser->>Browser: <video>.play()
+```
 
 ## 7. Deployment View
 - Pi runs capture/encode and HLS segmenter
@@ -144,6 +171,7 @@ Use ADR entries for significant changes:
 - ADR-001: Use LL-HLS for iOS-friendly playback
 - ADR-002: Single pipeline architecture (Option A)
 - ADR-003: Nginx as initial HLS HTTP server
+- ADR-004: WebRTC stack choice — GStreamer `webrtcbin` vs `aiortc` (M0-3; see `docs/adr/` when decided)
 
 ## 10. Quality Requirements
 

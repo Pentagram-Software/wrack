@@ -271,9 +271,21 @@ Modify chunk payload size:
 self.chunk_payload_size = 1200  # bytes
 ```
 
-## 📖 Protocol Documentation
+## 📖 Protocol and Architecture Documentation
 
-See [`UDP_Frame_Format_Documentation.md`](UDP_Frame_Format_Documentation.md) for detailed protocol specifications.
+- **UDP Frame Protocol**: [`shared/video-protocol/UDP_Frame_Format_Documentation.md`](../../shared/video-protocol/UDP_Frame_Format_Documentation.md)
+- **WebRTC Architecture** (M3 — planned): [`docs/architecture/WebRTC.md`](../../docs/architecture/WebRTC.md)
+- **HLS Architecture** (M2 — planned): [`docs/architecture/HLS.md`](../../docs/architecture/HLS.md)
+- **WebRTC Integration Test Checklist**: [`docs/testing/webrtc-integration-checklist.md`](../../docs/testing/webrtc-integration-checklist.md)
+
+### Roadmap: Planned Transport Modes
+
+| Mode | Status | Latency | Browser Support |
+|------|--------|---------|-----------------|
+| UDP (JPEG) | Current | ~100 ms | No |
+| HTTP/MJPEG | Current | ~200–500 ms | Yes |
+| LL-HLS (M2) | Planned | 2–4 s | Yes |
+| WebRTC (M3) | Planned | < 500 ms | Yes |
 
 ## 🐛 Troubleshooting
 
