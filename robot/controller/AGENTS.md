@@ -84,6 +84,13 @@ Environment variables used by the sender (read by the caller — not auto-read b
 - If hardware is unavailable, mock device classes to avoid import/runtime errors.
 - Keep coverage healthy; add/adjust tests when touching controllers, device manager, or safety logic.
 - Telemetry-specific tests: `pytest telemetry/tests/ event_handler/tests/ -q`
+- **MicroPython compatibility check (PEN-220):** `python3 scripts/build_mpy_cross.py && python3 scripts/check_mpy_compat.py`
+  (or `make check-mpy` from the repo root) compiles every file that ships to the EV3 with the real
+  MicroPython cross-compiler, pinned to the exact MicroPython version (v1.11) the EV3's frozen
+  Pybricks firmware uses. It's a syntax-only check — see the repo root `CLAUDE.md`'s "MicroPython
+  compatibility" section for exactly what it does and doesn't catch. Also runs in `ci-robot.yml` and
+  as a pre-deploy gate in `deploy-robot.yml`. First run builds and caches mpy-cross (needs `git` +
+  a C compiler on `PATH`); subsequent runs reuse the cached binary.
 
 ## Telemetry module (`telemetry/`)
 

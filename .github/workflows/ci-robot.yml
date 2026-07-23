@@ -1,0 +1,60 @@
+name: Robot Controller CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'robot/controller/**'
+      - '.github/workflows/ci-robot.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'robot/controller/**'
+      - '.github/workflows/ci-robot.yml'
+
+jobs:
+  ci:
+    name: MicroPython compatibility check + pytest
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # portaudio19-dev is required to build pyaudio, a transitive dependency
+      # of precise-runner (wake_word/) — see robot/controller/AGENTS.md.
+      # build-essential/git are normally preinstalled on ubuntu-latest; listed
+      # explicitly as a safety net for building mpy-cross below.
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential git portaudio19-dev
+
+      # mpy-cross is pinned to MicroPython v1.11, matching the EV3's frozen
+      # Pybricks "2.0" firmware — see scripts/build_mpy_cross.py for why.
+      # The clone + build never changes once cached, so cache it keyed on the
+      # pinned tag rather than rebuilding on every run.
+      - name: Cache mpy-cross build
+        id: mpy-cross-cache
+        uses: actions/cache@v4
+        with:
+          path: .mpy-cross-cache
+          key: mpy-cross-v1.11-${{ runner.os }}
+
+      - name: Build mpy-cross (MicroPython v1.11)
+        working-directory: robot/controller
+        run: python3 scripts/build_mpy_cross.py --verbose
+
+      - name: Check MicroPython compatibility (mpy-cross)
+        working-directory: robot/controller
+        run: python3 scripts/check_mpy_compat.py --verbose
+
+      - name: Install test dependencies
+        working-directory: robot/controller
+        run: pip install -r requirements-test.txt
+
+      - name: Run robot controller unit tests
+        working-directory: robot/controller
+        run: python -m pytest event_handler/tests/ robot_controllers/tests/ wake_word/tests/ error_reporting/tests/ telemetry/tests/ scripts/tests/ -q
