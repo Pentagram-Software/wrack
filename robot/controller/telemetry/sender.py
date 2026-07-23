@@ -908,10 +908,17 @@ class TelemetrySender:
         The file has already been cleared by the time any event is
         re-persisted below, so a disk-write failure at that point can no
         longer rely on "the file still has it" as a safety net. Any event
-        whose persist() call fails (or that can't be persisted at all
-        because the collector lacks the hook) is restored to the in-memory
-        buffer instead, so a disk error degrades the event to "in-memory
-        only" rather than losing it outright.
+        that can't be persisted at all (no hook on the collector) or whose
+        persist() call reports failure is restored to the in-memory buffer
+        instead, so a disk error degrades the event to "in-memory only"
+        rather than losing it outright.
+
+        Note ``_persist_to_disk`` deliberately swallows every failure mode
+        it can hit (disk I/O errors, the ``max_disk_bytes`` cap) and reports
+        them via its return value, never by raising -- so success/failure is
+        read from that return value.  A raised exception is still tolerated
+        defensively (treated the same as a ``False`` return) in case a
+        different collector implementation doesn't follow that contract.
         """
         clear = getattr(collector, "clear_overflow", None)
         if not callable(clear):
@@ -929,8 +936,10 @@ class TelemetrySender:
         failed_to_persist = []
         for event in still_unsent_overflow_events:
             try:
-                persist(event)
+                persisted = persist(event)
             except Exception:  # noqa: BLE001
+                persisted = False
+            if not persisted:
                 failed_to_persist.append(event)
         if failed_to_persist:
             self._restore_events_to_collector(collector, failed_to_persist)

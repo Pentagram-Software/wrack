@@ -581,11 +581,23 @@ class TelemetryCollector:
             self._persist_to_disk(evicted)
         self._buffer.append(event)
 
-    def _persist_to_disk(self, event: Dict[str, Any]) -> None:
-        """Append a single event to the overflow file (if enabled)."""
+    def _persist_to_disk(self, event: Dict[str, Any]) -> bool:
+        """Append a single event to the overflow file (if enabled).
+
+        Returns ``True`` only once the event has actually been written to
+        disk, ``False`` for every failure mode (persistence disabled, the
+        write raising, or the event being rejected for exceeding
+        ``max_disk_bytes``). Every failure path here is intentionally
+        swallowed -- via ``except Exception`` or an early ``return`` -- so
+        callers that must know whether an event actually became durable
+        (e.g. :meth:`telemetry.sender.TelemetrySender._reconcile_overflow`,
+        deciding whether to fall back to restoring it in memory) cannot rely
+        on an exception ever propagating out of this method; they must
+        check the return value instead.
+        """
         if not self.overflow_path:
             self._dropped_count += 1
-            return
+            return False
         try:
             line = json.dumps(event) + "\n"
             try:
@@ -599,11 +611,13 @@ class TelemetryCollector:
             # file past the configured cap.
             if current_size + line_bytes > self.max_disk_bytes:
                 self._dropped_count += 1
-                return
+                return False
             with _open_text(self.overflow_path, "a") as fh:
                 fh.write(line)
+            return True
         except Exception:  # noqa: BLE001 — best-effort overflow must never crash collect_*()
             self._dropped_count += 1
+            return False
 
     # ------------------------------------------------------------------
     # Public buffer accessors

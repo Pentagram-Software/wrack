@@ -694,19 +694,75 @@ class TestFlushAndSend:
         must be restored to the in-memory buffer rather than silently
         dropped -- the file has already been cleared at that point, so
         "it's still on disk" is no longer a valid fallback.
+
+        ``TelemetryCollector._persist_to_disk`` reports failure via its
+        return value, never by raising (see the dedicated test below using
+        the real method), so this exercises the return-value contract
+        directly against a mock.
         """
         s = _make_sender()
         c = TelemetryCollector(overflow_path=None)
         event = _make_event()
 
         with patch.object(c, "clear_overflow") as mock_clear, \
-             patch.object(c, "_persist_to_disk", side_effect=OSError("disk full")) as mock_persist:
+             patch.object(c, "_persist_to_disk", return_value=False) as mock_persist:
             s._reconcile_overflow(c, [event])
 
         mock_clear.assert_called_once_with()
         mock_persist.assert_called_once_with(event)
         assert c.buffer_size == 1
         assert c.peek()[0]["event_id"] == event["event_id"]
+
+    def test_reconcile_overflow_tolerates_a_persist_that_still_raises(self):
+        """Defensive: even though the real ``_persist_to_disk`` never raises
+        (it swallows and reports failure via its return value instead), a
+        different collector implementation might raise directly. That must
+        still be treated as a failure -- restore to memory -- rather than
+        propagating and aborting the reconciliation of any later events.
+        """
+        s = _make_sender()
+        c = TelemetryCollector(overflow_path=None)
+        event = _make_event()
+
+        with patch.object(c, "clear_overflow"), \
+             patch.object(c, "_persist_to_disk", side_effect=OSError("disk full")):
+            s._reconcile_overflow(c, [event])
+
+        assert c.buffer_size == 1
+        assert c.peek()[0]["event_id"] == event["event_id"]
+
+    def test_reconcile_overflow_restores_event_when_real_persist_swallows_failure(self):
+        """Regression: ``TelemetryCollector._persist_to_disk`` intentionally
+        swallows its own write failures (disk I/O errors, the
+        ``max_disk_bytes`` cap) and reports them via its return value --
+        it never raises. A ``_reconcile_overflow`` that only reacted to a
+        raised exception would never detect this in production: the
+        overflow file is already cleared by the time this runs, so a
+        silently-swallowed failure here means the event is gone for good.
+        Exercises the *real* ``_persist_to_disk`` (not a mock of the method
+        itself) by injecting a failure in the underlying file write.
+        """
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            os.remove(path)
+            s = _make_sender()
+            c = TelemetryCollector(overflow_path=path)
+            event = _make_event()
+
+            with patch("telemetry.collector._open_text", side_effect=OSError("disk full")):
+                s._reconcile_overflow(c, [event])
+
+            # The real method swallowed the failure internally (proving this
+            # test exercises the actual production contract, not a mock of
+            # the exception-raising behavior that never happens for real).
+            assert c.dropped_count == 1
+            assert c.buffer_size == 1
+            assert c.peek()[0]["event_id"] == event["event_id"]
+            assert not os.path.exists(path)  # cleared, and never rewritten
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
 
     def test_reconcile_overflow_restores_events_when_collector_cannot_persist(self):
         """If the collector has no ``_persist_to_disk`` hook at all, the
