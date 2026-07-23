@@ -18,6 +18,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system dependencies for mpy-cross build
+        run: sudo apt-get update && sudo apt-get install -y build-essential git
+
+      # -----------------------------------------------------------------------
+      # Pre-deployment MicroPython compatibility gate. mpy-cross is pinned to
+      # MicroPython v1.11, matching the EV3's frozen Pybricks "2.0" firmware
+      # (see robot/controller/scripts/build_mpy_cross.py for why). Runs before
+      # the EV3 secrets check so a syntax regression fails the workflow
+      # instead of silently shipping to the brick.
+      # -----------------------------------------------------------------------
+      - name: Cache mpy-cross build
+        uses: actions/cache@v4
+        with:
+          path: .mpy-cross-cache
+          key: mpy-cross-v1.11-${{ runner.os }}
+
+      - name: Build mpy-cross (MicroPython v1.11)
+        working-directory: robot/controller
+        run: python3 scripts/build_mpy_cross.py --verbose
+
+      - name: Check MicroPython compatibility before deploying (mpy-cross)
+        working-directory: robot/controller
+        run: python3 scripts/check_mpy_compat.py --verbose
+
       # -----------------------------------------------------------------------
       # Determine whether the EV3 is reachable via the configured secrets.
       # The job skips gracefully when EV3_IP is not set so that forks and
