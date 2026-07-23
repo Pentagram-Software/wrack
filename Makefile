@@ -106,8 +106,9 @@ deploy-robot-dry-run:
 	@echo "==> Dry run complete — no files transferred"
 
 test:
-	cd edge/video-streamer && python -m pytest tests/
-	cd robot/controller && python -m pytest tests/
+	cd edge/video-streamer && python3 -m pytest tests/
+	cd edge/nginx && python3 -m pytest tests/
+	cd robot/controller && python3 -m pytest tests/
 	cd clients/web && npm test
 
 test-deploy:
