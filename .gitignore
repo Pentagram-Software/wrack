@@ -45,6 +45,10 @@ grafana-cloud-push-credentials.json
 # EV3 telemetry runtime config (contains API keys — never commit)
 robot/controller/telemetry_config.py
 
+# mpy-cross build cache (cloned MicroPython source + built binary; see
+# robot/controller/scripts/build_mpy_cross.py) — rebuilt/cached by CI, not committed
+.mpy-cross-cache/
+
 # Claude Code
 .claude/settings.json
 .claude/settings.local.json
