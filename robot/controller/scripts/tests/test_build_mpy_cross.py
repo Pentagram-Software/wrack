@@ -106,6 +106,12 @@ class TestBuildMpyCross(unittest.TestCase):
         self.assertEqual(called_args[0], "make")
         self.assertIn(str(src_dir / "mpy-cross"), called_args)
         self.assertIn("-j4", called_args)
+        # Must be passed as CFLAGS_MOD (not CFLAGS_EXTRA/COPT) -- see the
+        # comment on EXTRA_CFLAGS_VAR for why those two are silently ignored.
+        self.assertIn(
+            f"{build_mpy_cross.EXTRA_CFLAGS_VAR}={build_mpy_cross.EXTRA_CFLAGS}",
+            called_args,
+        )
         self.assertEqual(result, src_dir / "mpy-cross" / "build" / "mpy-cross")
 
     @patch("build_mpy_cross.subprocess.run")

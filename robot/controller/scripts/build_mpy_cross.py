@@ -56,6 +56,15 @@ MICROPYTHON_TAG = "v1.11"
 # blanket `-Wno-error` does not un-promote a specific `-Werror=X` class -- so
 # just suppress all warnings outright rather than chase each new compiler's
 # stricter defaults one flag at a time.
+#
+# This must be passed as CFLAGS_MOD, not CFLAGS_EXTRA or COPT: mpy-cross's own
+# Makefile has a `override undefine CFLAGS_EXTRA` / `override undefine COPT`
+# guard at the top (to protect against a *calling* Makefile leaking those
+# vars in), which silently wins over anything we set via env var or
+# command line for those two names specifically. CFLAGS_MOD isn't touched by
+# that guard and is threaded into CFLAGS, so it's the one override that
+# actually survives.
+EXTRA_CFLAGS_VAR = "CFLAGS_MOD"
 EXTRA_CFLAGS = "-w"
 
 
@@ -133,14 +142,15 @@ def build_mpy_cross(src_dir: Path, jobs: Optional[int] = None, verbose: bool = F
     jobs = jobs or os.cpu_count() or 1
     if verbose:
         print(f"Building mpy-cross in {mpy_cross_dir} (jobs={jobs}) ...")
-    env = dict(os.environ)
-    env["CFLAGS_EXTRA"] = " ".join(
-        filter(None, [env.get("CFLAGS_EXTRA", ""), EXTRA_CFLAGS])
-    )
     subprocess.run(
-        ["make", "-C", str(mpy_cross_dir), f"-j{jobs}"],
+        [
+            "make",
+            "-C",
+            str(mpy_cross_dir),
+            f"-j{jobs}",
+            f"{EXTRA_CFLAGS_VAR}={EXTRA_CFLAGS}",
+        ],
         check=True,
-        env=env,
     )
     return mpy_cross_dir / "build" / "mpy-cross"
 
