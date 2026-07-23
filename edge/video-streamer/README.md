@@ -221,14 +221,21 @@ Three event types are emitted when `telemetry_enabled=True` (off by default):
 | `video_stream_health` | Every 10 s status tick |
 | `video_stream_stop` | On `stop()` |
 
-Enable and configure via the `VideoTelemetry` class (see `telemetry.py`):
+Enable and configure via the `VideoTelemetry` class (see `video_telemetry.py`). As of
+[PEN-216](https://linear.app/pentagram-software/issue/PEN-216/refactor-videotelemetry-to-use-the-new-rpi-telemetry-module),
+sending is delegated to the shared Raspberry Pi telemetry module (`edge/vision/telemetry/`,
+PEN-166), which gives retry/backoff, HTTP 207 partial-failure handling, and disk-overflow
+buffering. `endpoint_url` must point at the `unifiedIngress` Cloud Function (PEN-227), and
+`api_key` must be a per-device token provisioned via
+`cloud/functions/setup-device-tokens.sh` — the legacy shared `telemetryIngestion` endpoint
+and static API key are no longer accepted:
 
 ```python
-from telemetry import VideoTelemetry
+from video_telemetry import VideoTelemetry
 
 tel = VideoTelemetry(
-    endpoint_url="https://<region>-<project>.cloudfunctions.net/telemetryIngestion",
-    api_key="your-api-key",
+    endpoint_url="https://<region>-<project>.cloudfunctions.net/unifiedIngress",
+    api_key="your-per-device-token",
     device_id="rpi-camera-01",
     telemetry_enabled=True,   # off by default
 )

@@ -1,19 +1,18 @@
 """
-Unit tests for edge/video-streamer/telemetry.py.
+Unit tests for edge/video-streamer/video_telemetry.py.
 
-All HTTP calls are mocked so no real network requests are made.
+All sends are mocked at the RpiTelemetrySender boundary (edge/vision/telemetry,
+PEN-166) so no real network requests are made.
 """
 
-import json
 import threading
 import time
-import unittest.mock as mock
-from unittest.mock import MagicMock, patch, call
-from urllib.error import URLError
+import uuid
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from telemetry import VideoTelemetry, _utc_now_iso
+from video_telemetry import VideoTelemetry, _utc_now_iso
 
 
 # ---------------------------------------------------------------------------
@@ -282,97 +281,107 @@ class TestPayloadContents:
 
 
 # ---------------------------------------------------------------------------
-# HTTP POST — _post_async
+# _post_async — delegation to RpiTelemetryCollector / RpiTelemetrySender
 # ---------------------------------------------------------------------------
 
 class TestPostAsync:
-    def _make_enabled(self, endpoint="https://example.com/tel", api_key="secret"):
+    """`_post_async` now delegates sending to the shared PEN-166 module
+    (`edge/vision/telemetry`) instead of an inline `urllib` call. These tests
+    assert VideoTelemetry wires its constructor args through to the sender
+    correctly and handles buffering/error paths -- the HTTP-level details
+    (batching, retries, 207 handling) are covered by
+    `edge/vision/telemetry/tests/test_sender.py`.
+    """
+
+    def _make_enabled(self, endpoint="https://example.com/unifiedIngress", api_key="secret", **kwargs):
         return VideoTelemetry(
             endpoint_url=endpoint,
             api_key=api_key,
             telemetry_enabled=True,
+            **kwargs,
         )
 
-    def test_post_sends_json_body(self):
-        tel = self._make_enabled()
-        event = {
-            "event_id": "abc",
-            "event_type": "video_stream_stop",
+    def _make_event(self, event_type="video_stream_stop"):
+        return {
+            "event_id": str(uuid.uuid4()),
+            "event_type": event_type,
             "source": "rpi",
-            "timestamp": "2026-01-01T00:00:00.000Z",
-            "payload": {"reason": "test"},
+            "timestamp": _utc_now_iso(),
             "device_id": "rpi-01",
             "session_id": "sess-1",
             "version": "1.0",
+            "payload": {"reason": "test"},
         }
 
-        mock_response = MagicMock()
-        mock_response.status = 200
-        mock_response.__enter__ = lambda s: s
-        mock_response.__exit__ = MagicMock(return_value=False)
+    def test_sender_constructed_with_endpoint_as_url(self):
+        tel = self._make_enabled(endpoint="https://example.com/unifiedIngress")
+        with patch("video_telemetry.RpiTelemetrySender") as mock_sender_cls:
+            mock_sender_cls.return_value.flush_and_send.return_value = True
+            tel._post_async(self._make_event())
 
-        with patch("telemetry.urllib_request.urlopen", return_value=mock_response) as mock_open:
-            tel._post_async(event)
+        _, kwargs = mock_sender_cls.call_args
+        assert kwargs["endpoint"] == "https://example.com/unifiedIngress"
 
-        mock_open.assert_called_once()
-        req = mock_open.call_args[0][0]
-        body = json.loads(req.data.decode())
-        assert "events" in body
-        assert len(body["events"]) == 1
-        assert body["events"][0]["event_type"] == "video_stream_stop"
+    def test_sender_constructed_with_api_key_as_device_token(self):
+        tel = self._make_enabled(api_key="my-device-token")
+        with patch("video_telemetry.RpiTelemetrySender") as mock_sender_cls:
+            mock_sender_cls.return_value.flush_and_send.return_value = True
+            tel._post_async(self._make_event())
 
-    def test_post_sets_content_type_header(self):
+        _, kwargs = mock_sender_cls.call_args
+        assert kwargs["device_token"] == "my-device-token"
+
+    def test_sender_constructed_with_device_id(self):
+        tel = self._make_enabled(device_id="rpi-test-01")
+        with patch("video_telemetry.RpiTelemetrySender") as mock_sender_cls:
+            mock_sender_cls.return_value.flush_and_send.return_value = True
+            tel._post_async(self._make_event())
+
+        _, kwargs = mock_sender_cls.call_args
+        assert kwargs["device_id"] == "rpi-test-01"
+
+    def test_sender_constructed_once_and_reused(self):
         tel = self._make_enabled()
-        event = {"event_id": "x", "event_type": "test", "payload": {}}
+        with patch("video_telemetry.RpiTelemetrySender") as mock_sender_cls:
+            mock_sender_cls.return_value.flush_and_send.return_value = True
+            tel._post_async(self._make_event())
+            tel._post_async(self._make_event())
 
-        mock_response = MagicMock()
-        mock_response.status = 200
-        mock_response.__enter__ = lambda s: s
-        mock_response.__exit__ = MagicMock(return_value=False)
+        mock_sender_cls.assert_called_once()
 
-        with patch("telemetry.urllib_request.urlopen", return_value=mock_response) as mock_open:
-            tel._post_async(event)
-
-        req = mock_open.call_args[0][0]
-        assert req.get_header("Content-type") == "application/json"
-
-    def test_post_sets_api_key_header(self):
-        tel = self._make_enabled(api_key="my-api-key")
-        event = {"event_id": "x", "event_type": "test", "payload": {}}
-
-        mock_response = MagicMock()
-        mock_response.status = 200
-        mock_response.__enter__ = lambda s: s
-        mock_response.__exit__ = MagicMock(return_value=False)
-
-        with patch("telemetry.urllib_request.urlopen", return_value=mock_response) as mock_open:
-            tel._post_async(event)
-
-        req = mock_open.call_args[0][0]
-        assert req.get_header("X-api-key") == "my-api-key"
-
-    def test_url_error_is_swallowed(self):
+    def test_event_is_buffered_before_send(self):
         tel = self._make_enabled()
-        event = {"event_id": "x", "event_type": "test", "payload": {}}
-
-        with patch("telemetry.urllib_request.urlopen", side_effect=URLError("connection refused")):
-            # Should not raise
+        event = self._make_event()
+        with patch("video_telemetry.RpiTelemetrySender") as mock_sender_cls:
+            mock_sender_cls.return_value.flush_and_send.return_value = True
             tel._post_async(event)
 
-    def test_empty_endpoint_skips_post(self):
+        mock_sender_cls.return_value.flush_and_send.assert_called_once()
+        collector_arg = mock_sender_cls.return_value.flush_and_send.call_args[0][0]
+        assert event in collector_arg.peek()
+
+    def test_empty_endpoint_skips_send(self):
         tel = VideoTelemetry(endpoint_url="", api_key="k", telemetry_enabled=True)
-        event = {"event_id": "x", "event_type": "test", "payload": {}}
+        with patch("video_telemetry.RpiTelemetrySender") as mock_sender_cls:
+            tel._post_async(self._make_event())
 
-        with patch("telemetry.urllib_request.urlopen") as mock_open:
-            tel._post_async(event)
-            mock_open.assert_not_called()
+        mock_sender_cls.assert_not_called()
+
+    def test_send_error_is_swallowed(self):
+        tel = self._make_enabled()
+        with patch("video_telemetry.RpiTelemetrySender") as mock_sender_cls:
+            mock_sender_cls.return_value.flush_and_send.side_effect = OSError("boom")
+            # Should not raise
+            tel._post_async(self._make_event())
+
+    def test_sender_construction_error_is_swallowed(self):
+        tel = self._make_enabled()
+        with patch("video_telemetry.RpiTelemetrySender", side_effect=ValueError("bad endpoint")):
+            # Should not raise
+            tel._post_async(self._make_event())
 
     def test_emit_runs_in_background_thread(self):
-        tel = VideoTelemetry(
-            endpoint_url="https://example.com/tel",
-            api_key="k",
-            telemetry_enabled=True,
-        )
+        tel = self._make_enabled()
         thread_names = []
 
         original_start = threading.Thread.start
@@ -381,7 +390,7 @@ class TestPostAsync:
             thread_names.append(self_thread.name)
             original_start(self_thread)
 
-        # Prevent actual HTTP calls
+        # Prevent actual sends
         with patch.object(tel, "_post_async"):
             with patch.object(threading.Thread, "start", capture_start):
                 tel.emit_stream_stop("test")
