@@ -50,10 +50,13 @@ from typing import Optional
 MICROPYTHON_REPO_URL = "https://github.com/micropython/micropython.git"
 MICROPYTHON_TAG = "v1.11"
 
-# mpy-cross is a MicroPython 1.11-vintage host build; recent compilers are
-# stricter than the flags this old Makefile assumes, so a handful of
-# already-fixed-upstream warnings need to be silenced to get a clean build.
-EXTRA_CFLAGS = "-Wno-error -Wno-gnu-folding-constant"
+# mpy-cross is a MicroPython 1.11-vintage host build. Modern compilers (e.g.
+# GCC 12+ on current ubuntu-latest runners) promote warning classes this old
+# code triggers (e.g. -Wdangling-pointer) to hard errors by default, and a
+# blanket `-Wno-error` does not un-promote a specific `-Werror=X` class -- so
+# just suppress all warnings outright rather than chase each new compiler's
+# stricter defaults one flag at a time.
+EXTRA_CFLAGS = "-w"
 
 
 def repo_root() -> Path:
