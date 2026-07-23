@@ -904,6 +904,14 @@ class TelemetrySender:
         overflow-origin event was accepted, this clears the now-stale file;
         if some are still failing, it rewrites the file to hold exactly
         those, dropping only the ones confirmed sent.
+
+        The file has already been cleared by the time any event is
+        re-persisted below, so a disk-write failure at that point can no
+        longer rely on "the file still has it" as a safety net. Any event
+        whose persist() call fails (or that can't be persisted at all
+        because the collector lacks the hook) is restored to the in-memory
+        buffer instead, so a disk error degrades the event to "in-memory
+        only" rather than losing it outright.
         """
         clear = getattr(collector, "clear_overflow", None)
         if not callable(clear):
@@ -916,12 +924,16 @@ class TelemetrySender:
             return
         persist = getattr(collector, "_persist_to_disk", None)
         if not callable(persist):
+            self._restore_events_to_collector(collector, still_unsent_overflow_events)
             return
+        failed_to_persist = []
         for event in still_unsent_overflow_events:
             try:
                 persist(event)
             except Exception:  # noqa: BLE001
-                pass
+                failed_to_persist.append(event)
+        if failed_to_persist:
+            self._restore_events_to_collector(collector, failed_to_persist)
 
     def _restore_events_to_collector(
         self,

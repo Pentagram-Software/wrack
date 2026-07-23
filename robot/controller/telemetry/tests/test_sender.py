@@ -688,6 +688,42 @@ class TestFlushAndSend:
             if os.path.exists(path):
                 os.remove(path)
 
+    def test_reconcile_overflow_restores_event_to_memory_when_persist_fails(self):
+        """Regression: if clear_overflow() succeeds but re-persisting a
+        still-unsent overflow event back to disk then fails, that event
+        must be restored to the in-memory buffer rather than silently
+        dropped -- the file has already been cleared at that point, so
+        "it's still on disk" is no longer a valid fallback.
+        """
+        s = _make_sender()
+        c = TelemetryCollector(overflow_path=None)
+        event = _make_event()
+
+        with patch.object(c, "clear_overflow") as mock_clear, \
+             patch.object(c, "_persist_to_disk", side_effect=OSError("disk full")) as mock_persist:
+            s._reconcile_overflow(c, [event])
+
+        mock_clear.assert_called_once_with()
+        mock_persist.assert_called_once_with(event)
+        assert c.buffer_size == 1
+        assert c.peek()[0]["event_id"] == event["event_id"]
+
+    def test_reconcile_overflow_restores_events_when_collector_cannot_persist(self):
+        """If the collector has no ``_persist_to_disk`` hook at all, the
+        still-unsent events must be restored to memory rather than silently
+        discarded after the file has already been cleared.
+        """
+        s = _make_sender()
+        c = TelemetryCollector(overflow_path=None)
+        event = _make_event()
+
+        with patch.object(c, "clear_overflow"), \
+             patch.object(TelemetryCollector, "_persist_to_disk", new=None):
+            s._reconcile_overflow(c, [event])
+
+        assert c.buffer_size == 1
+        assert c.peek()[0]["event_id"] == event["event_id"]
+
     def test_async_flush_restores_unsent_events_on_failure(self):
         """Async flush should also re-buffer events when send ultimately fails."""
         s = _make_sender(max_retries=0)
