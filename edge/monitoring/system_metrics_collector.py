@@ -487,7 +487,11 @@ def main() -> None:
     """
     logging.basicConfig(level=logging.INFO)
 
-    collector = RpiTelemetryCollector(validate=True)
+    # `validate` is irrelevant here: SystemMetricsSender never calls
+    # collector.collect()/collect_raw() (which is what that flag gates) --
+    # it builds each event via create_event() and validates it directly
+    # (see _tick()), so the collector is used purely as an envelope factory.
+    collector = RpiTelemetryCollector()
     sender = RpiTelemetrySender(
         timeout=DEFAULT_SEND_TIMEOUT_S,
         max_retries=DEFAULT_SEND_MAX_RETRIES,
