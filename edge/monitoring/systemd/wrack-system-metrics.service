@@ -1,0 +1,23 @@
+[Unit]
+Description=Wrack Raspberry Pi system metrics collector (PEN-192)
+Documentation=https://github.com/Pentagram-Software/wrack/blob/main/edge/monitoring/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+# Paths match make deploy-edge's default PI_REMOTE_PATH (/home/pi/robot/edge/).
+# If you override PI_REMOTE_PATH at deploy time, update WorkingDirectory,
+# EnvironmentFile, and ExecStart to match before enabling this unit.
+WorkingDirectory=/home/pi/robot/edge/monitoring
+# EnvironmentFile holds TELEMETRY_ENDPOINT / RPI_DEVICE_ID / TELEMETRY_DEVICE_TOKEN
+# (see edge/monitoring/README.md) — never commit real values into this unit
+# file or the EnvironmentFile itself.
+EnvironmentFile=-/home/pi/robot/edge/monitoring/system-metrics.env
+ExecStart=/usr/bin/python3 /home/pi/robot/edge/monitoring/system_metrics_collector.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

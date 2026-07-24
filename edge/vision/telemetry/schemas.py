@@ -45,6 +45,7 @@ VALID_EVENT_TYPES = [
     "connection_status",
     "error",
     "vision_detection",
+    "system_metrics",
 ]
 
 VALID_DEVICE_STATUSES = [
@@ -268,6 +269,43 @@ def _validate_error_payload(payload: Any) -> List[str]:
     return errors
 
 
+def _validate_system_metrics_payload(payload: Any) -> List[str]:
+    """Validate a ``system_metrics`` payload (PEN-192 spec).
+
+    ``cpu_temp_c`` is optional: the collector omits it for a given tick when
+    ``/sys/class/thermal/thermal_zone0/temp`` is missing or unreadable,
+    rather than skipping the whole payload (mirrors the EV3 heartbeat's
+    battery-read-failure isolation pattern) — so no-cpu_temp_c must still
+    validate.
+    """
+    errors = []
+    if not isinstance(payload, dict):
+        return ["system_metrics payload must be a dict"]
+
+    cpu_percent = payload.get("cpu_percent")
+    if (
+        not isinstance(cpu_percent, (int, float))
+        or isinstance(cpu_percent, bool)
+        or not (0 <= cpu_percent <= 100)
+    ):
+        errors.append("payload.cpu_percent must be a number between 0 and 100")
+
+    memory_percent = payload.get("memory_percent")
+    if (
+        not isinstance(memory_percent, (int, float))
+        or isinstance(memory_percent, bool)
+        or not (0 <= memory_percent <= 100)
+    ):
+        errors.append("payload.memory_percent must be a number between 0 and 100")
+
+    if "cpu_temp_c" in payload and payload["cpu_temp_c"] is not None:
+        cpu_temp_c = payload["cpu_temp_c"]
+        if not isinstance(cpu_temp_c, (int, float)) or isinstance(cpu_temp_c, bool):
+            errors.append("payload.cpu_temp_c must be a number when provided")
+
+    return errors
+
+
 def _validate_detection_item(detection: Any, index: int) -> List[str]:
     errors = []
     if not isinstance(detection, dict):
@@ -364,6 +402,7 @@ _PAYLOAD_VALIDATORS = {
     "connection_status": _validate_connection_status_payload,
     "error": _validate_error_payload,
     "vision_detection": _validate_vision_detection_payload,
+    "system_metrics": _validate_system_metrics_payload,
 }
 
 # ---------------------------------------------------------------------------

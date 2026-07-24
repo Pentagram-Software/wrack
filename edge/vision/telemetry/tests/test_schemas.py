@@ -331,3 +331,65 @@ class TestVisionDetection:
         del detection["label"]
         with pytest.raises(ValidationError):
             validate_payload("vision_detection", self._payload(detections=[detection]))
+
+
+# ---------------------------------------------------------------------------
+# system_metrics (PEN-192)
+# ---------------------------------------------------------------------------
+
+class TestSystemMetrics:
+    def _payload(self, **overrides):
+        payload = {"cpu_percent": 12.5, "memory_percent": 43.2, "cpu_temp_c": 48.0}
+        payload.update(overrides)
+        return payload
+
+    def test_valid_payload_passes(self):
+        validate_payload("system_metrics", self._payload())
+
+    def test_cpu_temp_c_optional(self):
+        payload = self._payload()
+        del payload["cpu_temp_c"]
+        validate_payload("system_metrics", payload)
+
+    def test_cpu_temp_c_none_accepted(self):
+        validate_payload("system_metrics", self._payload(cpu_temp_c=None))
+
+    def test_missing_cpu_percent_rejected(self):
+        payload = self._payload()
+        del payload["cpu_percent"]
+        with pytest.raises(ValidationError):
+            validate_payload("system_metrics", payload)
+
+    def test_cpu_percent_above_100_rejected(self):
+        with pytest.raises(ValidationError):
+            validate_payload("system_metrics", self._payload(cpu_percent=101))
+
+    def test_cpu_percent_negative_rejected(self):
+        with pytest.raises(ValidationError):
+            validate_payload("system_metrics", self._payload(cpu_percent=-1))
+
+    def test_missing_memory_percent_rejected(self):
+        payload = self._payload()
+        del payload["memory_percent"]
+        with pytest.raises(ValidationError):
+            validate_payload("system_metrics", payload)
+
+    def test_memory_percent_above_100_rejected(self):
+        with pytest.raises(ValidationError):
+            validate_payload("system_metrics", self._payload(memory_percent=101))
+
+    def test_non_numeric_cpu_temp_c_rejected(self):
+        with pytest.raises(ValidationError):
+            validate_payload("system_metrics", self._payload(cpu_temp_c="hot"))
+
+    def test_bool_cpu_percent_rejected(self):
+        """bool is a subclass of int in Python — must not silently pass as a number."""
+        with pytest.raises(ValidationError):
+            validate_payload("system_metrics", self._payload(cpu_percent=True))
+
+    def test_full_event_envelope_passes(self):
+        event = _base_event("system_metrics", self._payload())
+        validate_event(event)  # should not raise
+
+    def test_valid_event_types_includes_system_metrics(self):
+        assert "system_metrics" in VALID_EVENT_TYPES

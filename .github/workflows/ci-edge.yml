@@ -6,17 +6,19 @@ on:
     paths:
       - 'edge/video-streamer/**'
       - 'edge/vision/**'
+      - 'edge/monitoring/**'
       - '.github/workflows/ci-edge.yml'
   pull_request:
     branches: [main]
     paths:
       - 'edge/video-streamer/**'
       - 'edge/vision/**'
+      - 'edge/monitoring/**'
       - '.github/workflows/ci-edge.yml'
 
 jobs:
   ci:
-    name: Test edge/ (video-streamer + vision telemetry)
+    name: Test edge/ (video-streamer + vision telemetry + monitoring)
     runs-on: ubuntu-latest
 
     steps:
@@ -37,4 +39,8 @@ jobs:
 
       - name: Run vision telemetry tests
         working-directory: edge/vision/telemetry
+        run: python -m pytest tests/ -q
+
+      - name: Run system metrics collector tests
+        working-directory: edge/monitoring
         run: python -m pytest tests/ -q
