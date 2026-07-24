@@ -200,12 +200,40 @@ test_missing_env_warns() {
   bash "${SCRIPTS_DIR}/stop-all.sh" >/dev/null 2>&1 || true
 }
 
+# ── Test 6: env file is KEY=VALUE-only (no shell execution) ─────────────────
+test_env_file_no_shell_exec() {
+  bash "${SCRIPTS_DIR}/stop-all.sh" >/dev/null 2>&1 || true
+  local marker="${FAKE_EDGE}/pwned.marker"
+  rm -f "${marker}"
+
+  # If load_env_file still used `source`, this would create pwned.marker.
+  cat > "${FAKE_EDGE}/monitoring/system-metrics.env" <<ENV
+TELEMETRY_ENDPOINT=https://example.test/unifiedIngress
+TELEMETRY_DEVICE_TOKEN=test-token
+EVIL=\$(touch ${marker})
+ENV
+
+  local out
+  out="$(bash "${SCRIPTS_DIR}/start-all.sh" 2>&1)" || {
+    fail "start with shell-looking env exited non-zero: ${out}"
+    return
+  }
+
+  if [[ ! -f "${marker}" ]]; then
+    pass "env loader does not execute shell in values (systemd EnvironmentFile semantics)"
+  else
+    fail "env loader executed shell in system-metrics.env (pwned.marker was created)"
+  fi
+  bash "${SCRIPTS_DIR}/stop-all.sh" >/dev/null 2>&1 || true
+}
+
 echo "Running edge/scripts start/stop tests…"
 test_start_creates_pids
 test_start_idempotent
 test_stop_clears_pids
 test_stop_when_idle
 test_missing_env_warns
+test_env_file_no_shell_exec
 
 if [[ "${FAILURES}" -eq 0 ]]; then
   echo "All tests passed."

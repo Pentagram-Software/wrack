@@ -10,7 +10,7 @@ systemd unit in [`../monitoring/README.md`](../monitoring/README.md).
 | Process | Entry point | Notes |
 |---|---|---|
 | Video streamer | `video-streamer/streamer.py` | Defaults to UDP (`STREAMER_CHOICE=1`) because the streamer's `__main__` still prompts interactively for protocol |
-| System metrics collector | `monitoring/system_metrics_collector.py` | Loads `monitoring/system-metrics.env` if present (same file the systemd unit uses) |
+| System metrics collector | `monitoring/system_metrics_collector.py` | Loads `monitoring/system-metrics.env` if present (same path the systemd unit uses; parsed as KEY=VALUE-only, matching systemd `EnvironmentFile=` — not `source`d as shell) |
 
 PID files and logs live under `edge/run/` (gitignored):
 

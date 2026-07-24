@@ -51,15 +51,46 @@ pid_from_file() {
   tr -d '[:space:]' < "$1"
 }
 
+# Parse KEY=VALUE lines the same way systemd EnvironmentFile= does for this
+# path — assignment-only, no shell execution. Unlike `source`, a compromised
+# or casually-edited env file cannot run arbitrary bash via $(...) / `;` /
+# newlines-as-commands. Blank lines and `#` comments are ignored; values may
+# be optionally single- or double-quoted.
 load_env_file() {
-  if [[ -f "${ENV_FILE}" ]]; then
-    # Export every assignment in the env file into this process (and children).
-    set -a
-    # shellcheck disable=SC1090
-    source "${ENV_FILE}"
-    set +a
-    echo "Loaded env from ${ENV_FILE}"
-  else
+  if [[ ! -f "${ENV_FILE}" ]]; then
     echo "Warning: ${ENV_FILE} not found — metrics collector will start without TELEMETRY_* vars (sends will fail until the file exists)." >&2
+    return 0
   fi
+
+  local line key value
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    # Trim leading whitespace.
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -z "${line}" || "${line}" == \#* ]] && continue
+
+    if [[ "${line}" != *=* ]]; then
+      echo "Warning: ignoring non KEY=VALUE line in ${ENV_FILE}: ${line}" >&2
+      continue
+    fi
+
+    key="${line%%=*}"
+    value="${line#*=}"
+    # Trim trailing whitespace from key / leading from value.
+    key="${key%"${key##*[![:space:]]}"}"
+    value="${value#"${value%%[![:space:]]*}"}"
+
+    if [[ ! "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      echo "Warning: ignoring invalid key in ${ENV_FILE}: ${key}" >&2
+      continue
+    fi
+
+    # Strip matching surrounding quotes (systemd EnvironmentFile behaviour).
+    if [[ "${value}" =~ ^\"(.*)\"$ ]] || [[ "${value}" =~ ^\'(.*)\'$ ]]; then
+      value="${BASH_REMATCH[1]}"
+    fi
+
+    export "${key}=${value}"
+  done < "${ENV_FILE}"
+
+  echo "Loaded env from ${ENV_FILE}"
 }
