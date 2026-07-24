@@ -20,6 +20,15 @@ FAKE_EDGE="$(mktemp -d)"
 cleanup() {
   # Best-effort stop against the fake tree before deleting it.
   EDGE_ROOT="${FAKE_EDGE}" bash "${SCRIPTS_DIR}/stop-all.sh" >/dev/null 2>&1 || true
+  # Also kill any orphaned stub processes that wrote a pid.marker (in case
+  # stop-all fails to track them — the assertion under test).
+  for marker in \
+    "${FAKE_EDGE}/video-streamer/pid.marker" \
+    "${FAKE_EDGE}/monitoring/pid.marker"; do
+    if [[ -f "${marker}" ]]; then
+      kill -9 "$(tr -d '[:space:]' < "${marker}")" 2>/dev/null || true
+    fi
+  done
   rm -rf "${FAKE_EDGE}"
 }
 trap cleanup EXIT
@@ -27,23 +36,26 @@ trap cleanup EXIT
 mkdir -p "${FAKE_EDGE}/video-streamer" "${FAKE_EDGE}/monitoring" "${FAKE_EDGE}/scripts"
 
 # Point the scripts under test at the fake tree via EDGE_ROOT; still use the
-# real start/stop/lib from the repo (copied only if we need them adjacent —
-# EDGE_ROOT override means we run the real scripts with EDGE_ROOT set).
+# real start/stop/lib from the repo (EDGE_ROOT override).
 
-# Stub streamer: consume one stdin line (the protocol choice), then sleep.
+# Stub streamer: consume one stdin line (the protocol choice), write its own
+# PID to pid.marker, then sleep. The pid.marker is what catches a stop that
+# only kills a bash wrapper while leaving Python orphaned.
 cat > "${FAKE_EDGE}/video-streamer/streamer.py" <<'PY'
+import os
 import sys
 import time
 sys.stdin.readline()
-open("started.marker", "w").write("ok")
+open("pid.marker", "w").write(str(os.getpid()))
 while True:
     time.sleep(3600)
 PY
 
-# Stub metrics collector: just sleep.
+# Stub metrics collector: write its own PID, then sleep.
 cat > "${FAKE_EDGE}/monitoring/system_metrics_collector.py" <<'PY'
+import os
 import time
-open("started.marker", "w").write("ok")
+open("pid.marker", "w").write(str(os.getpid()))
 while True:
     time.sleep(3600)
 PY
@@ -56,7 +68,19 @@ ENV
 
 export EDGE_ROOT="${FAKE_EDGE}"
 
-# ── Test 1: start creates pid files and keeps processes alive ───────────────
+wait_for_marker() {
+  local marker="$1"
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if [[ -f "${marker}" ]]; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
+# ── Test 1: start creates pid files that match the real Python PIDs ─────────
 test_start_creates_pids() {
   local out
   out="$(bash "${SCRIPTS_DIR}/start-all.sh" 2>&1)" || {
@@ -72,9 +96,23 @@ test_start_creates_pids() {
     return
   fi
 
-  local spid mpid
+  if ! wait_for_marker "${FAKE_EDGE}/video-streamer/pid.marker" || \
+     ! wait_for_marker "${FAKE_EDGE}/monitoring/pid.marker"; then
+    fail "stubs did not write pid.marker in time"
+    return
+  fi
+
+  local spid mpid smarker mmarker
   spid="$(tr -d '[:space:]' < "${FAKE_EDGE}/run/video-streamer.pid")"
   mpid="$(tr -d '[:space:]' < "${FAKE_EDGE}/run/system-metrics.pid")"
+  smarker="$(tr -d '[:space:]' < "${FAKE_EDGE}/video-streamer/pid.marker")"
+  mmarker="$(tr -d '[:space:]' < "${FAKE_EDGE}/monitoring/pid.marker")"
+
+  if [[ "${spid}" == "${smarker}" ]] && [[ "${mpid}" == "${mmarker}" ]]; then
+    pass "pid files match real Python process PIDs (not a wrapper)"
+  else
+    fail "pid-file/Python mismatch: streamer file=${spid} marker=${smarker}; metrics file=${mpid} marker=${mmarker}"
+  fi
 
   if kill -0 "${spid}" 2>/dev/null && kill -0 "${mpid}" 2>/dev/null; then
     pass "both processes are alive after start"
@@ -101,11 +139,13 @@ test_start_idempotent() {
   fi
 }
 
-# ── Test 3: stop kills processes and removes pid files ──────────────────────
+# ── Test 3: stop kills the real Python PIDs (not just wrappers) ──────────────
 test_stop_clears_pids() {
-  local spid mpid
+  local spid mpid smarker mmarker
   spid="$(tr -d '[:space:]' < "${FAKE_EDGE}/run/video-streamer.pid")"
   mpid="$(tr -d '[:space:]' < "${FAKE_EDGE}/run/system-metrics.pid")"
+  smarker="$(tr -d '[:space:]' < "${FAKE_EDGE}/video-streamer/pid.marker")"
+  mmarker="$(tr -d '[:space:]' < "${FAKE_EDGE}/monitoring/pid.marker")"
 
   local out
   out="$(bash "${SCRIPTS_DIR}/stop-all.sh" 2>&1)" || {
@@ -120,11 +160,14 @@ test_stop_clears_pids() {
     fail "stop-all left pid files behind"
   fi
 
-  if ! kill -0 "${spid}" 2>/dev/null && ! kill -0 "${mpid}" 2>/dev/null; then
-    pass "both processes are dead after stop"
+  # Assert against the marker PIDs (the real Python processes), not only the
+  # pid-file values — a buggy stop that kills a wrapper but leaves Python
+  # orphaned would otherwise stay green.
+  if ! kill -0 "${smarker}" 2>/dev/null && ! kill -0 "${mmarker}" 2>/dev/null; then
+    pass "both real Python processes are dead after stop"
   else
-    fail "one or both processes still alive after stop"
-    kill -9 "${spid}" "${mpid}" 2>/dev/null || true
+    fail "one or both Python processes still alive after stop (streamer=${smarker} metrics=${mmarker})"
+    kill -9 "${smarker}" "${mmarker}" "${spid}" "${mpid}" 2>/dev/null || true
   fi
 }
 
