@@ -81,6 +81,18 @@ DEFAULT_SEND_MAX_RETRIES = 0
 
 _EVENT_TYPE = "system_metrics"
 
+# unifiedIngress (cloud/functions/ingress.js) routes purely on this literal
+# top-level "type" field on the JSON record -- defaulting to "event" (the
+# BigQuery/analytics leg) when absent. edge/vision/telemetry's
+# RpiTelemetryCollector.create_event() has no concept of this field (PEN-166
+# predates PEN-227/PEN-228's health/event split), so it must be added here
+# explicitly -- omitting it would silently misroute every sample to
+# BigQuery instead of Grafana Cloud. Mirrors the `record_type` param
+# robot/controller/telemetry/collector.py's create_event() already grew for
+# the same reason on the EV3 side.
+_RECORD_TYPE_FIELD = "type"
+_RECORD_TYPE_HEALTH = "health"
+
 # 0-based indexes into the numeric fields *after* the "cpu" label itself —
 # i.e. fields[1:] = [user, nice, system, idle, iowait, irq, softirq, steal,
 # guest, guest_nice]. Only the first four are guaranteed on every kernel;
@@ -407,6 +419,7 @@ class SystemMetricsSender:
             return None
 
         event = self.collector.create_event(_EVENT_TYPE, payload)
+        event[_RECORD_TYPE_FIELD] = _RECORD_TYPE_HEALTH
         try:
             validate_event(event)
         except ValidationError as exc:

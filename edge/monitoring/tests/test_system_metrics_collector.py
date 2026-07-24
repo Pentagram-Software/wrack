@@ -252,6 +252,12 @@ class TestSystemMetricsSenderTick:
         assert payload["memory_percent"] == pytest.approx(50.0)
         assert payload["cpu_temp_c"] == pytest.approx(45.0)
 
+        # Critical for correct routing: unifiedIngress (cloud/functions/
+        # ingress.js) reads this literal top-level field and defaults to
+        # "event" (BigQuery) when it's absent -- a regression here would
+        # silently misroute every sample away from Grafana Cloud.
+        assert event["type"] == "health"
+
         # The send is dispatched on a tracked background thread — wait for
         # it to actually run before asserting on the mock.
         for _ in range(50):
