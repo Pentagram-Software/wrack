@@ -47,11 +47,11 @@ start_streamer() {
   echo "Starting video-streamer (choice=${STREAMER_CHOICE})…"
   (
     cd "${STREAMER_DIR}"
-    # Feed the interactive protocol prompt once, then let the process own stdin.
-    # nohup + background so the session script can exit without killing it.
-    nohup bash -c 'printf "%s\n" "$1" | exec "$2" streamer.py' \
-      bash "${STREAMER_CHOICE}" "${PYTHON}" \
-      >>"${STREAMER_LOG}" 2>&1 &
+    # Feed the interactive protocol prompt once via stdin. Background the
+    # Python process itself (not a bash wrapper) so $! is the streamer PID —
+    # otherwise stop-all kills only the wrapper and leaves an orphaned
+    # streamer.py still holding the UDP port.
+    nohup "${PYTHON}" streamer.py >>"${STREAMER_LOG}" 2>&1 <<<"${STREAMER_CHOICE}" &
     echo $! > "${STREAMER_PID_FILE}"
   )
   # Brief settle so a fast crash is visible in status.
