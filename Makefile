@@ -75,6 +75,7 @@ deploy-edge:
 	@[ -n "$(PI_IP)" ] || { echo "Error: PI_IP is not set."; echo "  Run: PI_IP=<host> make deploy-edge"; exit 1; }
 	@echo "==> Deploying edge/ to $(PI_USER)@$(PI_IP):$(PI_REMOTE_PATH) (ssh port $(PI_SSH_PORT))"
 	rsync -av --exclude='__pycache__' --exclude='*.pyc' --exclude='run/' \
+		--exclude='monitoring/system-metrics.env' \
 		-e "ssh -p $(PI_SSH_PORT) -o StrictHostKeyChecking=accept-new" \
 		edge/ $(PI_USER)@$(PI_IP):$(PI_REMOTE_PATH)
 

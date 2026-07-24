@@ -80,9 +80,11 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now wrack-system-metrics.service
 ```
 
-Create `~/robot/edge/monitoring/system-metrics.env` (referenced by the unit
-file's `EnvironmentFile=`, and never committed to git) with the real
-`TELEMETRY_ENDPOINT` / `TELEMETRY_DEVICE_TOKEN` values:
+Create `~/robot/edge/monitoring/system-metrics.env` **on the Pi**
+(referenced by the unit file's `EnvironmentFile=`, never committed to
+git, and excluded from `make deploy-edge` so laptop copies cannot
+overwrite it) with the real `TELEMETRY_ENDPOINT` /
+`TELEMETRY_DEVICE_TOKEN` values:
 
 ```bash
 TELEMETRY_ENDPOINT=https://europe-central2-wrack-control.cloudfunctions.net/unifiedIngress

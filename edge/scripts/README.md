@@ -27,10 +27,13 @@ bash ~/robot/edge/scripts/start-all.sh
 bash ~/robot/edge/scripts/stop-all.sh
 ```
 
-Create `~/robot/edge/monitoring/system-metrics.env` before starting if you
-want the metrics collector to actually reach `unifiedIngress`:
+Create `~/robot/edge/monitoring/system-metrics.env` **on the Pi** before
+starting if you want the metrics collector to actually reach
+`unifiedIngress`. `make deploy-edge` deliberately excludes this file so a
+local copy (or an empty one) on the laptop cannot overwrite Pi secrets:
 
 ```bash
+# on the Pi — KEY=VALUE only (same format as systemd EnvironmentFile=)
 TELEMETRY_ENDPOINT=https://europe-central2-wrack-control.cloudfunctions.net/unifiedIngress
 TELEMETRY_DEVICE_TOKEN=<your-per-device-token>
 ```
