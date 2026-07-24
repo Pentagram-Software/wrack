@@ -1,4 +1,4 @@
-.PHONY: help setup web deploy-edge deploy-cloud deploy-ev3 deploy-ev3-release deploy-ev3-debug deploy-robot deploy-robot-dry-run test test-deploy check-mpy
+.PHONY: help setup web deploy-edge start-edge stop-edge deploy-cloud deploy-ev3 deploy-ev3-release deploy-ev3-debug deploy-robot deploy-robot-dry-run test test-deploy check-mpy
 
 # ---------------------------------------------------------------------------
 # EV3 rsync-based deployment configuration
@@ -28,6 +28,8 @@ help:
 	@echo "  make web                    - Start web dev server (http://localhost:3000)"
 	@echo "  make setup                  - Install all dependencies"
 	@echo "  make deploy-edge            - Deploy to Raspberry Pi"
+	@echo "  make start-edge             - SSH to Pi and start streamer + metrics (session)"
+	@echo "  make stop-edge              - SSH to Pi and stop streamer + metrics (session)"
 	@echo "  make deploy-cloud           - Deploy GCP Cloud Functions"
 	@echo "  make deploy-robot           - Deploy robot/controller to EV3 (rsync --checksum)"
 	@echo "  make deploy-robot-dry-run   - Show what deploy-robot would transfer (no transfer)"
@@ -47,10 +49,12 @@ help:
 	@echo "  make deploy-ev3 EV3_HOST=192.168.1.100"
 	@echo "  make deploy-ev3-debug EV3_HOST=192.168.1.100"
 	@echo ""
-	@echo "Raspberry Pi deployment (deploy-edge):"
+	@echo "Raspberry Pi deployment / session start (deploy-edge / start-edge / stop-edge):"
 	@echo "  Defaults to pi@raspberrypi.local; override via env vars:"
 	@echo "  PI_IP=1.2.3.4 make deploy-edge"
 	@echo "  PI_IP=1.2.3.4 PI_SSH_PORT=2222 make deploy-edge"
+	@echo "  PI_IP=1.2.3.4 make start-edge   # session-only; see edge/scripts/README.md"
+	@echo "  PI_IP=1.2.3.4 make stop-edge"
 
 web:
 	cd clients/web && npm install && npm run dev
@@ -70,9 +74,26 @@ deploy-bigquery:
 deploy-edge:
 	@[ -n "$(PI_IP)" ] || { echo "Error: PI_IP is not set."; echo "  Run: PI_IP=<host> make deploy-edge"; exit 1; }
 	@echo "==> Deploying edge/ to $(PI_USER)@$(PI_IP):$(PI_REMOTE_PATH) (ssh port $(PI_SSH_PORT))"
-	rsync -av --exclude='__pycache__' --exclude='*.pyc' \
+	rsync -av --exclude='__pycache__' --exclude='*.pyc' --exclude='run/' \
 		-e "ssh -p $(PI_SSH_PORT) -o StrictHostKeyChecking=accept-new" \
 		edge/ $(PI_USER)@$(PI_IP):$(PI_REMOTE_PATH)
+
+# Session-only start/stop of video-streamer + system-metrics on the Pi
+# (edge/scripts/start-all.sh / stop-all.sh). Not systemd — does not survive reboot.
+# Same PI_* defaults as deploy-edge. See edge/scripts/README.md.
+start-edge:
+	@[ -n "$(PI_IP)" ] || { echo "Error: PI_IP is not set."; echo "  Run: PI_IP=<host> make start-edge"; exit 1; }
+	@echo "==> Starting edge session processes on $(PI_USER)@$(PI_IP) (ssh port $(PI_SSH_PORT))"
+	ssh -p "$(PI_SSH_PORT)" -o StrictHostKeyChecking=accept-new \
+		"$(PI_USER)@$(PI_IP)" \
+		"bash $(PI_REMOTE_PATH)/scripts/start-all.sh"
+
+stop-edge:
+	@[ -n "$(PI_IP)" ] || { echo "Error: PI_IP is not set."; echo "  Run: PI_IP=<host> make stop-edge"; exit 1; }
+	@echo "==> Stopping edge session processes on $(PI_USER)@$(PI_IP) (ssh port $(PI_SSH_PORT))"
+	ssh -p "$(PI_SSH_PORT)" -o StrictHostKeyChecking=accept-new \
+		"$(PI_USER)@$(PI_IP)" \
+		"bash $(PI_REMOTE_PATH)/scripts/stop-all.sh"
 
 # ---------------------------------------------------------------------------
 # Smart EV3 deployment: rsync --checksum (only transfers changed files)
@@ -110,6 +131,7 @@ test:
 	cd edge/video-streamer && python -m pytest tests/
 	cd edge/vision/telemetry && python -m pytest tests/
 	cd edge/monitoring && python -m pytest tests/
+	bash edge/scripts/tests/test_start_stop.sh
 	cd robot/controller && python -m pytest tests/
 	cd clients/web && npm test
 

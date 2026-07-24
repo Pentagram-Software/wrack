@@ -7,6 +7,7 @@ on:
       - 'edge/video-streamer/**'
       - 'edge/vision/**'
       - 'edge/monitoring/**'
+      - 'edge/scripts/**'
       - '.github/workflows/ci-edge.yml'
   pull_request:
     branches: [main]
@@ -14,11 +15,12 @@ on:
       - 'edge/video-streamer/**'
       - 'edge/vision/**'
       - 'edge/monitoring/**'
+      - 'edge/scripts/**'
       - '.github/workflows/ci-edge.yml'
 
 jobs:
   ci:
-    name: Test edge/ (video-streamer + vision telemetry + monitoring)
+    name: Test edge/ (video-streamer + vision telemetry + monitoring + scripts)
     runs-on: ubuntu-latest
 
     steps:
@@ -44,3 +46,6 @@ jobs:
       - name: Run system metrics collector tests
         working-directory: edge/monitoring
         run: python -m pytest tests/ -q
+
+      - name: Run edge session start/stop script tests
+        run: bash edge/scripts/tests/test_start_stop.sh
