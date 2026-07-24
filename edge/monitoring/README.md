@@ -61,17 +61,22 @@ until interrupted (`Ctrl+C`) or sent `SIGTERM`.
 
 `systemd/wrack-system-metrics.service` is a prepared unit file — like
 `alloy/config.alloy` before it, it is **not** installed automatically by
-`make deploy-edge` (which only rsyncs files onto the Pi). To actually run
-this as a persistent, auto-restarting service:
+`make deploy-edge` (which only rsyncs files onto the Pi). The unit's
+`WorkingDirectory` / `ExecStart` / `EnvironmentFile` paths match
+`make deploy-edge`'s default `PI_REMOTE_PATH` (`/home/pi/robot/edge/`).
+If you override `PI_REMOTE_PATH` at deploy time, edit those three paths
+in the unit before enabling it.
+
+To actually run this as a persistent, auto-restarting service:
 
 ```bash
-# On the Pi, after `make deploy-edge` has synced edge/ to ~/wrack/edge:
-sudo cp ~/wrack/edge/monitoring/systemd/wrack-system-metrics.service /etc/systemd/system/
+# On the Pi, after `make deploy-edge` has synced edge/ to ~/robot/edge:
+sudo cp ~/robot/edge/monitoring/systemd/wrack-system-metrics.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now wrack-system-metrics.service
 ```
 
-Create `~/wrack/edge/monitoring/system-metrics.env` (referenced by the unit
+Create `~/robot/edge/monitoring/system-metrics.env` (referenced by the unit
 file's `EnvironmentFile=`, and never committed to git) with the real
 `TELEMETRY_ENDPOINT` / `TELEMETRY_DEVICE_TOKEN` values:
 
