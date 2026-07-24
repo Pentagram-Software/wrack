@@ -57,6 +57,10 @@ python3 system_metrics_collector.py
 Runs in the foreground, ticking every `SYSTEM_METRICS_INTERVAL` seconds
 until interrupted (`Ctrl+C`) or sent `SIGTERM`.
 
+To start this collector **and** the video streamer together for a session
+(no systemd), use [`edge/scripts/start-all.sh`](../scripts/README.md) or
+`make start-edge` from a laptop.
+
 ## Installing as a systemd service (manual step)
 
 `systemd/wrack-system-metrics.service` is a prepared unit file — like
