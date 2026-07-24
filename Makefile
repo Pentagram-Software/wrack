@@ -108,6 +108,8 @@ deploy-robot-dry-run:
 
 test:
 	cd edge/video-streamer && python -m pytest tests/
+	cd edge/vision/telemetry && python -m pytest tests/
+	cd edge/monitoring && python -m pytest tests/
 	cd robot/controller && python -m pytest tests/
 	cd clients/web && npm test
 
