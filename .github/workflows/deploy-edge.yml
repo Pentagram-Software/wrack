@@ -67,11 +67,21 @@ jobs:
             -p "${{ secrets.PI_SSH_PORT || '22' }}" \
             "pi@${{ secrets.PI_IP }}" 'echo SSH_AUTH_OK' 2>&1 | tail -100
 
+      # -----------------------------------------------------------------------
+      # After rsync, make deploy-edge writes monitoring/system-metrics.env on
+      # the Pi from PI_DEVICE_TOKEN + GCP_PROJECT_ID (mirrors deploy-robot.yml
+      # generating telemetry_config.py from EV3_DEVICE_TOKEN). Fail the job if
+      # either secret is missing — the metrics collector and video-streamer
+      # both require this file.
+      # -----------------------------------------------------------------------
       - name: Deploy to Raspberry Pi
         if: steps.check.outputs.pi_configured == 'true'
         env:
           PI_IP: ${{ secrets.PI_IP }}
           PI_SSH_PORT: ${{ secrets.PI_SSH_PORT || '22' }}
+          PI_DEVICE_TOKEN: ${{ secrets.PI_DEVICE_TOKEN }}
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          PI_RPI_DEVICE_ID: ${{ secrets.PI_RPI_DEVICE_ID }}
         run: make deploy-edge
 
       - name: Tag successful deployment

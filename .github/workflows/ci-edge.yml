@@ -8,6 +8,8 @@ on:
       - 'edge/vision/**'
       - 'edge/monitoring/**'
       - 'edge/scripts/**'
+      - 'edge/pi_telemetry_env.py'
+      - 'edge/tests/**'
       - '.github/workflows/ci-edge.yml'
   pull_request:
     branches: [main]
@@ -16,6 +18,8 @@ on:
       - 'edge/vision/**'
       - 'edge/monitoring/**'
       - 'edge/scripts/**'
+      - 'edge/pi_telemetry_env.py'
+      - 'edge/tests/**'
       - '.github/workflows/ci-edge.yml'
 
 jobs:
@@ -49,3 +53,10 @@ jobs:
 
       - name: Run edge session start/stop script tests
         run: bash edge/scripts/tests/test_start_stop.sh
+
+      - name: Run write-pi-telemetry-env script tests
+        run: bash edge/scripts/tests/test_write_pi_telemetry_env.sh
+
+      - name: Run pi_telemetry_env unit tests
+        working-directory: edge
+        run: python -m pytest tests/ -q

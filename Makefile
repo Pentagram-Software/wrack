@@ -22,6 +22,14 @@ PI_IP ?= raspberrypi.local
 PI_USER ?= pi
 PI_SSH_PORT ?= 22
 PI_REMOTE_PATH ?= /home/pi/robot/edge/
+# Forwarded to the Pi by make start-edge (see edge/scripts/start-all.sh).
+STREAMER_CHOICE ?= 1
+PYTHON ?= python3
+# Required by make deploy-edge to write monitoring/system-metrics.env on the Pi
+# (GitHub Actions: secrets.PI_DEVICE_TOKEN + secrets.GCP_PROJECT_ID).
+# PI_DEVICE_TOKEN ?=
+# GCP_PROJECT_ID ?=
+# PI_RPI_DEVICE_ID ?= rpi-camera-01
 
 help:
 	@echo "Available commands:"
@@ -51,9 +59,10 @@ help:
 	@echo ""
 	@echo "Raspberry Pi deployment / session start (deploy-edge / start-edge / stop-edge):"
 	@echo "  Defaults to pi@raspberrypi.local; override via env vars:"
-	@echo "  PI_IP=1.2.3.4 make deploy-edge"
-	@echo "  PI_IP=1.2.3.4 PI_SSH_PORT=2222 make deploy-edge"
+	@echo "  PI_IP=… PI_DEVICE_TOKEN=… GCP_PROJECT_ID=… make deploy-edge"
+	@echo "  (writes monitoring/system-metrics.env on the Pi; fails if token/project missing)"
 	@echo "  PI_IP=1.2.3.4 make start-edge   # session-only; see edge/scripts/README.md"
+	@echo "  STREAMER_CHOICE=2 PI_IP=… make start-edge"
 	@echo "  PI_IP=1.2.3.4 make stop-edge"
 
 web:
@@ -73,21 +82,30 @@ deploy-bigquery:
 
 deploy-edge:
 	@[ -n "$(PI_IP)" ] || { echo "Error: PI_IP is not set."; echo "  Run: PI_IP=<host> make deploy-edge"; exit 1; }
+	@[ -n "$(PI_DEVICE_TOKEN)" ] || { echo "Error: PI_DEVICE_TOKEN is not set."; echo "  GitHub Actions: add secret PI_DEVICE_TOKEN (from setup-device-tokens.sh --device-id rpi-camera-01)."; echo "  Local: PI_DEVICE_TOKEN=<token> GCP_PROJECT_ID=<project> make deploy-edge"; exit 1; }
+	@[ -n "$(GCP_PROJECT_ID)" ] || { echo "Error: GCP_PROJECT_ID is not set."; echo "  Required to derive TELEMETRY_ENDPOINT for the Pi env file."; exit 1; }
 	@echo "==> Deploying edge/ to $(PI_USER)@$(PI_IP):$(PI_REMOTE_PATH) (ssh port $(PI_SSH_PORT))"
 	rsync -av --exclude='__pycache__' --exclude='*.pyc' --exclude='run/' \
 		--exclude='monitoring/system-metrics.env' \
 		-e "ssh -p $(PI_SSH_PORT) -o StrictHostKeyChecking=accept-new" \
 		edge/ $(PI_USER)@$(PI_IP):$(PI_REMOTE_PATH)
+	@echo "==> Writing Pi telemetry env file from secrets"
+	PI_IP="$(PI_IP)" PI_USER="$(PI_USER)" PI_SSH_PORT="$(PI_SSH_PORT)" \
+	  PI_REMOTE_PATH="$(PI_REMOTE_PATH)" \
+	  PI_DEVICE_TOKEN="$(PI_DEVICE_TOKEN)" GCP_PROJECT_ID="$(GCP_PROJECT_ID)" \
+	  PI_RPI_DEVICE_ID="$(PI_RPI_DEVICE_ID)" \
+	  bash edge/scripts/write-pi-telemetry-env.sh --remote
 
 # Session-only start/stop of video-streamer + system-metrics on the Pi
 # (edge/scripts/start-all.sh / stop-all.sh). Not systemd — does not survive reboot.
 # Same PI_* defaults as deploy-edge. See edge/scripts/README.md.
+# STREAMER_CHOICE / PYTHON are forwarded into the remote shell (not just local Make).
 start-edge:
 	@[ -n "$(PI_IP)" ] || { echo "Error: PI_IP is not set."; echo "  Run: PI_IP=<host> make start-edge"; exit 1; }
 	@echo "==> Starting edge session processes on $(PI_USER)@$(PI_IP) (ssh port $(PI_SSH_PORT))"
 	ssh -p "$(PI_SSH_PORT)" -o StrictHostKeyChecking=accept-new \
 		"$(PI_USER)@$(PI_IP)" \
-		"bash $(PI_REMOTE_PATH)/scripts/start-all.sh"
+		"STREAMER_CHOICE='$(STREAMER_CHOICE)' PYTHON='$(PYTHON)' bash $(PI_REMOTE_PATH)/scripts/start-all.sh"
 
 stop-edge:
 	@[ -n "$(PI_IP)" ] || { echo "Error: PI_IP is not set."; echo "  Run: PI_IP=<host> make stop-edge"; exit 1; }
@@ -132,7 +150,9 @@ test:
 	cd edge/video-streamer && python -m pytest tests/
 	cd edge/vision/telemetry && python -m pytest tests/
 	cd edge/monitoring && python -m pytest tests/
+	cd edge && python -m pytest tests/
 	bash edge/scripts/tests/test_start_stop.sh
+	bash edge/scripts/tests/test_write_pi_telemetry_env.sh
 	cd robot/controller && python -m pytest tests/
 	cd clients/web && npm test
 
