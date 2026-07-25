@@ -69,6 +69,14 @@ Choose your streaming method:
 - **2**: TCP Streaming (reliable, local network)
 - **3**: HTTP/MJPEG (web browser compatible)
 
+To start the streamer **and** the system metrics collector together for a
+session (no systemd), see [`../scripts/README.md`](../scripts/README.md) or
+run `make start-edge` from a laptop after `make deploy-edge`.
+
+`streamer.py`'s `__main__` auto-loads `../monitoring/system-metrics.env`
+(written by deploy) and enables `VideoTelemetry` for UDP when
+`TELEMETRY_ENDPOINT` + `TELEMETRY_DEVICE_TOKEN` are present.
+
 ### Configure Capture Settings
 
 You can configure capture and encoder settings using either JSON config or CLI flags.

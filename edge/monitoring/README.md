@@ -34,28 +34,32 @@ query).
 
 ## Configuration
 
-Entirely via environment variables, reusing the same variables the video
-streamer's telemetry already uses (this collector runs on the same
-physical Pi and authenticates as the same device):
+Credentials live in `system-metrics.env` next to this README — the same
+file the video streamer reads. **`make deploy-edge` writes it on the Pi**
+from `PI_DEVICE_TOKEN` + `GCP_PROJECT_ID` (see
+[`../scripts/README.md`](../scripts/README.md)); do not commit it.
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `TELEMETRY_ENDPOINT` | yes | — | `unifiedIngress` Cloud Function URL |
-| `RPI_DEVICE_ID` | no | `rpi-camera-01` | Device identity — reused from the video streamer, since it's the same physical device |
-| `TELEMETRY_DEVICE_TOKEN` | yes | `""` | Per-device token, provisioned via `cloud/functions/setup-device-tokens.sh` |
-| `SYSTEM_METRICS_INTERVAL` | no | `30` | Seconds between collection ticks — placeholder, matching `HeartbeatSender`'s own default on the EV3 side; no PRD freshness target is defined yet for Pi OS resource gauges specifically |
+| `TELEMETRY_ENDPOINT` | yes | — | `unifiedIngress` URL (derived at deploy time) |
+| `RPI_DEVICE_ID` | no | `rpi-camera-01` | Device identity — shared with the video streamer |
+| `TELEMETRY_DEVICE_TOKEN` | yes | — | Per-device token (`PI_DEVICE_TOKEN` secret) |
+| `SYSTEM_METRICS_INTERVAL` | no | `30` | Seconds between collection ticks |
+
+`main()` auto-loads `system-metrics.env` via `edge/pi_telemetry_env.py`
+when `TELEMETRY_ENDPOINT` is unset.
 
 ## Running
 
+After deploy (env file already on the Pi):
+
 ```bash
-cd edge/monitoring
-TELEMETRY_ENDPOINT=https://europe-central2-wrack-control.cloudfunctions.net/unifiedIngress \
-TELEMETRY_DEVICE_TOKEN=<your-per-device-token> \
+cd ~/robot/edge/monitoring
 python3 system_metrics_collector.py
 ```
 
-Runs in the foreground, ticking every `SYSTEM_METRICS_INTERVAL` seconds
-until interrupted (`Ctrl+C`) or sent `SIGTERM`.
+Or start collector **and** video streamer together:
+[`../scripts/start-all.sh`](../scripts/README.md) / `make start-edge`.
 
 ## Installing as a systemd service (manual step)
 
@@ -76,14 +80,10 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now wrack-system-metrics.service
 ```
 
-Create `~/robot/edge/monitoring/system-metrics.env` (referenced by the unit
-file's `EnvironmentFile=`, and never committed to git) with the real
-`TELEMETRY_ENDPOINT` / `TELEMETRY_DEVICE_TOKEN` values:
-
-```bash
-TELEMETRY_ENDPOINT=https://europe-central2-wrack-control.cloudfunctions.net/unifiedIngress
-TELEMETRY_DEVICE_TOKEN=<your-per-device-token>
-```
+The unit's `EnvironmentFile=` points at `system-metrics.env`, which
+`make deploy-edge` already writes on the Pi (rsync excludes it so laptop
+copies cannot overwrite secrets). No manual env-file creation is needed
+after a successful deploy.
 
 Check status/logs with `systemctl status wrack-system-metrics` /
 `journalctl -u wrack-system-metrics -f`.

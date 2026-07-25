@@ -10,6 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working in this
 | `edge/video-streamer/` | Python | Raspberry Pi camera → UDP video stream; `video_telemetry.py`'s `VideoTelemetry` sends stream events via `edge/vision/telemetry` (PEN-216) |
 | `edge/vision/` | Python / Markdown | Vision/analytics architecture plan (`README.md`); `telemetry/` — standalone RPi telemetry module (PEN-166), no inference runtime yet |
 | `edge/monitoring/` | Python / Alloy (superseded) | `system_metrics_collector.py` (PEN-192) — local collector posting Pi CPU/memory/temp to the unified ingress as `type=health`; `alloy/config.alloy` is a superseded, never-deployed Grafana Alloy config kept for reference |
+| `edge/scripts/` | Bash | Session start/stop (`start-all.sh` / `stop-all.sh`); `write-pi-telemetry-env.sh` writes `monitoring/system-metrics.env` during `make deploy-edge` from `PI_DEVICE_TOKEN` + `GCP_PROJECT_ID` |
 | `cloud/functions/` | Node.js | GCP Cloud Functions HTTP → EV3 TCP bridge |
 | `clients/ios/` | Swift | iPhone robot control + H.264 video |
 | `clients/web/` | TypeScript | Next.js web controller |

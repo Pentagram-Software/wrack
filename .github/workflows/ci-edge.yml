@@ -7,6 +7,9 @@ on:
       - 'edge/video-streamer/**'
       - 'edge/vision/**'
       - 'edge/monitoring/**'
+      - 'edge/scripts/**'
+      - 'edge/pi_telemetry_env.py'
+      - 'edge/tests/**'
       - '.github/workflows/ci-edge.yml'
   pull_request:
     branches: [main]
@@ -14,11 +17,14 @@ on:
       - 'edge/video-streamer/**'
       - 'edge/vision/**'
       - 'edge/monitoring/**'
+      - 'edge/scripts/**'
+      - 'edge/pi_telemetry_env.py'
+      - 'edge/tests/**'
       - '.github/workflows/ci-edge.yml'
 
 jobs:
   ci:
-    name: Test edge/ (video-streamer + vision telemetry + monitoring)
+    name: Test edge/ (video-streamer + vision telemetry + monitoring + scripts)
     runs-on: ubuntu-latest
 
     steps:
@@ -43,4 +49,14 @@ jobs:
 
       - name: Run system metrics collector tests
         working-directory: edge/monitoring
+        run: python -m pytest tests/ -q
+
+      - name: Run edge session start/stop script tests
+        run: bash edge/scripts/tests/test_start_stop.sh
+
+      - name: Run write-pi-telemetry-env script tests
+        run: bash edge/scripts/tests/test_write_pi_telemetry_env.sh
+
+      - name: Run pi_telemetry_env unit tests
+        working-directory: edge
         run: python -m pytest tests/ -q
