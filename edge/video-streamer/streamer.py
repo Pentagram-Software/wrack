@@ -10,6 +10,7 @@ import os
 import queue
 import socket
 import struct
+import sys
 import pickle
 import threading
 import time
@@ -727,18 +728,56 @@ class HTTPVideoStreamer(VideoStreamer):
         self.stop_encoder_if_started()
         self.picam2.stop()
 
+def _telemetry_from_env() -> "VideoTelemetry | None":
+    """Build a VideoTelemetry client from the shared Pi telemetry env file.
+
+    Loads ``edge/monitoring/system-metrics.env`` (via ``pi_telemetry_env``)
+    when ``TELEMETRY_ENDPOINT`` is not already set. Returns ``None`` (telemetry
+    disabled) if endpoint or token are still missing — streaming must not fail
+    just because telemetry credentials are absent. When both are present,
+    telemetry is enabled automatically.
+    """
+    edge_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if edge_root not in sys.path:
+        sys.path.insert(0, edge_root)
+    try:
+        from pi_telemetry_env import load_pi_telemetry_env
+    except ImportError:
+        LOGGER.warning("pi_telemetry_env not importable — video telemetry disabled")
+        return None
+
+    load_pi_telemetry_env()
+    endpoint = os.environ.get("TELEMETRY_ENDPOINT", "").strip()
+    token = os.environ.get("TELEMETRY_DEVICE_TOKEN", "").strip()
+    if not endpoint or not token:
+        LOGGER.info(
+            "TELEMETRY_ENDPOINT / TELEMETRY_DEVICE_TOKEN unset — video telemetry disabled"
+        )
+        return None
+
+    device_id = os.environ.get("RPI_DEVICE_ID", "rpi-camera-01").strip() or "rpi-camera-01"
+    LOGGER.info("video telemetry enabled (device_id=%s, endpoint=%s)", device_id, endpoint)
+    return VideoTelemetry(
+        endpoint_url=endpoint,
+        api_key=token,
+        device_id=device_id,
+        telemetry_enabled=True,
+    )
+
+
 # Example usage
 if __name__ == "__main__":
     configure_logging()
     config = parse_stream_config()
+    telemetry = _telemetry_from_env()
 
     print("Choose streaming method:")
     print("1. UDP Streaming (fast, unreliable)")
     print("2. TCP Streaming (reliable, slower)")
     print("3. HTTP/MJPEG Streaming (web browser compatible)")
-    
+
     choice = input("Enter choice (1-3): ").strip()
-    
+
     try:
         if choice == "1":
             streamer = UDPVideoStreamer(
@@ -750,9 +789,17 @@ if __name__ == "__main__":
                 gop=config.gop,
                 profile=config.profile,
                 stream_format=config.stream_format,
+                telemetry=telemetry,
             )
             streamer.start_streaming()
         elif choice == "2":
+            # TCP/HTTP streamers do not accept a telemetry= kwarg yet (only
+            # UDPVideoStreamer emits stream start/health/stop events).
+            if telemetry is not None:
+                LOGGER.warning(
+                    "video telemetry is only wired for UDP streaming today — "
+                    "TCP mode starts without telemetry"
+                )
             streamer = TCPVideoStreamer(
                 host='0.0.0.0',
                 port=8888,
@@ -765,6 +812,11 @@ if __name__ == "__main__":
             )
             streamer.start_server()
         elif choice == "3":
+            if telemetry is not None:
+                LOGGER.warning(
+                    "video telemetry is only wired for UDP streaming today — "
+                    "HTTP mode starts without telemetry"
+                )
             streamer = HTTPVideoStreamer(
                 host='0.0.0.0',
                 port=8080,
@@ -778,7 +830,7 @@ if __name__ == "__main__":
             streamer.start_server()
         else:
             print("Invalid choice")
-            
+
     except KeyboardInterrupt:
         print("\nStopping stream...")
         if 'streamer' in locals():

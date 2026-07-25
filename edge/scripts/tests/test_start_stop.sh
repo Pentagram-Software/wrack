@@ -182,22 +182,21 @@ test_stop_when_idle() {
   fi
 }
 
-# ── Test 5: missing env file warns but still starts ─────────────────────────
-test_missing_env_warns() {
+# ── Test 5: missing env file / TELEMETRY_ENDPOINT fails start ───────────────
+test_missing_env_fails() {
   bash "${SCRIPTS_DIR}/stop-all.sh" >/dev/null 2>&1 || true
   rm -f "${FAKE_EDGE}/monitoring/system-metrics.env"
 
-  local out
-  out="$(bash "${SCRIPTS_DIR}/start-all.sh" 2>&1)" || {
-    fail "start without env file exited non-zero: ${out}"
-    return
-  }
-  if echo "${out}" | grep -qi "not found"; then
-    pass "start warns when system-metrics.env is missing"
+  local out rc=0
+  out="$(
+    env -u TELEMETRY_ENDPOINT -u TELEMETRY_DEVICE_TOKEN \
+      bash "${SCRIPTS_DIR}/start-all.sh" 2>&1
+  )" || rc=$?
+  if [[ "${rc}" -ne 0 ]] && echo "${out}" | grep -qi "TELEMETRY_ENDPOINT"; then
+    pass "start fails clearly when system-metrics.env / TELEMETRY_ENDPOINT is missing"
   else
-    fail "start did not warn about missing env file: ${out}"
+    fail "expected start to fail mentioning TELEMETRY_ENDPOINT (rc=${rc}): ${out}"
   fi
-  bash "${SCRIPTS_DIR}/stop-all.sh" >/dev/null 2>&1 || true
 }
 
 # ── Test 6: env file is KEY=VALUE-only (no shell execution) ─────────────────
@@ -232,7 +231,7 @@ test_start_creates_pids
 test_start_idempotent
 test_stop_clears_pids
 test_stop_when_idle
-test_missing_env_warns
+test_missing_env_fails
 test_env_file_no_shell_exec
 
 if [[ "${FAILURES}" -eq 0 ]]; then

@@ -38,6 +38,16 @@ fi
 
 load_env_file
 
+# After loading system-metrics.env (written by make deploy-edge), require the
+# endpoint so the metrics collector cannot crash mid-start with a Python
+# ValueError — fail here with a clear message instead.
+if [[ -z "${TELEMETRY_ENDPOINT:-}" ]]; then
+  echo "Error: TELEMETRY_ENDPOINT is not set after loading ${ENV_FILE}." >&2
+  echo "  Run: PI_DEVICE_TOKEN=<token> GCP_PROJECT_ID=<project> make deploy-edge" >&2
+  echo "  (GitHub Actions needs secrets PI_DEVICE_TOKEN + GCP_PROJECT_ID.)" >&2
+  exit 1
+fi
+
 start_streamer() {
   if is_running "${STREAMER_PID_FILE}"; then
     echo "video-streamer already running (pid $(pid_from_file "${STREAMER_PID_FILE}"))"

@@ -40,16 +40,16 @@ import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
-# edge/vision/ (sibling of edge/monitoring/) hosts the shared RPi telemetry
-# module (PEN-166). Add it to sys.path so it can be imported as a plain
-# top-level `telemetry` package — same approach as
-# edge/video-streamer/video_telemetry.py.
-_VISION_ROOT = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "vision"
-)
-if _VISION_ROOT not in sys.path:
-    sys.path.insert(0, _VISION_ROOT)
+# edge/ is the parent of monitoring/; edge/vision/ hosts the shared RPi
+# telemetry module (PEN-166). Put both on sys.path so we can import
+# `telemetry` and `pi_telemetry_env` the same way video-streamer does.
+_EDGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_VISION_ROOT = os.path.join(_EDGE_ROOT, "vision")
+for _path in (_EDGE_ROOT, _VISION_ROOT):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
+from pi_telemetry_env import ensure_telemetry_endpoint  # noqa: E402
 from telemetry.collector import RpiTelemetryCollector  # noqa: E402
 from telemetry.schemas import ValidationError, validate_event  # noqa: E402
 from telemetry.sender import RpiTelemetrySender  # noqa: E402
@@ -486,6 +486,11 @@ def main() -> None:
     `SYSTEM_METRICS_INTERVAL`.
     """
     logging.basicConfig(level=logging.INFO)
+
+    # Load monitoring/system-metrics.env when TELEMETRY_ENDPOINT is unset
+    # (written by make deploy-edge / write-pi-telemetry-env.sh). Raises a
+    # clear error if the endpoint is still missing after that.
+    ensure_telemetry_endpoint()
 
     # `validate` is irrelevant here: SystemMetricsSender never calls
     # collector.collect()/collect_raw() (which is what that flag gates) --
