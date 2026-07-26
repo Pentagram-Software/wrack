@@ -21,7 +21,6 @@ import io
 import socketserver
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from config import parse_stream_config
-from monitoring import StreamMetrics, write_metrics, write_stopped_metrics
 from video_telemetry import VideoTelemetry
 
 LOGGER = logging.getLogger("streamer")
@@ -181,7 +180,6 @@ class UDPVideoStreamer(VideoStreamer):
         self,
         host: str = '0.0.0.0',
         port: int = 9999,
-        monitoring_path: str = "",
         telemetry: "VideoTelemetry | None" = None,
         **kwargs,
     ):
@@ -196,17 +194,16 @@ class UDPVideoStreamer(VideoStreamer):
         self.client_timeout = 30  # Timeout in seconds for inactive clients
         self.frames_sent = 0  # Counter for total frames sent
         self.last_status_time = time.time()  # Time of last status message
-        self.status_interval = 10  # Status update every 10 seconds
+        self.status_interval = 30  # Status / health tick every 30 seconds (PEN-193)
         self.fixed_client_port = 9999  # Use same port for frames as registration
         self.chunk_payload_size = 1200  # Bytes per UDP chunk payload to avoid IP fragmentation
         self.next_frame_id = 0  # Monotonically increasing frame identifier (uint32 wraparound)
 
-        # Monitoring / telemetry additions
+        # Telemetry additions (unified ingress health push — PEN-193)
         self.start_time = time.time()
         self.frame_drop_total = 0       # cumulative failed client sends
         self.interval_frames_sent = 0   # frames sent in the current status interval (for accurate FPS)
-        self._monitoring_path = monitoring_path  # empty string → use module default
-        self._telemetry = telemetry     # None → no BigQuery emission
+        self._telemetry = telemetry     # None → no ingress emission
 
         # h264 mode only: clients that have received at least one keyframe since they
         # (re)connected. A client joining mid-GOP must not get P-frames before its first IDR,
@@ -220,9 +217,6 @@ class UDPVideoStreamer(VideoStreamer):
         print(f"Starting UDP video server on {self.host}:{self.port}")
         print("Frames will be sent back to exact client source address (NAT-friendly)")
         print("Waiting for client connections...")
-
-        # Write initial Prometheus metrics (alive=1, no clients yet)
-        self._write_metrics(fps_recent=0.0)
 
         # Emit video_stream_start telemetry event
         if self._telemetry is not None:
@@ -324,10 +318,7 @@ class UDPVideoStreamer(VideoStreamer):
                         f"uptime: {uptime:.0f}s"
                     )
 
-                    # Update Prometheus textfile
-                    self._write_metrics(fps_recent=fps)
-
-                    # Emit periodic health telemetry event
+                    # Emit periodic health telemetry event (type=health → ingress)
                     if self._telemetry is not None:
                         self._telemetry.emit_stream_health(
                             fps_recent=fps,
@@ -466,26 +457,9 @@ class UDPVideoStreamer(VideoStreamer):
                 break
                 
     def stop(self, reason: str = "stop_called"):
-        """Stop the streamer, flush final metrics, and emit a stop event."""
+        """Stop the streamer and emit a stop event."""
         self.running = False
         uptime = time.time() - self.start_time
-
-        # Write stopped Prometheus metrics (alive=0)
-        try:
-            mk_path = self._monitoring_path
-            if mk_path:
-                write_stopped_metrics(
-                    frame_drop_total=self.frame_drop_total,
-                    uptime_seconds=uptime,
-                    path=mk_path,
-                )
-            else:
-                write_stopped_metrics(
-                    frame_drop_total=self.frame_drop_total,
-                    uptime_seconds=uptime,
-                )
-        except Exception as exc:
-            LOGGER.warning("monitoring: failed to write stopped metrics: %s", exc)
 
         # Emit video_stream_stop telemetry event
         if self._telemetry is not None:
@@ -499,23 +473,6 @@ class UDPVideoStreamer(VideoStreamer):
         self.socket.close()
         self.stop_encoder_if_started()
         self.picam2.stop()
-
-    def _write_metrics(self, fps_recent: float) -> None:
-        """Write Prometheus textfile metrics, swallowing errors to never block streaming."""
-        try:
-            metrics = StreamMetrics(
-                alive=True,
-                fps_recent=fps_recent,
-                frame_drop_total=self.frame_drop_total,
-                client_count=len(self.clients),
-                uptime_seconds=time.time() - self.start_time,
-            )
-            if self._monitoring_path:
-                write_metrics(metrics, path=self._monitoring_path)
-            else:
-                write_metrics(metrics)
-        except Exception as exc:
-            LOGGER.warning("monitoring: failed to write metrics: %s", exc)
 
 class TCPVideoStreamer(VideoStreamer):
     """Stream video over TCP (reliable but slower)"""

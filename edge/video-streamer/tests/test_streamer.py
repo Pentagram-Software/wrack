@@ -210,6 +210,17 @@ def test_drain_encoded_frames_quietly_empties_queue_without_overflow(fake_picame
 
 
 # ---------------------------------------------------------------------------
+# Health tick interval (PEN-193)
+# ---------------------------------------------------------------------------
+
+def test_udp_status_interval_is_30_seconds(fake_picamera2):
+    import streamer
+
+    stream = streamer.UDPVideoStreamer(port=0)
+    assert stream.status_interval == 30
+
+
+# ---------------------------------------------------------------------------
 # UDP send path: h264 payloads are sent raw, not pickled
 # ---------------------------------------------------------------------------
 
@@ -224,7 +235,6 @@ def test_udp_h264_mode_sends_raw_bytes_not_pickled(fake_picamera2, monkeypatch):
     monkeypatch.setattr(
         stream, "capture_encoded_frame", lambda timeout=1.0: (b"raw-h264-bytes", True)
     )
-    monkeypatch.setattr(stream, "_write_metrics", lambda fps_recent: None)
 
     sent = {}
 
@@ -253,8 +263,6 @@ def test_unsynced_client_withheld_from_pframe_until_next_keyframe(fake_picamera2
     new_client = ("127.0.0.1", 2)
     stream.clients = {synced_client: 0.0, new_client: 0.0}
     stream.synced_h264_clients = {synced_client}  # already got an earlier IDR
-
-    monkeypatch.setattr(stream, "_write_metrics", lambda fps_recent: None)
 
     chunks = iter([(b"p-frame", False), (b"idr", True)])
     sent_to = []
@@ -293,7 +301,6 @@ def test_resync_clears_synced_clients_after_queue_overflow(fake_picamera2, monke
     stream.clients = {client_addr: 0.0}
     stream.synced_h264_clients = {client_addr}
 
-    monkeypatch.setattr(stream, "_write_metrics", lambda fps_recent: None)
     monkeypatch.setattr(stream, "h264_resync_needed", lambda: True)
 
     def fake_capture(timeout=1.0):

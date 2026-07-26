@@ -62,7 +62,7 @@ Both questions can be "yes" for the same underlying signal — see the dual-home
 | `ev3_command_sent` / `command_executed` event | Wrack Analytics | Historical record of robot usage, not needed for live health; stored in `wrack_telemetry.events` |
 | `api_request` event (Cloud Function) | Wrack Analytics | Used for usage analysis and cost tracking; the *rate* of errors (not each row) is what monitoring cares about |
 | `battery_status` event | Wrack Analytics | Long-term battery degradation trend; not an incident signal by itself |
-| `video_stream_health` (FPS, drop rate, client count) | **Both** — primary System Monitoring, secondary Wrack Analytics | Real-time FPS/drop-rate drives live dashboards and alerts (System Monitoring); the same event is also emitted to BigQuery for historical stream-quality analysis (see [PEN-167](https://linear.app/pentagram-software/issue/PEN-167/telemetry-pen-132-video-stream-health-telemetry)) |
+| `video_stream_health` (FPS, drop rate, client count) | **System Monitoring today** (analytics copy deferred) | As of [PEN-193](https://linear.app/pentagram-software/issue/PEN-193/wire-video-stream-health-to-unified-ingress-as-typehealth), the Pi UDP streamer sends only `type=health` (30s ticks). A dual-homed `type=event` / BigQuery copy remains a future analytics follow-up (see [PEN-167](https://linear.app/pentagram-software/issue/PEN-167/telemetry-pen-132-video-stream-health-telemetry) and [architecture dual-homed signals](architecture.md#dual-homed-signals-decided)) |
 | Cloud Function error-rate *aggregate* (last 10s) | System Monitoring | Drives the pager alert |
 | Cloud Function error *events* (individual rows, historical) | Wrack Analytics | Forensic/trend analysis of what failed and when |
 
