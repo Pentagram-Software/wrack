@@ -32,10 +32,10 @@ jobs:
 
       # Only pytest is installed here — not edge/video-streamer/requirements.txt.
       # picamera2/opencv-python need real Raspberry Pi hardware and libcamera,
-      # neither of which exist on a hosted runner. This is safe because no
-      # test file imports streamer.py directly (only config.py, monitoring.py,
-      # telemetry.py — all hardware-independent). Do not "fix" this by trying
-      # to install picamera2 here.
+      # neither of which exist on a hosted runner. test_streamer.py injects fake
+      # picamera2/cv2 modules before importing streamer.py; other tests cover
+      # video_telemetry.py / config.py only. Do not "fix" this by trying to
+      # install picamera2 here.
       - name: Install pytest
         run: pip install pytest
 
