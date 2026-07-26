@@ -25,7 +25,7 @@ Usage::
                           resolution_width=1280, resolution_height=720,
                           target_fps=30)
 
-    # ... on each 10-s status tick ...
+    # ... on each 30-s status tick ...
     tel.emit_stream_health(fps_recent=29.5, client_count=2,
                            frame_drop_total=3, uptime_seconds=60.0)
 
@@ -76,6 +76,14 @@ LOGGER = logging.getLogger("streamer.telemetry")
 
 _SOURCE = "rpi"
 _VERSION = "1.0"
+
+# Unified ingress routes by top-level ``type`` (PEN-227). Health ticks must be
+# tagged explicitly — omitting it defaults the record to analytics/BigQuery.
+# Same pattern as ``system_metrics`` (PEN-192). Dual-homed ``type=event`` copy
+# of ``video_stream_health`` is deferred (PEN-193).
+_RECORD_TYPE_FIELD = "type"
+_RECORD_TYPE_HEALTH = "health"
+_HEALTH_EVENT_TYPES = frozenset({"video_stream_health"})
 
 
 class VideoTelemetry:
@@ -241,6 +249,8 @@ class VideoTelemetry:
             "version": _VERSION,
             "payload": payload,
         }
+        if event_type in _HEALTH_EVENT_TYPES:
+            event[_RECORD_TYPE_FIELD] = _RECORD_TYPE_HEALTH
         t = threading.Thread(
             target=self._post_async,
             args=(event,),

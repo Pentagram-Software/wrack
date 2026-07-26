@@ -147,6 +147,32 @@ class TestEventEnvelope:
         )
         assert event["event_type"] == "video_stream_health"
 
+    def test_stream_health_tagged_type_health(self):
+        """PEN-193: health ticks must route to the monitoring leg, not BigQuery."""
+        tel = self._make_enabled()
+        event = self._capture_event(
+            tel, tel.emit_stream_health, 29.5, 2, 3, 120.0, interval_seconds=30.0
+        )
+        assert event["type"] == "health"
+        assert event["payload"]["fps_recent"] == 29.5
+        assert event["payload"]["client_count"] == 2
+        assert event["payload"]["frame_drop_total"] == 3
+        assert event["payload"]["uptime_seconds"] == 120.0
+        assert event["payload"]["interval_seconds"] == 30.0
+
+    def test_stream_start_not_tagged_health(self):
+        """Lifecycle events stay on the analytics default (no type=health)."""
+        tel = self._make_enabled()
+        event = self._capture_event(
+            tel, tel.emit_stream_start, "udp", 9999, 1280, 720, 30.0
+        )
+        assert "type" not in event
+
+    def test_stream_stop_not_tagged_health(self):
+        tel = self._make_enabled()
+        event = self._capture_event(tel, tel.emit_stream_stop, "keyboard_interrupt")
+        assert "type" not in event
+
     def test_source_is_rpi(self):
         tel = self._make_enabled()
         event = self._capture_event(tel, tel.emit_stream_stop, "stop_called")
