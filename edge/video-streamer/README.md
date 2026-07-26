@@ -195,39 +195,43 @@ Simply navigate to: `http://raspberry_pi_ip:8080`
 - **Bandwidth**: ~600KB - 2.4MB/s (depends on scene complexity)
 - **Latency**: <100ms (UDP), ~200-500ms (TCP/HTTP)
 
-## 📡 Monitoring & Telemetry (PEN-167)
+## 📡 Monitoring & Telemetry (PEN-167 / PEN-193)
 
-The streamer exposes health metrics in two forms: real-time Prometheus metrics for Grafana, and BigQuery analytics events.
+UDP streaming posts stream health to the unified Cloud Function ingress
+(`unifiedIngress`). There is **no** Grafana Alloy / Prometheus textfile path
+anymore — that writer (`monitoring.py`) was removed in PEN-193.
 
-### Real-time Prometheus metrics (via Grafana Alloy)
+### Stream health (`type=health`) — UDP only
 
-`UDPVideoStreamer` writes a Prometheus textfile every 10 s to:
+Every **30 s**, `UDPVideoStreamer` emits a `video_stream_health` record tagged
+`type=health` so the monitoring health leg can route it toward Grafana Cloud.
+Liveness is the presence of these ticks (Grafana staleness when they stop) —
+there is no separate `alive` field.
 
-```
-/var/lib/grafana-alloy/textfile/video_stream.prom
-```
+| Payload field | Description |
+|---------------|-------------|
+| `fps_recent` | Frames sent / elapsed seconds over the last status window |
+| `client_count` | Currently registered UDP clients |
+| `frame_drop_total` | Cumulative failed client sends |
+| `uptime_seconds` | Seconds since streamer start |
+| `interval_seconds` | Length of the just-finished status window (optional) |
 
-Scraped by Grafana Alloy's `prometheus.exporter.unix` textfile collector (see `edge/monitoring/alloy/config.alloy`).
+**TCP and HTTP stream modes do not emit this health path today** — only
+`UDPVideoStreamer` wires `VideoTelemetry` into its status tick. Treat that as a
+known gap if those modes need monitoring later.
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `wrack_stream_alive` | gauge | 1 = streaming, 0 = stopped |
-| `wrack_stream_fps_recent` | gauge | FPS over the last 10 s window |
-| `wrack_stream_frame_drop_total` | counter | Cumulative failed client sends |
-| `wrack_stream_client_count` | gauge | Currently connected clients |
-| `wrack_stream_uptime_seconds` | gauge | Seconds since streamer start |
+A dual-homed analytics (`type=event`) copy of `video_stream_health` is
+intentionally deferred; lifecycle events below still go to analytics by default.
 
-`wrack_stream_alive` switches to 0 within 10 s of the streamer stopping (the next scrape after `stop()` is called).
+### Lifecycle telemetry events (optional)
 
-### BigQuery telemetry events (optional)
+Emitted when `telemetry_enabled=True` (off by default):
 
-Three event types are emitted when `telemetry_enabled=True` (off by default):
-
-| Event | When |
-|-------|------|
-| `video_stream_start` | On `start_streaming()` |
-| `video_stream_health` | Every 10 s status tick |
-| `video_stream_stop` | On `stop()` |
+| Event | When | Ingress `type` |
+|-------|------|----------------|
+| `video_stream_start` | On `start_streaming()` | default (`event` / analytics) |
+| `video_stream_health` | Every 30 s status tick (UDP) | `health` (monitoring) |
+| `video_stream_stop` | On `stop()` | default (`event` / analytics) |
 
 Enable and configure via the `VideoTelemetry` class (see `video_telemetry.py`). As of
 [PEN-216](https://linear.app/pentagram-software/issue/PEN-216/refactor-videotelemetry-to-use-the-new-rpi-telemetry-module),
@@ -236,7 +240,10 @@ PEN-166), which gives retry/backoff, HTTP 207 partial-failure handling, and disk
 buffering. `endpoint_url` must point at the `unifiedIngress` Cloud Function (PEN-227), and
 `api_key` must be a per-device token provisioned via
 `cloud/functions/setup-device-tokens.sh` — the legacy shared `telemetryIngestion` endpoint
-and static API key are no longer accepted:
+and static API key are no longer accepted. On deploy, `make deploy-edge` /
+`write-pi-telemetry-env.sh` write `edge/monitoring/system-metrics.env`, which the
+UDP streamer loads so health ticks share the same device token as the host
+metrics collector (PEN-192):
 
 ```python
 from video_telemetry import VideoTelemetry
@@ -252,12 +259,12 @@ streamer = UDPVideoStreamer(
     host='0.0.0.0',
     port=9999,
     telemetry=tel,
-    # monitoring_path="/custom/path/video_stream.prom",  # optional override
 )
 streamer.start_streaming()
 ```
 
-BigQuery views for querying video stream events are defined in `cloud/bigquery/schemas/views.sql`.
+BigQuery views for querying video stream lifecycle events are defined in
+`cloud/bigquery/schemas/views.sql`.
 
 ## 🔧 Configuration
 
