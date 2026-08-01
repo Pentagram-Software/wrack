@@ -90,15 +90,17 @@ When ready to implement, run /opsx:apply
 
    b. **Parse tasks.md**: read the file just written. It's structured as `## N. Group Name` headings followed by `- [ ] N.M Task description` checkboxes (see the tasks artifact's own format rules). Extract each group heading and its ordered list of tasks.
 
-   c. **Create one Linear issue per task group** via `mcp__claude_ai_Linear__save_issue` (omit `id` to create; pass `team` and `project` from step 5.a — both required), titled after the group heading (e.g. "1. GCP Infrastructure (fresh build)"), with a description noting it was generated from `<changeRoot>/tasks.md` for change `<name>`.
+      **Idempotency guard**: a heading or task line may already carry a trailing `<!-- linear:XXX -->` annotation from a prior sync (propose re-run, or resumed after a crash mid-loop). Note which headings/tasks are already annotated — never create a duplicate Linear issue for something that already has one.
 
-   d. **Create one Linear sub-issue per task** via `mcp__claude_ai_Linear__save_issue` (omit `id` to create; pass `team` and `project` from step 5.a, and `parentId` set to the group's issue from step 5.c), titled with the task's own description (drop the `N.M` numeric prefix from the title, but keep the exact task ID in the issue description, e.g. "Task 2.3 — openspec/changes/<name>/tasks.md", so a task can be traced back to its checkbox and vice versa).
+   c. **For each group heading without a `<!-- linear:XXX -->` annotation**, create one Linear issue via `mcp__claude_ai_Linear__save_issue` (omit `id` to create; pass `team` and `project` from step 5.a — both required), titled after the group heading (e.g. "1. GCP Infrastructure (fresh build)"), with a description noting it was generated from `<changeRoot>/tasks.md` for change `<name>`. **Then append the created issue's identifier as a trailing HTML comment on the heading line itself** (e.g. `## 1. GCP Infrastructure (fresh build) <!-- linear:PEN-230 -->`), so a re-run can find and reuse it instead of creating a second group issue. **If the heading is already annotated**, skip creating a group issue and reuse that annotation's id as `parentId` in step 5.d.
+
+   d. **For each task without a `<!-- linear:XXX -->` annotation**, create one Linear sub-issue via `mcp__claude_ai_Linear__save_issue` (omit `id` to create; pass `team` and `project` from step 5.a, and `parentId` set to the group's issue id — newly created or reused per step 5.c), titled with the task's own description (drop the `N.M` numeric prefix from the title, but keep the exact task ID in the issue description, e.g. "Task 2.3 — openspec/changes/<name>/tasks.md", so a task can be traced back to its checkbox and vice versa). **Tasks that already have an annotation are skipped entirely** — already synced, don't touch them or their checkbox line.
 
       **Then edit `tasks.md` itself** to append the created sub-issue's identifier as a trailing HTML comment on that same checkbox line, e.g.:
       ```
       - [ ] 2.3 Pick the detector to move forward with, based on the benchmark <!-- linear:PEN-231 -->
       ```
-      This is what `/opsx:apply` uses later to move the right issue to "In Progress" without re-searching Linear — do this for every task, not just a sample, and don't let it break the `- [ ] N.M ` checkbox parsing (`/opsx:apply` and `openspec status` must still recognize the line as the same task).
+      This is what `/opsx:apply` uses later to move the right issue to "In Progress" without re-searching Linear — do this for every newly-created task, not just a sample, and don't let it break the `- [ ] N.M ` checkbox parsing (`/opsx:apply` and `openspec status` must still recognize the line as the same task).
 
    e. **Report what was created**: a short summary (issue count per group) as part of the final output, not the full list of Linear URLs unless the user asks.
 
@@ -136,3 +138,4 @@ After completing all artifacts, summarize:
 - Verify each artifact file exists after writing before proceeding to next
 - Never guess a Linear project when resolving step 5.a — ask if it's ambiguous
 - The Linear sync in step 5 must not block or fail the OpenSpec artifact creation itself — if Linear sync errors out, report the error clearly but leave the already-written OpenSpec files intact
+- Never create a duplicate Linear issue for a group heading or task that already has a `<!-- linear:XXX -->` annotation — re-running propose, or resuming after a crash mid-sync, must be safe
