@@ -1,7 +1,7 @@
 ---
 name: "OPSX: Propose"
 description: Propose a new change - create it and generate all artifacts in one step
-allowed-tools: Bash(openspec:*), mcp__claude_ai_Linear__list_projects, mcp__claude_ai_Linear__get_project, mcp__claude_ai_Linear__create_issue, mcp__claude_ai_Linear__save_status_update
+allowed-tools: Bash(openspec:*), mcp__claude_ai_Linear__list_projects, mcp__claude_ai_Linear__get_project, mcp__claude_ai_Linear__save_issue, mcp__claude_ai_Linear__save_status_update
 category: Workflow
 tags: [workflow, artifacts, experimental]
 ---
@@ -90,9 +90,9 @@ When ready to implement, run /opsx:apply
 
    b. **Parse tasks.md**: read the file just written. It's structured as `## N. Group Name` headings followed by `- [ ] N.M Task description` checkboxes (see the tasks artifact's own format rules). Extract each group heading and its ordered list of tasks.
 
-   c. **Create one Linear issue per task group**, titled after the group heading (e.g. "1. GCP Infrastructure (fresh build)"), with a description noting it was generated from `<changeRoot>/tasks.md` for change `<name>`.
+   c. **Create one Linear issue per task group** via `mcp__claude_ai_Linear__save_issue` (omit `id` to create), titled after the group heading (e.g. "1. GCP Infrastructure (fresh build)"), with a description noting it was generated from `<changeRoot>/tasks.md` for change `<name>`.
 
-   d. **Create one Linear sub-issue per task** within that group, as a child of the group's issue (`parentId`), titled with the task's own description (drop the `N.M` numeric prefix from the title, but keep the exact task ID in the issue description, e.g. "Task 2.3 — openspec/changes/<name>/tasks.md", so a task can be traced back to its checkbox and vice versa).
+   d. **Create one Linear sub-issue per task** via `mcp__claude_ai_Linear__save_issue` (omit `id` to create), within that group, as a child of the group's issue (`parentId`), titled with the task's own description (drop the `N.M` numeric prefix from the title, but keep the exact task ID in the issue description, e.g. "Task 2.3 — openspec/changes/<name>/tasks.md", so a task can be traced back to its checkbox and vice versa).
 
       **Then edit `tasks.md` itself** to append the created sub-issue's identifier as a trailing HTML comment on that same checkbox line, e.g.:
       ```
