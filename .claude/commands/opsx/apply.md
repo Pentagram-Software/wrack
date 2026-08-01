@@ -1,7 +1,7 @@
 ---
 name: "OPSX: Apply"
 description: Implement tasks from an OpenSpec change (Experimental)
-allowed-tools: Bash(openspec:*), mcp__claude_ai_Linear__save_issue, mcp__claude_ai_Linear__save_status_update
+allowed-tools: Bash(openspec:*), mcp__claude_ai_Linear__save_issue, mcp__claude_ai_Linear__get_issue, mcp__claude_ai_Linear__save_status_update
 category: Workflow
 tags: [workflow, artifacts, experimental]
 ---
@@ -91,7 +91,7 @@ Implement tasks from an OpenSpec change.
    - If all done: suggest archive
    - If paused: explain why and wait for guidance
 
-   **Also post a Linear project status update** (`mcp__claude_ai_Linear__save_status_update`, `type: "project"`) summarizing what was implemented and what's next — at natural stopping points (a task group/phase completes, or this session ends with meaningful progress), not on every single task checkbox. Resolve the project from the `project` field already returned by step 6's `save_issue` calls (any one of this session's `linear:XXX`-linked tasks) — no extra lookup needed. If no task this session had a `linear:XXX` annotation (change wasn't proposed with Linear sync), skip this silently.
+   **Also post a Linear project status update** (`mcp__claude_ai_Linear__save_status_update`, `type: "project"`) summarizing what was implemented and what's next — at natural stopping points (a task group/phase completes, or this session ends with meaningful progress), not on every single task checkbox. Resolve the project from the `project` field already returned by step 6's `save_issue` calls (any one of this session's `linear:XXX`-linked tasks) where present. **If that response omits or has a sparse `project` field**, fall back to `mcp__claude_ai_Linear__get_issue` on the same issue id to retrieve it explicitly. If no task this session had a `linear:XXX` annotation (change wasn't proposed with Linear sync), skip this silently.
 
 **Output During Implementation**
 
