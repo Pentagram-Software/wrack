@@ -44,6 +44,8 @@ Implement tasks from an OpenSpec change.
    - Task list with status
    - Dynamic instruction based on current state
 
+   **Note**: each task's `description` includes any trailing `<!-- linear:XXX -->` annotation verbatim (it's part of the raw checkbox line `/opsx:propose` wrote) — that's metadata for this skill's own use in step 6, not something to show the user. Strip it before displaying a task description anywhere (progress overview, "working on task N" lines, completion summaries).
+
    **Handle states:**
    - If `state: "blocked"` (missing artifacts): show message, suggest using `/opsx:continue`
    - If `state: "all_done"`: congratulate, suggest archive
@@ -67,7 +69,7 @@ Implement tasks from an OpenSpec change.
 6. **Implement tasks (loop until done or blocked)**
 
    For each pending task:
-   - Show which task is being worked on
+   - Show which task is being worked on — with the `<!-- linear:XXX -->` annotation stripped from the displayed description (see step 3's note)
    - **If the task's line has a trailing `<!-- linear:XXX -->` comment** (added by `/opsx:propose`'s Linear sync — see that skill's step 5.d), call `mcp__claude_ai_Linear__save_issue` with `id: XXX, state: "In Progress"` **before** starting the code changes, so Linear reflects work-in-progress in real time rather than after the fact. If the task has no such comment (change wasn't proposed with Linear sync, or a task was added by hand), skip this silently for that task — don't block or warn per-task, just proceed with implementation.
    - Make the code changes required
    - Keep changes minimal and focused
