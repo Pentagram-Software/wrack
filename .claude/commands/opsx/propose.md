@@ -86,13 +86,13 @@ When ready to implement, run /opsx:apply
 
    This runs once, right after `tasks.md` is written (see 4.a). Skip entirely if the change has no `tasks.md` (shouldn't normally happen, since `tasks` is required for apply-readiness).
 
-   a. **Resolve the Linear project**: match the change's subject matter (from `proposal.md`'s "Why"/"What Changes", or the change name itself) against `mcp__claude_ai_Linear__list_projects`. If there's one clear, confident match, use it. If there's no match or more than one plausible candidate, use **AskUserQuestion** to ask which Linear project this change belongs to — never guess silently, and never skip the sync silently either.
+   a. **Resolve the Linear project and team**: match the change's subject matter (from `proposal.md`'s "Why"/"What Changes", or the change name itself) against `mcp__claude_ai_Linear__list_projects`. If there's one clear, confident match, use it. If there's no match or more than one plausible candidate, use **AskUserQuestion** to ask which Linear project this change belongs to — never guess silently, and never skip the sync silently either. Then resolve the project's team: `mcp__claude_ai_Linear__get_project` returns a `teams` array — `save_issue` requires `team` when creating an issue, so this must be resolved before step 5.c. If the project belongs to more than one team, use **AskUserQuestion** to ask which team rather than picking arbitrarily.
 
    b. **Parse tasks.md**: read the file just written. It's structured as `## N. Group Name` headings followed by `- [ ] N.M Task description` checkboxes (see the tasks artifact's own format rules). Extract each group heading and its ordered list of tasks.
 
-   c. **Create one Linear issue per task group** via `mcp__claude_ai_Linear__save_issue` (omit `id` to create), titled after the group heading (e.g. "1. GCP Infrastructure (fresh build)"), with a description noting it was generated from `<changeRoot>/tasks.md` for change `<name>`.
+   c. **Create one Linear issue per task group** via `mcp__claude_ai_Linear__save_issue` (omit `id` to create; pass `team` and `project` from step 5.a — both required), titled after the group heading (e.g. "1. GCP Infrastructure (fresh build)"), with a description noting it was generated from `<changeRoot>/tasks.md` for change `<name>`.
 
-   d. **Create one Linear sub-issue per task** via `mcp__claude_ai_Linear__save_issue` (omit `id` to create), within that group, as a child of the group's issue (`parentId`), titled with the task's own description (drop the `N.M` numeric prefix from the title, but keep the exact task ID in the issue description, e.g. "Task 2.3 — openspec/changes/<name>/tasks.md", so a task can be traced back to its checkbox and vice versa).
+   d. **Create one Linear sub-issue per task** via `mcp__claude_ai_Linear__save_issue` (omit `id` to create; pass `team` and `project` from step 5.a, and `parentId` set to the group's issue from step 5.c), titled with the task's own description (drop the `N.M` numeric prefix from the title, but keep the exact task ID in the issue description, e.g. "Task 2.3 — openspec/changes/<name>/tasks.md", so a task can be traced back to its checkbox and vice versa).
 
       **Then edit `tasks.md` itself** to append the created sub-issue's identifier as a trailing HTML comment on that same checkbox line, e.g.:
       ```
