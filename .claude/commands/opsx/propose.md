@@ -1,7 +1,7 @@
 ---
 name: "OPSX: Propose"
 description: Propose a new change - create it and generate all artifacts in one step
-allowed-tools: Bash(openspec:*), mcp__claude_ai_Linear__list_projects, mcp__claude_ai_Linear__get_project, mcp__claude_ai_Linear__save_issue, mcp__claude_ai_Linear__save_status_update
+allowed-tools: Bash(openspec:*), mcp__claude_ai_Linear__list_projects, mcp__claude_ai_Linear__get_project, mcp__claude_ai_Linear__get_issue, mcp__claude_ai_Linear__save_issue, mcp__claude_ai_Linear__save_status_update
 category: Workflow
 tags: [workflow, artifacts, experimental]
 ---
@@ -92,9 +92,13 @@ When ready to implement, run /opsx:apply
 
       **Idempotency guard**: a heading or task line may already carry a trailing `<!-- linear:XXX -->` annotation from a prior sync (propose re-run, or resumed after a crash mid-loop). Note which headings/tasks are already annotated — never create a duplicate Linear issue for something that already has one.
 
-   c. **For each group heading without a `<!-- linear:XXX -->` annotation**, create one Linear issue via `mcp__claude_ai_Linear__save_issue` (omit `id` to create; pass `team` and `project` from step 5.a — both required), titled after the group heading (e.g. "1. GCP Infrastructure (fresh build)"), with a description noting it was generated from `<changeRoot>/tasks.md` for change `<name>`. **Then append the created issue's identifier as a trailing HTML comment on the heading line itself** (e.g. `## 1. GCP Infrastructure (fresh build) <!-- linear:PEN-230 -->`), so a re-run can find and reuse it instead of creating a second group issue. **If the heading is already annotated**, skip creating a group issue and reuse that annotation's id as `parentId` in step 5.d.
+   c. **Resolve each group's parent issue** — three cases, in priority order (never create a second parent for a group that already has one, however it was recorded):
 
-   d. **For each task without a `<!-- linear:XXX -->` annotation**, create one Linear sub-issue via `mcp__claude_ai_Linear__save_issue` (omit `id` to create; pass `team` and `project` from step 5.a, and `parentId` set to the group's issue id — newly created or reused per step 5.c), titled with the task's own description (drop the `N.M` numeric prefix from the title, but keep the exact task ID in the issue description, e.g. "Task 2.3 — openspec/changes/<name>/tasks.md", so a task can be traced back to its checkbox and vice versa). **Tasks that already have an annotation are skipped entirely** — already synced, don't touch them or their checkbox line.
+      1. **Heading already annotated** (`<!-- linear:XXX -->` on the `## N.` line itself): reuse that id as `parentId` for step 5.d — no lookup needed.
+      2. **Heading unannotated, but ≥1 task under it is already annotated**: this group was synced before heading annotation existed (or by an older propose run). Call `mcp__claude_ai_Linear__get_issue` on any one of that group's already-annotated tasks and read its `parentId` — that's the existing group issue. Reuse it as `parentId` for step 5.d, and **backfill the heading line** with that same id as a `<!-- linear:XXX -->` annotation, so later runs hit case 1 instead of repeating this lookup.
+      3. **Heading unannotated, no tasks under it annotated**: create one Linear issue via `mcp__claude_ai_Linear__save_issue` (omit `id` to create; pass `team` and `project` from step 5.a — both required), titled after the group heading (e.g. "1. GCP Infrastructure (fresh build)"), with a description noting it was generated from `<changeRoot>/tasks.md` for change `<name>`. Then append the created issue's identifier as a trailing HTML comment on the heading line itself (e.g. `## 1. GCP Infrastructure (fresh build) <!-- linear:PEN-230 -->`).
+
+   d. **For each task without a `<!-- linear:XXX -->` annotation**, create one Linear sub-issue via `mcp__claude_ai_Linear__save_issue` (omit `id` to create; pass `team` and `project` from step 5.a, and `parentId` set to the group's issue id resolved in step 5.c — whichever of the three cases applied), titled with the task's own description (drop the `N.M` numeric prefix from the title, but keep the exact task ID in the issue description, e.g. "Task 2.3 — openspec/changes/<name>/tasks.md", so a task can be traced back to its checkbox and vice versa). **Tasks that already have an annotation are skipped entirely** — already synced, don't touch them or their checkbox line.
 
       **Then edit `tasks.md` itself** to append the created sub-issue's identifier as a trailing HTML comment on that same checkbox line, e.g.:
       ```
