@@ -104,7 +104,7 @@ When ready to implement, run /opsx:apply
 
    e. **Report what was created**: a short summary (issue count per group) as part of the final output, not the full list of Linear URLs unless the user asks.
 
-   f. **Also post a project status update** (`mcp__claude_ai_Linear__save_status_update`, `type: "project"`) on the same Linear project, summarizing the proposal (why, key decisions, what's still open) — this applies regardless of whether task-sync in 5.a-e succeeded, since the proposal itself is worth reflecting even if, e.g., the project match needed clarification.
+   f. **Also post a project status update** (`mcp__claude_ai_Linear__save_status_update`, `type: "project"`) on the same Linear project, summarizing the proposal (why, key decisions, what's still open) — post this once a project is known from step 5.a, even if issue creation in 5.b-e partially failed afterward, since the proposal itself is worth reflecting. If step 5.a's project resolution never completed (still ambiguous, or the user didn't answer), there is no valid project to post to — skip this step entirely rather than guessing.
 
 6. **Show final status**
    ```bash
