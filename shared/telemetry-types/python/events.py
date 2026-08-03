@@ -35,6 +35,7 @@ EventType = Literal[
     "video_stream_start",
     "video_stream_stop",
     "video_stream_health",
+    "cat_detection",
 ]
 
 VALID_EVENT_TYPES: List[str] = [
@@ -51,6 +52,7 @@ VALID_EVENT_TYPES: List[str] = [
     "video_stream_start",
     "video_stream_stop",
     "video_stream_health",
+    "cat_detection",
 ]
 
 # Coarse routing discriminator for the unified ingress (PEN-227): "health"
@@ -171,6 +173,17 @@ try:
         uptime_seconds: float       # required
         interval_seconds: Optional[float]
 
+    class CatDetectionPayload(TypedDict, total=False):
+        event_start_time: str       # required — ISO 8601 UTC
+        event_end_time: Optional[str]
+        predicted_identity: str     # required — "ryfka" | "chaja" | "lea" | "unknown"
+        final_identity: str         # required — "ryfka" | "chaja" | "lea" | "unknown"
+        detection_confidence: float # required, 0-1
+        identification_confidence: Optional[float]  # 0-1, or None if identification did not run
+        device_id: str              # required
+        model_version: str          # required
+        pipeline_version: str       # required
+
 except ImportError:
     # MicroPython fallback — TypedDict is not available; use plain dicts
     TelemetryEventEnvelope = dict       # type: ignore[misc, assignment]
@@ -183,6 +196,7 @@ except ImportError:
     VideoStreamStartPayload = dict      # type: ignore[misc, assignment]
     VideoStreamStopPayload = dict       # type: ignore[misc, assignment]
     VideoStreamHealthPayload = dict     # type: ignore[misc, assignment]
+    CatDetectionPayload = dict          # type: ignore[misc, assignment]
 
 
 # ---------------------------------------------------------------------------
