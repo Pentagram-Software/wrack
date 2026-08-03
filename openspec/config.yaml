@@ -10,11 +10,12 @@ context: |
   Telemetry ingress: both EV3 and Raspberry Pi push to one unified Cloud Function
   (cloud/functions/ingress.js), which routes each record by a `type` field — `type=health` to
   Grafana Cloud (short-lived liveness/paging), `type=event` to BigQuery via bigquery-client.js's
-  insertEvents() (long-lived analytics). New event types are additive: one enum value in
-  event_envelope.json plus a new payload schema, no changes needed to the ingress or BigQuery
-  table itself, since both are already generic across event types. See
-  docs/monitoring/scope-boundary.md for which system owns a given metric/event, and
-  docs/monitoring/architecture.md for the full transport picture.
+  insertEvents() (long-lived analytics). New event types are additive: no changes needed to the
+  ingress or BigQuery table itself, since both are already generic across event types — but the
+  event_type enum is independently hardcoded in four places that must all learn a new value
+  together (see the `tasks:` rule below for the exact list); missing one passes some validators
+  and silently fails others. See docs/monitoring/scope-boundary.md for which system owns a given
+  metric/event, and docs/monitoring/architecture.md for the full transport picture.
 
   robot/controller/ runs on Pybricks MicroPython, not CPython — any change touching that tree
   (or code imported into it) must be checked for MicroPython compatibility (no PEP 526
