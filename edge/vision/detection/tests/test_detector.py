@@ -196,3 +196,23 @@ class TestCatDetector:
 
         assert result.present is True
         assert result.confidence == pytest.approx(0.85)
+
+    def test_confidence_threshold_defaults_without_env_var(self):
+        rows = np.stack([_yolov8_row(COCO_CAT_CLASS_ID, 0.9)])
+        outputs = [rows.transpose(1, 0)[np.newaxis, ...]]
+        detector, _ = self._make_detector(outputs)
+        assert detector.confidence_threshold == 0.5
+
+    def test_confidence_threshold_reads_env_var(self, monkeypatch):
+        monkeypatch.setenv("CAT_DETECTION_CONFIDENCE_THRESHOLD", "0.75")
+        rows = np.stack([_yolov8_row(COCO_CAT_CLASS_ID, 0.9)])
+        outputs = [rows.transpose(1, 0)[np.newaxis, ...]]
+        detector, _ = self._make_detector(outputs)
+        assert detector.confidence_threshold == pytest.approx(0.75)
+
+    def test_explicit_confidence_threshold_wins_over_env_var(self, monkeypatch):
+        monkeypatch.setenv("CAT_DETECTION_CONFIDENCE_THRESHOLD", "0.75")
+        rows = np.stack([_yolov8_row(COCO_CAT_CLASS_ID, 0.9)])
+        outputs = [rows.transpose(1, 0)[np.newaxis, ...]]
+        detector, _ = self._make_detector(outputs, confidence_threshold=0.2)
+        assert detector.confidence_threshold == pytest.approx(0.2)

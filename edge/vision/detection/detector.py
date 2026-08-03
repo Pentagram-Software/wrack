@@ -19,12 +19,18 @@ without the Pi's inference runtime installed.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 from .coco import Detection, filter_to_cat
+
+#: Default minimum per-class confidence to keep a raw detection, used when
+#: neither an explicit constructor arg nor the CAT_DETECTION_CONFIDENCE_THRESHOLD
+#: env var is set.
+DEFAULT_CONFIDENCE_THRESHOLD = 0.5
 
 
 @dataclass(frozen=True)
@@ -150,7 +156,11 @@ class CatDetector:
         ``(width, height)`` the model expects. Defaults to ``(640, 640)``.
     confidence_threshold:
         Minimum per-class confidence to keep a raw detection before cat
-        filtering and NMS.
+        filtering and NMS. Falls back to the CAT_DETECTION_CONFIDENCE_THRESHOLD
+        environment variable, then DEFAULT_CONFIDENCE_THRESHOLD, matching the
+        env-var-configurable convention established by
+        ``events.lifecycle.LifecycleConfig`` (PRD §8/§12 requires this
+        threshold be externally configurable, not hardcoded).
     session_factory:
         Builds the ONNX Runtime session from ``model_path``. Defaults to a
         real ``onnxruntime.InferenceSession`` (imported lazily, so this
@@ -164,7 +174,7 @@ class CatDetector:
         *,
         decode_fn: DecodeFn = decode_yolov8_output,
         input_size: Tuple[int, int] = (640, 640),
-        confidence_threshold: float = 0.5,
+        confidence_threshold: Optional[float] = None,
         session_factory: Optional[Callable[[str], object]] = None,
     ) -> None:
         session_factory = session_factory or self._default_session_factory
@@ -172,7 +182,11 @@ class CatDetector:
         self._input_name = self._session.get_inputs()[0].name
         self.decode_fn = decode_fn
         self.input_size = input_size
-        self.confidence_threshold = confidence_threshold
+        self.confidence_threshold = (
+            confidence_threshold
+            if confidence_threshold is not None
+            else float(os.environ.get("CAT_DETECTION_CONFIDENCE_THRESHOLD", DEFAULT_CONFIDENCE_THRESHOLD))
+        )
 
     @staticmethod
     def _default_session_factory(model_path: str):

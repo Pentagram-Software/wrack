@@ -123,6 +123,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--detector-model", required=True)
     parser.add_argument("--decoder", choices=DECODERS.keys(), default="yolov8")
+    parser.add_argument(
+        "--confidence-threshold",
+        type=float,
+        default=None,
+        help="Detection confidence threshold; falls back to CAT_DETECTION_CONFIDENCE_THRESHOLD env var, then 0.5",
+    )
     parser.add_argument("--embedding-model", help="Phase 2 only — enables identification")
     parser.add_argument("--prototypes", help="Phase 2 only — prototypes.json from enroll.py")
     parser.add_argument("--video-source", required=True, help="Camera index (e.g. 0) or video file path")
@@ -143,7 +149,11 @@ def main() -> None:
     if bool(args.embedding_model) != bool(args.prototypes):
         parser.error("--embedding-model and --prototypes must be given together (Phase 2) or not at all")
 
-    detector = CatDetector(args.detector_model, decode_fn=DECODERS[args.decoder])
+    detector = CatDetector(
+        args.detector_model,
+        decode_fn=DECODERS[args.decoder],
+        confidence_threshold=args.confidence_threshold,
+    )
 
     embedding_backbone = None
     identifier = None
