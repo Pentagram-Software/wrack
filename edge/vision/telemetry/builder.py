@@ -117,3 +117,95 @@ def build_vision_detection_event(
 
     validate_event(event)
     return event
+
+
+def build_cat_detection_event(
+    event_start_time: str,
+    event_end_time: Optional[str],
+    detection_confidence: float,
+    device_id: str,
+    model_version: str,
+    pipeline_version: str,
+    *,
+    predicted_identity: str = "unknown",
+    final_identity: str = "unknown",
+    identification_confidence: Optional[float] = None,
+    event_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    source: str = "rpi",
+) -> Dict[str, Any]:
+    """Build and validate a ``cat_detection`` event envelope (PEN-193).
+
+    Emitted once per confirmed cat event, at close (see
+    :mod:`edge.vision.events.lifecycle`). Phase 1 callers omit
+    ``predicted_identity``/``final_identity``/``identification_confidence``,
+    leaving the Phase-1 defaults (``"unknown"`` / ``"unknown"`` / ``None``)
+    in place; Phase 2 passes the real identification output once wired in
+    (task 7.1).
+
+    Parameters
+    ----------
+    event_start_time, event_end_time:
+        ISO 8601 UTC timestamps bounding the confirmed event. ``event_end_time``
+        may be ``None`` if this is ever called before the event closes, though
+        V1 only calls it at close.
+    detection_confidence:
+        Detector confidence for the frame that confirmed this event, in [0, 1].
+    device_id, model_version, pipeline_version:
+        See ``cat_detection.json`` — required, non-empty strings.
+    predicted_identity, final_identity:
+        One of ``ryfka``, ``chaja``, ``lea``, ``unknown``. Both default to
+        ``"unknown"`` for Phase 1, where no identification model runs.
+    identification_confidence:
+        In [0, 1], or ``None`` (Phase 1 default) when identification did not
+        run for this event.
+    event_id:
+        Explicit event id for stable retries — see
+        :func:`edge.vision.telemetry.sender.RpiTelemetrySender`'s reuse of
+        ``event_id`` as the BigQuery streaming-insert dedup key. Defaults to
+        a freshly generated UUID v4 when not provided; callers that need to
+        rebuild the *same* event dict across retry attempts (rather than
+        keeping the first-built dict in memory) should pass the id from the
+        first build explicitly.
+    session_id:
+        Optional envelope field, forwarded verbatim when provided.
+    source:
+        Event source string. Defaults to ``"rpi"``.
+
+    Returns
+    -------
+    dict
+        A validated telemetry event envelope, with ``type`` explicitly set
+        to ``"event"`` so the unified ingress (PEN-227) routes it to
+        BigQuery rather than the Grafana/health leg.
+
+    Raises
+    ------
+    ValidationError
+        If the constructed event fails schema validation.
+    """
+    payload: Dict[str, Any] = {
+        "event_start_time": event_start_time,
+        "event_end_time": event_end_time,
+        "predicted_identity": predicted_identity,
+        "final_identity": final_identity,
+        "detection_confidence": detection_confidence,
+        "identification_confidence": identification_confidence,
+        "device_id": device_id,
+        "model_version": model_version,
+        "pipeline_version": pipeline_version,
+    }
+
+    event: Dict[str, Any] = {
+        "event_id": event_id if event_id is not None else str(uuid.uuid4()),
+        "event_type": "cat_detection",
+        "source": source,
+        "timestamp": _utc_now_iso(),
+        "device_id": device_id,
+        "session_id": session_id,
+        "type": "event",
+        "payload": payload,
+    }
+
+    validate_event(event)
+    return event

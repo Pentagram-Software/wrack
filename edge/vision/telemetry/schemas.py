@@ -46,6 +46,7 @@ VALID_EVENT_TYPES = [
     "error",
     "vision_detection",
     "system_metrics",
+    "cat_detection",
 ]
 
 VALID_DEVICE_STATUSES = [
@@ -58,6 +59,10 @@ VALID_STREAM_PROTOCOLS = ["udp", "tcp", "http"]
 
 #: PEN-169 creature-category taxonomy for ``vision_detection`` detections.
 VALID_CREATURE_CATEGORIES = ["person", "animal", "unknown_living", "not_living"]
+
+#: PEN-193 known-cat identities for ``cat_detection`` events, plus the
+#: below-threshold/no-identification-yet fallback.
+VALID_CAT_IDENTITIES = ["ryfka", "chaja", "lea", "unknown"]
 
 # UUID v4 pattern
 _UUID_RE = re.compile(
@@ -394,6 +399,72 @@ def _validate_vision_detection_payload(payload: Any) -> List[str]:
     return errors
 
 
+def _validate_cat_detection_payload(payload: Any) -> List[str]:
+    """Validate a ``cat_detection`` payload (PEN-193 spec, mirrors
+    ``shared/telemetry-types/schemas/cat_detection.json``).
+
+    ``identification_confidence`` is nullable (not merely optional): Phase 1
+    always sends the key with value ``None`` since no identification model
+    runs yet, distinguishing "not attempted" from a real zero-confidence
+    result once Phase 2 wires identification in.
+    """
+    errors = []
+    if not isinstance(payload, dict):
+        return ["cat_detection payload must be a dict"]
+
+    event_start_time = payload.get("event_start_time")
+    if not isinstance(event_start_time, str) or not _ISO8601_RE.match(event_start_time):
+        errors.append(
+            "payload.event_start_time must be an ISO 8601 UTC string ending in Z"
+        )
+
+    event_end_time = payload.get("event_end_time")
+    if event_end_time is not None:
+        if not isinstance(event_end_time, str) or not _ISO8601_RE.match(event_end_time):
+            errors.append(
+                "payload.event_end_time must be an ISO 8601 UTC string ending in Z, or null"
+            )
+
+    for field in ("predicted_identity", "final_identity"):
+        value = payload.get(field)
+        if value not in VALID_CAT_IDENTITIES:
+            errors.append(
+                "payload.{} must be one of: {}".format(field, ", ".join(VALID_CAT_IDENTITIES))
+            )
+
+    detection_confidence = payload.get("detection_confidence")
+    if (
+        not isinstance(detection_confidence, (int, float))
+        or isinstance(detection_confidence, bool)
+        or not (0 <= detection_confidence <= 1)
+    ):
+        errors.append("payload.detection_confidence must be a number between 0 and 1")
+
+    if "identification_confidence" not in payload:
+        errors.append("payload.identification_confidence is required (may be null)")
+    else:
+        identification_confidence = payload["identification_confidence"]
+        if identification_confidence is not None and (
+            not isinstance(identification_confidence, (int, float))
+            or isinstance(identification_confidence, bool)
+            or not (0 <= identification_confidence <= 1)
+        ):
+            errors.append(
+                "payload.identification_confidence must be a number between 0 and 1, or null"
+            )
+
+    device_id = payload.get("device_id")
+    if not isinstance(device_id, str) or not device_id.strip():
+        errors.append("payload.device_id must be a non-empty string")
+
+    for field in ("model_version", "pipeline_version"):
+        value = payload.get(field)
+        if not isinstance(value, str) or not value.strip():
+            errors.append("payload.{} must be a non-empty string".format(field))
+
+    return errors
+
+
 _PAYLOAD_VALIDATORS = {
     "video_stream_start": _validate_video_stream_start_payload,
     "video_stream_stop": _validate_video_stream_stop_payload,
@@ -403,6 +474,7 @@ _PAYLOAD_VALIDATORS = {
     "error": _validate_error_payload,
     "vision_detection": _validate_vision_detection_payload,
     "system_metrics": _validate_system_metrics_payload,
+    "cat_detection": _validate_cat_detection_payload,
 }
 
 # ---------------------------------------------------------------------------
