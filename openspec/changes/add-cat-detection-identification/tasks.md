@@ -13,7 +13,7 @@
 - [ ] 2.1 Implement 3-consecutive-frame event confirmation (no event on isolated/unconfirmed single-frame detections) <!-- linear:PEN-243 -->
 - [ ] 2.2 Implement active-event state that persists while cat presence continues <!-- linear:PEN-244 -->
 - [ ] 2.3 Implement the configurable absence cooldown that ends an event and allows a new one to start <!-- linear:PEN-245 -->
-- [ ] 2.4 Make FPS, confirmation frame count, and cooldown duration externally configurable (not hardcoded), per PRD §8 <!-- linear:PEN-246 -->
+- [ ] 2.4 Make FPS, confirmation frame count, cooldown duration, and detection confidence threshold externally configurable (not hardcoded), per PRD §8 / §12 — the identity confidence threshold (a separate knob) is covered by task 6.5 <!-- linear:PEN-246 -->
 
 ## 3. Cloud Ingestion
 
