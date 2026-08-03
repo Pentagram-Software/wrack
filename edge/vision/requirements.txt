@@ -1,0 +1,16 @@
+# edge/vision/ runtime dependencies (PEN-193)
+#
+# Detection (detection/detector.py) and identification (identification/embeddings.py)
+# both run ONNX models via ONNX Runtime CPU. opencv-python is already an edge/video-streamer/
+# dependency; listed here too since edge/vision/ is deployed and imported independently.
+
+onnxruntime>=1.17.0
+numpy>=1.24.0
+opencv-python>=4.8.0
+
+# Optional: detection/benchmark.py reads CPU%/memory via psutil when available (degrades
+# gracefully without it, same isolation pattern as edge/monitoring/system_metrics_collector.py).
+psutil>=5.9.0
+
+# Testing
+pytest>=7.4.0

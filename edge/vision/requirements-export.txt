@@ -1,0 +1,12 @@
+# Model-export-time dependencies (PEN-193) — install on your DEV MACHINE, not the Pi.
+#
+# Used by detection/export_model.py and identification/export_model.py to produce the .onnx
+# files edge/vision/requirements.txt's runtime stack (onnxruntime) actually loads on the Pi.
+# Kept separate from requirements.txt because torch/ultralytics are heavy, CPU/GPU-hungry
+# ML frameworks with no reason to be installed on deployed Pi hardware — see design.md's
+# "Training happens locally, not in the cloud, for V1" decision.
+
+ultralytics>=8.0.0    # detection/export_model.py — yolov8n/yolov5n -> ONNX
+torch>=2.0.0          # identification/export_model.py — MobileNetV3-Small -> ONNX
+torchvision>=0.15.0
+onnxruntime>=1.17.0   # optional: enables export_model.py's output-shape verification step
