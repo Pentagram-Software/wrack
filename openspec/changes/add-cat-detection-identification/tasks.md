@@ -1,0 +1,71 @@
+# Phase 1 — Generic Cat Detection (no per-cat identity)
+
+## 1. Detection
+
+- [x] 1.1 Select 1-2 candidate pretrained, COCO-class ONNX object detectors and filter to the "cat" class <!-- linear:PEN-238 -->
+- [ ] 1.2 Benchmark each candidate on the Pi 5 (FPS, CPU%, memory, thermal) while the video streamer is also running, per `edge/vision/README.md`'s Phase 1 milestone <!-- linear:PEN-239 -->
+- [ ] 1.3 Pick the detector to move forward with, based on the benchmark <!-- linear:PEN-240 -->
+- [ ] 1.4 Wire the detector into a Pi-side inference loop reading frames from `edge/video-streamer/`'s existing capture path, at a configurable FPS (default 3) — inference loop machinery done (`pipeline.py`), but the actual tap into `edge/video-streamer/`'s live capture path is not wired up; see `pipeline.py`'s module docstring <!-- linear:PEN-241 -->
+- [x] 1.5 Produce, per evaluated frame, a detection result (presence/absence, confidence, crop when present) <!-- linear:PEN-242 -->
+
+## 2. Event Lifecycle
+
+- [x] 2.1 Implement 3-consecutive-frame event confirmation (no event on isolated/unconfirmed single-frame detections) <!-- linear:PEN-243 -->
+- [x] 2.2 Implement active-event state that persists while cat presence continues <!-- linear:PEN-244 -->
+- [x] 2.3 Implement the configurable absence cooldown that ends an event and allows a new one to start <!-- linear:PEN-245 -->
+- [x] 2.4 Make FPS, confirmation frame count, and cooldown duration externally configurable (not hardcoded), per PRD §8 <!-- linear:PEN-246 -->
+
+## 3. Cloud Ingestion
+
+- [x] 3.1 Add a `cat_detection` entry to `shared/telemetry-types/schemas/event_envelope.json`'s `event_type` enum <!-- linear:PEN-247 -->
+- [x] 3.2 Create `shared/telemetry-types/schemas/cat_detection.json` covering the required fields (timestamps, predicted/final identity, detection/identification confidence, device_id, model_version, pipeline_version); Phase 1 always emits `final_identity: "unknown"` since no identification model is wired in yet <!-- linear:PEN-248 -->
+- [x] 3.3 Wire confirmed-event emission through `edge/vision/telemetry/`'s existing event/sender machinery, tagged `type=event` <!-- linear:PEN-249 -->
+- [x] 3.4 Verify idempotency/deduplication behavior for retried or redelivered sends <!-- linear:PEN-250 -->
+- [ ] 3.5 Run an end-to-end test: a confirmed event on the Pi results in exactly one row in `wrack_telemetry.events` with `final_identity: "unknown"` and the expected fields — script written (`validation/e2e_ingestion_test.py`), not run (needs real Pi + deployed ingress + device token) <!-- linear:PEN-251 -->
+
+## 4. Phase 1 Integration Validation
+
+- [ ] 4.1 Run the Phase 1 pipeline (streamer + detection + event lifecycle + ingestion) on the Pi for an extended soak period and confirm no manual restarts are needed — harness written (`validation/soak_test.py`), not run <!-- linear:PEN-252 -->
+- [ ] 4.2 Spot-check false positive rate against the PRD §9 detection target, using real household observation <!-- linear:PEN-253 -->
+- [ ] 4.3 Confirm CPU/memory/thermal stay within acceptable bounds with the Phase 1 pipeline running <!-- linear:PEN-254 -->
+
+# Phase 2 — Identification (Ryfka / Chaja / Lea)
+
+## 5. GCP Infrastructure
+
+- [ ] 5.1 Create the three GCS buckets (`<project>-cat-recognizer-raw-data`, `-processed-data`, `-models`) with the `raw-data` bucket's 90-day lifecycle rule — scripted in `cloud/cat-recognizer/setup-infra.sh`, not run against real GCP <!-- linear:PEN-255 -->
+- [ ] 5.2 Create the `raw-data/{ryfka,chaja,lea}/` and `processed-data/{train,val,test}/` folder structure — scripted in `cloud/cat-recognizer/setup-infra.sh`, not run <!-- linear:PEN-256 -->
+- [ ] 5.3 Create two least-privilege service accounts (data-collector, trainer/export) with bucket-scoped IAM roles only — no Artifact Registry roles — scripted in `cloud/cat-recognizer/setup-infra.sh`, not run <!-- linear:PEN-257 -->
+- [ ] 5.4 Write a smoke test verifying each service account's expected read/write access per bucket — written (`cloud/cat-recognizer/smoke_test.py`), not run (depends on 5.1-5.3) <!-- linear:PEN-258 -->
+- [x] 5.5 Document the infra (README + IAM runbook), noting explicitly that this supersedes the unmerged `cursor/pen-24`/`cursor/pen-25` branches rather than building on them <!-- linear:PEN-259 -->
+
+## 6. Identification
+
+- [x] 6.1 Select a CPU-friendly, pretrained embedding backbone suitable for ARM64/ONNX Runtime <!-- linear:PEN-260 -->
+- [ ] 6.2 Benchmark the selected embedding backbone on the Pi 5 (per-crop inference latency, CPU%, memory), standalone and with the video streamer running, mirroring the detector benchmark in 1.2 — script written (`identification/benchmark.py`), not run <!-- linear:PEN-261 -->
+- [x] 6.3 Build an enrollment script/tool that takes a cat's reference photos and produces an averaged prototype embedding <!-- linear:PEN-262 -->
+- [ ] 6.4 Enroll Ryfka, Chaja, and Lea from the user's existing iPhone photos (15-50 per cat) — tool ready (`identification/enroll.py`), needs real photos this session doesn't have access to <!-- linear:PEN-263 -->
+- [x] 6.5 Implement distance-based identification (compare a detected crop's embedding to all enrolled prototypes) with a configurable confidence threshold <!-- linear:PEN-264 -->
+- [x] 6.6 Implement the `unknown` fallback (final identity `unknown` below threshold, while still recording the top predicted identity) <!-- linear:PEN-265 -->
+- [x] 6.7 Wire the identification backbone into the Pi-side inference loop, consuming detection crops from 1.4/1.5 and producing a per-frame identification result <!-- linear:PEN-266 -->
+- [ ] 6.8 Do a first-pass threshold sanity check using held-out enrollment photos (explicitly provisional — see design.md's open question on threshold validation) — script written (`identification/evaluate_threshold.py`), needs real photos <!-- linear:PEN-267 -->
+
+## 7. Wire Real Identity into the Event Pipeline
+
+- [x] 7.1 Replace the Phase 1 fixed `final_identity: "unknown"` with the real predicted/final identity and identification confidence from section 6, in the emitted event payload <!-- linear:PEN-268 -->
+- [ ] 7.2 Re-run the end-to-end ingestion test (3.5) confirming real identity values land correctly in `wrack_telemetry.events` — reuses `validation/e2e_ingestion_test.py`, not run <!-- linear:PEN-269 -->
+
+## 8. Phase 2 Integration Validation
+
+- [ ] 8.1 Run the full pipeline (streamer + detection + identification + event lifecycle + ingestion) on the Pi for an extended soak period and confirm no manual restarts are needed — reuses `validation/soak_test.py` with `--embedding-model`/`--prototypes`, not run <!-- linear:PEN-270 -->
+- [ ] 8.2 Spot-check known-cat identification accuracy against the PRD §9 targets, using real household observation <!-- linear:PEN-271 -->
+- [ ] 8.3 Confirm CPU/memory/thermal stay within acceptable bounds with the full pipeline running (not just the detector benchmark from 1.2 or the identifier benchmark from 6.2) <!-- linear:PEN-272 -->
+
+# Follow-on: Bootstrap Domain-Gap Closing (not required to ship V1, but designed for)
+
+## 9. Domain-Gap Bootstrap
+
+- [ ] 9.1 From live Pi detections, collect a small number of real camera-domain crops per known cat <!-- linear:PEN-273 -->
+- [ ] 9.2 Hand-label those crops with the correct identity <!-- linear:PEN-274 -->
+- [ ] 9.3 Enrich each cat's prototype with the labeled camera-domain crops, alongside the original iPhone photos <!-- linear:PEN-275 -->
+- [ ] 9.4 Re-check identification accuracy after enrichment <!-- linear:PEN-276 -->
