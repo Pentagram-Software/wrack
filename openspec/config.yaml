@@ -1,0 +1,40 @@
+schema: spec-driven
+
+context: |
+  Wrack is a monorepo spanning an EV3 robot (Python/pybricks-micropython firmware in
+  robot/controller/), a Raspberry Pi edge fleet (video streaming, system metrics, and vision/
+  analytics under edge/), GCP Cloud Functions bridging both to iOS/web clients, and shared
+  telemetry contracts in shared/telemetry-types/ (JSON Schema + Python + TypeScript, kept in
+  sync by hand across languages).
+
+  Telemetry ingress: both EV3 and Raspberry Pi push to one unified Cloud Function
+  (cloud/functions/ingress.js), which routes each record by a `type` field — `type=health` to
+  Grafana Cloud (short-lived liveness/paging), `type=event` to BigQuery via bigquery-client.js's
+  insertEvents() (long-lived analytics). New event types are additive: no changes needed to the
+  ingress or BigQuery table itself, since both are already generic across event types — but the
+  event_type enum is independently hardcoded in four places that must all learn a new value
+  together (see the `tasks:` rule below for the exact list); missing one passes some validators
+  and silently fails others. See docs/monitoring/scope-boundary.md for which system owns a given
+  metric/event, and docs/monitoring/architecture.md for the full transport picture.
+
+  robot/controller/ runs on Pybricks MicroPython, not CPython — any change touching that tree
+  (or code imported into it) must be checked for MicroPython compatibility (no PEP 526
+  non-simple-target annotations, no f-strings assumptions, partial stdlib modules, etc.), not
+  just validated against the desktop pytest suite. See CLAUDE.md's "MicroPython compatibility"
+  section for the full list of gotchas and the `make check-mpy` gate.
+
+  edge/ code runs on standard CPython (Raspberry Pi OS is full Linux) — none of the MicroPython
+  constraints above apply there.
+
+  All agent-generated changes go through a PR, never a direct commit to main.
+
+rules:
+  proposal:
+    - State explicitly which existing event types, capabilities, or infra a new change reuses
+      unchanged vs. adds/modifies — "Impact" sections in this repo are read as the source of
+      truth for what does NOT need touching.
+  tasks:
+    - When a task touches the shared telemetry event_type enum, name every package that
+      independently hardcodes it (JSON Schema, shared/telemetry-types/python, .../typescript,
+      and any edge-specific validator) — a partial update passes some validators and silently
+      fails others.
