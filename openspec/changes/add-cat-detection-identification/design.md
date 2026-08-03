@@ -57,6 +57,8 @@ A single model that both localizes and identifies would need retraining (or at l
 
 **Why**: `insertEvents()` and the `events` table are already fully generic across event types (JSON `payload` column, no per-type branching) — this is the same mechanism `video_stream_start`/`stop`/`health` already use. Building anything new here would duplicate working infrastructure. Per `docs/monitoring/scope-boundary.md`'s decision table, cat events are unambiguously Wrack Analytics (trend/historical value, not sub-second health/paging signals), so the existing `type=event` → BigQuery path is the correct destination, not the Grafana/health leg.
 
+**Emission cardinality**: exactly one event record per confirmed cat event occurrence, emitted once at the point the event ends (not a separate row at confirmation and another at close) — the record carries both the start time (from confirmation) and the end time together. A cat event that is confirmed but has not yet ended produces no emission.
+
 ### Retention: accept the existing 90-day table-wide expiration
 `wrack_telemetry.events` has `partition_expiration_days=90` set once, for the whole table — not configurable per `event_type`. The user confirmed 90 days is acceptable for cat events, so no special-casing (raising the table-wide expiration, or exporting cat events elsewhere before they age out) is needed for V1.
 
