@@ -12,11 +12,11 @@ The system SHALL emit exactly one event record per confirmed cat event occurrenc
 - **THEN** the record's `predicted_identity` and `final_identity` are both `unknown`, and `identification_confidence` is `null` (present but unset, distinguishing "not attempted" from a real zero-confidence result)
 
 ### Requirement: Required Event Fields
-Each emitted cat event record SHALL include, at minimum: event timestamp, event start time, event end time (when available), predicted identity, final identity, detection confidence, identification confidence, source device identifier, model version, pipeline version, and ingestion timestamp.
+Each emitted cat event record SHALL include, at minimum: event timestamp, event start time, event end time, predicted identity, final identity, detection confidence, identification confidence, source device identifier, model version, pipeline version, and ingestion timestamp. End time is required, not optional — per the Confirmed Event Emission requirement above, a record is only ever emitted once the event has ended, so a record with no end time cannot occur.
 
 #### Scenario: Emitted event contains required fields
 - **WHEN** a confirmed event record is emitted
-- **THEN** the record includes event timestamp, start time, end time (if available), predicted identity, final identity, detection confidence, identification confidence, device identifier, model version, and pipeline version
+- **THEN** the record includes event timestamp, start time, end time, predicted identity, final identity, detection confidence, identification confidence, device identifier, model version, and pipeline version
 
 ### Requirement: Stable Event Identity for Deduplication
 Each event occurrence SHALL be assigned one stable identifier, minted once and reused unchanged across every retry of the same occurrence, so that the shared BigQuery streaming-insert path's `insertId`-based deduplication (a best-effort window of roughly one minute, per `cloud/functions/bigquery-client.js`) can dedupe retried or redelivered sends of that occurrence. This requirement does not, by itself, guarantee zero duplicates outside that window — the target duplicate rate is the PRD §9 threshold, not "provably at most one row ever."
