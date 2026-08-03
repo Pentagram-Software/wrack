@@ -24,6 +24,7 @@ Only 15-50 photos per cat are available for identification (the user's own iPhon
 - Recognition of non-cat animals/objects, snapshots, alerts, human review workflows, auto-retraining, or multi-camera support (all explicitly deferred to PRD Phase 2).
 - Closing the iPhone-photo-to-Pi-camera domain gap within this change — that's a follow-on bootstrap step once the detector is live and can supply real camera-domain crops, not a V1 blocker.
 - Picking a specific detector architecture or embedding backbone in this document — those are implementation decisions made during the benchmark/prototyping tasks, not architectural commitments this design needs to lock in.
+- Tracking or reporting multiple simultaneous cats in one frame — when more than one is detected, only the single highest-confidence region is kept (see the cat-detection spec's "Per-Frame Detection Confidence" requirement); this also bounds what feeds into Phase 2 identification, since only that one crop is embedded and compared to prototypes.
 
 ## Decisions
 
