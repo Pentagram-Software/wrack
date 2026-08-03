@@ -31,7 +31,7 @@ None — this is a new OpenSpec-tracked area of the system; no existing specs ex
 ## Impact
 
 - **New code**: a new vision runtime under `edge/vision/` (detection + identification + pipeline orchestration), built on top of the existing `edge/vision/telemetry/` (PEN-166) event/sender machinery.
-- **New schema**: `shared/telemetry-types/schemas/cat_detection.json` (new payload schema) and one new `event_type` enum entry in `shared/telemetry-types/schemas/event_envelope.json`.
+- **New schema**: `shared/telemetry-types/schemas/cat_detection.json` (new payload schema) and one new `event_type` enum entry, added to every package that independently hardcodes that enum: `shared/telemetry-types/schemas/event_envelope.json`, `shared/telemetry-types/python/events.py`, `shared/telemetry-types/typescript/events.ts`, and `edge/vision/telemetry/schemas.py` — see design.md's "Cloud ingestion" decision.
 - **New infrastructure** (Phase 2 only): GCS buckets and service accounts for cat photo/model storage (fresh build, no dependency on prior unmerged branches).
 - **Reused, unchanged**: `edge/video-streamer/`'s camera capture path, the unified ingress Cloud Function, `bigquery-client.js`, and the `wrack_telemetry.events` table schema — none of these require code changes. The existing `vision_detection` (PEN-169) per-frame event type is also unchanged and continues to coexist alongside the new `cat_detection` type — see design.md.
 - **Out of scope for this change** (per PRD, deferred to PRD Phase 2 — a different, later phase than this change's internal Phase 2 above): recognition of non-cat animals/objects, image snapshots, alerts/notifications, human review workflows, auto-retraining, multi-camera support, and cloud-side inference on the primary runtime path.
