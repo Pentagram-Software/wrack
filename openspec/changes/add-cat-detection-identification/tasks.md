@@ -17,7 +17,7 @@
 
 ## 3. Cloud Ingestion
 
-- [ ] 3.1 Add a `cat_detection` entry to `shared/telemetry-types/schemas/event_envelope.json`'s `event_type` enum <!-- linear:PEN-247 -->
+- [ ] 3.1 Add a `cat_detection` entry to the `event_type` enum everywhere it's independently hardcoded: `shared/telemetry-types/schemas/event_envelope.json` (JSON Schema), `shared/telemetry-types/python/events.py` (`VALID_EVENT_TYPES`), `shared/telemetry-types/typescript/events.ts` (`EventType`), and `edge/vision/telemetry/schemas.py` (`VALID_EVENT_TYPES`) — plus matching test updates for each; `cloud/functions/telemetry.js`'s `validateEvent()` is loose on enum today so needs no change, but the shared/edge validators are strict and will reject the event otherwise even if the cloud ingress accepts it <!-- linear:PEN-247 -->
 - [ ] 3.2 Create `shared/telemetry-types/schemas/cat_detection.json` covering the required fields (timestamps, predicted/final identity, detection/identification confidence, device_id, model_version, pipeline_version); Phase 1 always emits `final_identity: "unknown"` since no identification model is wired in yet <!-- linear:PEN-248 -->
 - [ ] 3.3 Wire confirmed-event emission through `edge/vision/telemetry/`'s existing event/sender machinery, tagged `type=event` <!-- linear:PEN-249 -->
 - [ ] 3.4 Verify idempotency/deduplication behavior for retried or redelivered sends <!-- linear:PEN-250 -->
