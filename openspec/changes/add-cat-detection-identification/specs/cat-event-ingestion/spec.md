@@ -18,12 +18,12 @@ Each emitted cat event record SHALL include, at minimum: event timestamp, event 
 - **WHEN** a confirmed event record is emitted
 - **THEN** the record includes event timestamp, start time, end time (if available), predicted identity, final identity, detection confidence, identification confidence, device identifier, model version, and pipeline version
 
-### Requirement: Idempotent, Deduplicated Delivery
-Event emission SHALL be idempotent or deduplicated such that transient retries or redeliveries do not result in duplicate stored events for the same underlying occurrence.
+### Requirement: Stable Event Identity for Deduplication
+Each event occurrence SHALL be assigned one stable identifier, minted once and reused unchanged across every retry of the same occurrence, so that the shared BigQuery streaming-insert path's `insertId`-based deduplication (a best-effort window of roughly one minute, per `cloud/functions/bigquery-client.js`) can dedupe retried or redelivered sends of that occurrence. This requirement does not, by itself, guarantee zero duplicates outside that window — the target duplicate rate is the PRD §9 threshold, not "provably at most one row ever."
 
-#### Scenario: Retried delivery does not duplicate a stored event
-- **WHEN** the same confirmed event is submitted more than once due to a retried or redelivered send
-- **THEN** at most one corresponding event is stored
+#### Scenario: Retried delivery within the dedupe window does not duplicate a stored event
+- **WHEN** the same confirmed event occurrence is submitted more than once, within the shared BigQuery dedupe window, due to a retried or redelivered send
+- **THEN** the retried sends reuse the same stable identifier as the original, and the streaming-insert path stores at most one corresponding row
 
 ### Requirement: Resilience to Transient Connectivity Issues
 The system SHALL tolerate transient connectivity issues when emitting event metadata, consistent with the retry/timeout behavior already established by the shared Raspberry Pi telemetry sender.
