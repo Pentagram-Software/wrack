@@ -46,6 +46,7 @@ from time import sleep
 # Temporary diagnosis aid for right-stick → turret issues.
 # Set back to False once the fault is confirmed (console floods if left on).
 PS4_INPUT_DEBUG = True
+_WATCH_TURRET_MISSING_LOGGED = False
 
 # Import TerrainScanner with error handling
 TerrainScanner = None
@@ -646,8 +647,11 @@ def move(value):
 
 def watch(value):
     """Handle right joystick movement for turret control"""
+    global _WATCH_TURRET_MISSING_LOGGED
     if not turret:
-        if PS4_INPUT_DEBUG:
+        # One-shot only: stick events arrive at a high rate.
+        if PS4_INPUT_DEBUG and not _WATCH_TURRET_MISSING_LOGGED:
+            _WATCH_TURRET_MISSING_LOGGED = True
             print("PS4→turret: handler got stick x={:.0f} y={:.0f}, but turret object is None".format(
                 value.r_left, value.r_forward
             ))
@@ -655,12 +659,8 @@ def watch(value):
 
     # Keep the raw normalized stick value intact. Turret.speed_control()
     # applies the only deadzone used by this control path.
-    # Stick arrival is logged in PS4Controller; motor run/stop in Turret.
-    # Only warn here when the cached motor reference is missing.
-    if PS4_INPUT_DEBUG and not turret.turret_motor:
-        print("PS4→turret: handler stick x={:.0f} y={:.0f} but motor_ref=False".format(
-            value.r_left, value.r_forward
-        ))
+    # Stick arrival is logged in PS4Controller; missing motor ref and
+    # run/stop outcomes are logged (throttled) inside Turret.
     turret.speed_control(value.r_left, value.r_forward)
 
 
