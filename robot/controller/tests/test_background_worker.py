@@ -64,6 +64,57 @@ class TestSubmit(unittest.TestCase):
         self.assertTrue(self.worker.submit(lambda: None))
 
 
+class TestSubmitOrRun(unittest.TestCase):
+    """A full queue must not fall back to running inline: that would put a
+    multi-second action back on the caller's thread during exactly the burst
+    of submissions the bounded queue exists to absorb."""
+
+    def setUp(self):
+        self.worker = BackgroundWorker(
+            name="test", max_queue=2, logger=lambda _line: None
+        )
+        self.worker._running = True
+
+    def test_queues_instead_of_running_when_the_worker_is_up(self):
+        ran = []
+
+        self.assertTrue(self.worker.submit_or_run(ran.append, "x"))
+        self.assertEqual(ran, [])
+        self.assertEqual(self.worker.pending, 1)
+
+    def test_runs_inline_when_the_worker_is_not_up(self):
+        self.worker._running = False
+        ran = []
+
+        self.assertFalse(self.worker.submit_or_run(ran.append, "x"))
+        self.assertEqual(ran, ["x"])
+
+    def test_a_full_queue_drops_rather_than_running_inline(self):
+        ran = []
+        self.worker.submit_or_run(ran.append, "a")
+        self.worker.submit_or_run(ran.append, "b")
+
+        self.worker.submit_or_run(ran.append, "c")
+
+        self.assertEqual(ran, [])
+        self.assertEqual(self.worker.pending, 2)
+        self.assertEqual(self.worker.dropped_count, 1)
+
+    def test_a_full_queue_still_reports_as_queued_not_inline(self):
+        for _ in range(4):
+            self.assertTrue(self.worker.submit_or_run(lambda: None))
+
+    def test_dropped_action_never_runs_later(self):
+        ran = []
+        self.worker.submit_or_run(ran.append, "a")
+        self.worker.submit_or_run(ran.append, "b")
+        self.worker.submit_or_run(ran.append, "dropped")
+
+        self.worker.run_pending()
+
+        self.assertEqual(ran, ["a", "b"])
+
+
 class TestFailureIsolation(unittest.TestCase):
 
     def setUp(self):

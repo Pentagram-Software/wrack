@@ -55,7 +55,7 @@ _WATCH_TURRET_MISSING_LOGGED = False
 # and whether the reader thread is still alive.  Purely observational — see
 # robot_controllers/input_diagnostics.py.  Leave on only while diagnosing
 # responsiveness, since the periodic report writes to stdout.
-PS4_INPUT_DIAGNOSTICS = False
+PS4_INPUT_DIAGNOSTICS = True
 PS4_INPUT_DIAGNOSTICS_INTERVAL_S = 10.0
 
 # Import TerrainScanner with error handling
@@ -285,10 +285,13 @@ _action_worker = BackgroundWorker(name="ps4-actions")
 
 
 def _run_async(action, *args):
-    """Queue *action* on the background worker, running it inline if the
-    worker is not up (e.g. during early startup or after shutdown)."""
-    if not _action_worker.submit(action, *args):
-        action(*args)
+    """Queue *action* on the background worker.
+
+    Runs inline only when the worker is not up; a full queue drops rather
+    than falling back, so a burst of presses cannot put speech back on the
+    reader thread.  See BackgroundWorker.submit_or_run().
+    """
+    _action_worker.submit_or_run(action, *args)
 
 # Initialize devices with graceful error handling
 drive_L_motor = device_manager.try_init_device(Motor, Port.A, "drive_L_motor")

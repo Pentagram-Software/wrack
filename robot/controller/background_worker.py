@@ -128,6 +128,26 @@ class BackgroundWorker:
             return False
         return True
 
+    def submit_or_run(self, action, *args):
+        """Queue *action*, falling back to running it inline if the worker
+        is not up (early startup, or after shutdown).
+
+        A **full queue is not** such a fallback case, and the distinction
+        matters: running inline there would put a multi-second action back
+        on the caller's thread during exactly the burst of submissions the
+        bounded queue exists to absorb -- for the PS4 reader thread, that is
+        the dropped-input failure this worker was added to prevent.  A full
+        queue drops, and :meth:`submit` has already logged it.
+
+        Returns True if the action was queued rather than run inline.
+        """
+        if self._running:
+            self.submit(action, *args)
+            return True
+
+        action(*args)
+        return False
+
     def is_running(self):
         return self._running
 
