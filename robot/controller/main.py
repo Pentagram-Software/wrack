@@ -44,8 +44,8 @@ import sys
 from time import sleep
 
 # Temporary diagnosis aid for right-stick → turret issues.
-# Set back to False once the fault is confirmed (console floods if left on).
-PS4_INPUT_DEBUG = True
+# Flip to True for a diagnostic EV3 deploy, then set back to False.
+PS4_INPUT_DEBUG = False
 _WATCH_TURRET_MISSING_LOGGED = False
 
 # Import TerrainScanner with error handling
