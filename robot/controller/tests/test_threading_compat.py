@@ -37,6 +37,74 @@ class TestCreateLock(unittest.TestCase):
                 self.assertIsInstance(lock, threading_compat._NoOpLock)
 
 
+class TestThreadIsAlive(unittest.TestCase):
+    """Pybricks MicroPython's Thread has no is_alive(); calling it directly
+    raised AttributeError on-device and aborted DeviceManager.cleanup()
+    mid-shutdown, leaving the motors powered."""
+
+    def test_none_is_not_alive(self):
+        self.assertFalse(threading_compat.thread_is_alive(None))
+
+    def test_uses_is_alive_when_present(self):
+        alive = type("T", (), {"is_alive": lambda self: True})()
+        finished = type("T", (), {"is_alive": lambda self: False})()
+
+        self.assertTrue(threading_compat.thread_is_alive(alive))
+        self.assertFalse(threading_compat.thread_is_alive(finished))
+
+    def test_assumes_alive_when_is_alive_is_missing(self):
+        micropython_thread = type("MicroPythonThread", (), {})()
+
+        self.assertTrue(threading_compat.thread_is_alive(micropython_thread))
+
+    def test_assumes_alive_when_is_alive_raises(self):
+        def boom(_self):
+            raise RuntimeError("unsupported on this build")
+
+        thread = type("T", (), {"is_alive": boom})()
+
+        self.assertTrue(threading_compat.thread_is_alive(thread))
+
+
+class TestJoinThread(unittest.TestCase):
+
+    def test_none_is_not_joined(self):
+        self.assertFalse(threading_compat.join_thread(None))
+
+    def test_joins_with_timeout_when_supported(self):
+        calls = []
+        thread = type("T", (), {"join": lambda self, timeout=None: calls.append(timeout)})()
+
+        self.assertTrue(threading_compat.join_thread(thread, timeout=2.0))
+        self.assertEqual(calls, [2.0])
+
+    def test_missing_join_is_not_an_error(self):
+        micropython_thread = type("MicroPythonThread", (), {})()
+
+        self.assertFalse(threading_compat.join_thread(micropython_thread, timeout=2.0))
+
+    def test_falls_back_when_join_rejects_timeout(self):
+        calls = []
+
+        def join(_self, *args):
+            if args:
+                raise TypeError("join() takes no arguments")
+            calls.append("no-timeout")
+
+        thread = type("T", (), {"join": join})()
+
+        self.assertTrue(threading_compat.join_thread(thread, timeout=2.0))
+        self.assertEqual(calls, ["no-timeout"])
+
+    def test_a_raising_join_never_propagates(self):
+        def boom(_self, *args, **kwargs):
+            raise RuntimeError("cannot join")
+
+        thread = type("T", (), {"join": boom})()
+
+        self.assertFalse(threading_compat.join_thread(thread, timeout=2.0))
+
+
 class TestWaitForWorkers(unittest.TestCase):
     class FakeWorker:
         def __init__(self, stopped=False, running=None):

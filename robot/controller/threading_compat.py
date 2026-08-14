@@ -43,6 +43,62 @@ class _NoOpLock:
         return False
 
 
+def thread_is_alive(thread):
+    """Return whether *thread* is still running, tolerant of MicroPython.
+
+    Pybricks MicroPython's ``Thread`` has no ``is_alive()`` at all, so calling
+    it directly raises ``AttributeError`` on-device even though it is fine
+    under CPython.  When the method is missing there is no way to tell a live
+    thread from a finished one, so assume it is alive: callers use this to
+    decide whether to attempt a join, and attempting a join on an
+    already-finished thread is harmless while skipping one on a live thread
+    is not.
+    """
+    if thread is None:
+        return False
+
+    is_alive = getattr(thread, "is_alive", None)
+    if not callable(is_alive):
+        return True
+
+    try:
+        return bool(is_alive())
+    except Exception:  # noqa: BLE001 - treat an unusable probe as "alive"
+        return True
+
+
+def join_thread(thread, timeout=None):
+    """Join *thread* if the runtime supports it, tolerant of MicroPython.
+
+    Pybricks MicroPython provides ``Thread`` but not ``join()``, and builds
+    that do provide it may reject the ``timeout`` keyword.  Returns True only
+    when a join was actually performed.
+    """
+    if thread is None:
+        return False
+
+    join = getattr(thread, "join", None)
+    if not callable(join):
+        return False
+
+    try:
+        if timeout is None:
+            join()
+        else:
+            join(timeout)
+        return True
+    except TypeError:
+        # Build has join() but no timeout support - fall back to a plain
+        # join rather than skipping the wait entirely.
+        try:
+            join()
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+    except Exception:  # noqa: BLE001 - shutdown must never fail on a join
+        return False
+
+
 def worker_is_running(worker):
     """Return True if a worker thread is still active."""
     if worker is None:
