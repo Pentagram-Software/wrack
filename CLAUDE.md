@@ -218,8 +218,13 @@ that only surface when the code actually runs. Keep doing the manual review for 
   whole module before any `try/except` guard can run. Annotations are only supported on simple
   names. Use a plain assignment.
 - **`threading.Thread()`**: only accepts `target`/`args` — passing `daemon` or `name` raises
-  `TypeError`. `Thread.join()` may not accept `timeout` — wrap in `try/except TypeError` with a
-  fallback (see `status_collector.py`).
+ `TypeError`. Enforced by `robot/controller/tests/test_thread_kwargs_compat.py`, which walks
+ every shipped file; neither pytest (the kwargs are valid on CPython) nor `make check-mpy`
+ (syntax-only) can catch a reintroduction. When CPython genuinely needs the daemon behaviour,
+ set it as an attribute after construction inside a `try/except AttributeError` (see
+ `_set_daemon` in `wake_word_detector.py`). `Thread.is_alive()` and `Thread.join()` may be
+ missing entirely, and `join()` may not accept `timeout` — use `thread_is_alive()` and
+ `join_thread()` from `threading_compat` rather than calling them directly.
 - **Minimal HTTP libraries** (`urequests`): don't assume parity with `requests` — e.g. `post()` may
   not accept `timeout`. Try the full call first, catch `TypeError`, and retry with a reduced kwarg
   set (see `telemetry/sender.py::_http_post`).
