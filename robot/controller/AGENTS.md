@@ -114,3 +114,14 @@ Device connect/disconnect events are collected **immediately** via `DeviceManage
 - Ensure `pytest` passes before opening/merging.
 - Keep PRs scoped; document hardware assumptions/limitations in the description.
 - Use imperative, concise titles (e.g., "Add gyro fallback handling").
+
+## Right-stick / turret input debug
+
+Temporary diagnosis for PS4/PS5 right-stick → turret issues is gated by `PS4_INPUT_DEBUG` in `main.py` (defaults to `False`; flip to `True` for a diagnostic deploy).
+
+When enabled you should see on the EV3 console:
+1. `PlayStation controller input debug enabled` / `Turret motor command debug enabled` at startup
+2. `PS4 input: right stick raw RX|RY=… scaled x=… y=…` — stick events are arriving from evdev
+3. `Turret motor: RUN speed=…` — motor `run()` succeeded (or `STOP deadzone…` / `SKIP no motor ref…` / `FAIL …` if the motor call raised)
+
+If (2) is missing, the controller device/path or axis mapping is wrong. If (2) appears but not (3), the `watch` handler or turret object is broken. If (3) `RUN` appears but the turret does not move, the fault is hardware/port/motor init. If (3) is `FAIL`, the motor API raised before motion.

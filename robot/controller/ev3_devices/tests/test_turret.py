@@ -123,6 +123,49 @@ class TestTurret:
         """Test setting maximum speed"""
         self.turret.set_max_speed(180)
         assert self.turret.max_speed == 180
+
+    def test_set_debug_motor_enables_flag(self):
+        """Motor command diagnostics are opt-in."""
+        assert self.turret._debug_motor is False
+        self.turret.set_debug_motor(True)
+        assert self.turret._debug_motor is True
+        self.turret.set_debug_motor(False)
+        assert self.turret._debug_motor is False
+
+    def test_speed_control_debug_logs_run_then_stop(self, capsys):
+        """With debug on, RUN and STOP transitions are printed once each."""
+        self.turret.set_debug_motor(True)
+        self.turret.speed_control(80, 0)
+        self.turret.speed_control(80, 0)  # same speed — should not re-log
+        self.turret.speed_control(0, 0)
+        self.turret.speed_control(5, 0)  # still deadzone — should not re-log STOP
+        out = capsys.readouterr().out
+        assert out.count("Turret motor: RUN") == 1
+        assert out.count("Turret motor: STOP") == 1
+        assert "speed=288" in out
+
+    def test_speed_control_debug_logs_fail_when_run_raises(self, capsys):
+        """RUN is not logged when the motor call fails; FAIL is."""
+        self.turret.set_debug_motor(True)
+
+        def boom(speed):
+            raise RuntimeError("motor fault")
+
+        self.mock_motor.run = boom
+        self.turret.speed_control(80, 0)
+        out = capsys.readouterr().out
+        assert "Turret motor: RUN" not in out
+        assert out.count("Turret motor: FAIL") == 1
+        assert "run(288)" in out
+
+    def test_speed_control_debug_buckets_nearby_run_speeds(self, capsys):
+        """Nearby speeds in the same bucket only log RUN once."""
+        self.turret.set_debug_motor(True)
+        # 75% -> 270, 80% -> 288; both round to bucket 270 with size 45
+        self.turret.speed_control(75, 0)
+        self.turret.speed_control(80, 0)
+        out = capsys.readouterr().out
+        assert out.count("Turret motor: RUN") == 1
     
     def test_home_turret(self):
         """Test turret homing"""
