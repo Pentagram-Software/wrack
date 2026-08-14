@@ -683,8 +683,6 @@ def main():
     controller.set_debug_input(PS4_INPUT_DEBUG)
     if turret:
         turret.set_debug_motor(PS4_INPUT_DEBUG)
-    if PS4_INPUT_DEBUG:
-        print("Turret motor debug enabled (right-stick path)")
     remote_controller = RemoteController()
     _runtime_controller = controller
     _runtime_remote_controller = remote_controller
