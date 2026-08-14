@@ -471,7 +471,7 @@ class TerrainScanner:
         self.auto_scan_enabled = True
         
         # Start automatic scanning thread
-        self.auto_scan_thread = threading.Thread(target=self._auto_scan_loop, daemon=True)
+        self.auto_scan_thread = threading.Thread(target=self._auto_scan_loop)
         self.auto_scan_thread.start()
         
         print("Automatic terrain scanning started (interval: {}s)".format(self.auto_scan_interval))

@@ -509,7 +509,10 @@ def perform_single_terrain_scan(value):
     if terrain_scanner and TerrainScanner:
         # Run scan in separate thread to avoid blocking
         import threading
-        scan_thread = threading.Thread(target=lambda: terrain_scanner.perform_scan("full_360"), daemon=True)
+        # Pybricks MicroPython's Thread() accepts only target/args - passing
+        # daemon raises TypeError, which propagates out of trigger() and kills
+        # the reader thread for the session (PEN-188).
+        scan_thread = threading.Thread(target=lambda: terrain_scanner.perform_scan("full_360"))
         scan_thread.start()
     else:
         print("TerrainScanner not available")
@@ -521,7 +524,8 @@ def perform_quick_terrain_scan(value):
     if terrain_scanner and TerrainScanner:
         # Run scan in separate thread to avoid blocking
         import threading
-        scan_thread = threading.Thread(target=lambda: terrain_scanner.perform_scan("quick_8_point"), daemon=True)
+        # See perform_single_terrain_scan: no daemon kwarg on MicroPython.
+        scan_thread = threading.Thread(target=lambda: terrain_scanner.perform_scan("quick_8_point"))
         scan_thread.start()
     else:
         print("TerrainScanner not available")
@@ -971,8 +975,7 @@ def main():
             # Start scan in background thread
             import threading
             scan_thread = threading.Thread(
-                target=lambda: terrain_scanner.perform_scan("full_360"), 
-                daemon=True
+                target=lambda: terrain_scanner.perform_scan("full_360")
             )
             scan_thread.start()
             
@@ -992,8 +995,7 @@ def main():
             # Start scan in background thread
             import threading
             scan_thread = threading.Thread(
-                target=lambda: terrain_scanner.perform_scan("quick_8_point"), 
-                daemon=True
+                target=lambda: terrain_scanner.perform_scan("quick_8_point")
             )
             scan_thread.start()
             
@@ -1095,7 +1097,7 @@ def main():
                     sleep(duration)
                     turret.stop()
                     print("Turret auto-stopped after {} seconds".format(duration))
-                threading.Thread(target=stop_turret, daemon=True).start()
+                threading.Thread(target=stop_turret).start()
             else:
                 print("Network command: Turret rotating left at {} degrees/second (continuous, joystick: {})".format(speed_degrees, joystick_value))
                 turret.speed_control(joystick_value, 0)
@@ -1121,7 +1123,7 @@ def main():
                     sleep(duration)
                     turret.stop()
                     print("Turret auto-stopped after {} seconds".format(duration))
-                threading.Thread(target=stop_turret, daemon=True).start()
+                threading.Thread(target=stop_turret).start()
             else:
                 print("Network command: Turret rotating right at {} degrees/second (continuous, joystick: {})".format(speed_degrees, joystick_value))
                 turret.speed_control(joystick_value, 0)
