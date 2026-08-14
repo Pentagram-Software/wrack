@@ -38,6 +38,17 @@ DEFAULT_MAX_QUEUE = 4
 # 300MHz ARM.
 DEFAULT_POLL_INTERVAL_S = 0.02
 
+# Poll interval once the queue has been empty for a while.  Every wake-up is
+# a GIL handoff contended with the PS4 reader thread, and MicroPython holds
+# the GIL across C calls, so an idle worker waking 50 times a second costs
+# the reader for nothing.  Backing off only delays the *first* action of a
+# burst; the queue is drained at the fast interval once work appears.
+DEFAULT_IDLE_POLL_INTERVAL_S = 0.15
+
+# Empty polls before backing off, so a burst of actions is not slowed by a
+# back-off that engages between two closely spaced submissions.
+IDLE_POLLS_BEFORE_BACKOFF = 10
+
 
 class BackgroundWorker:
     """A single background thread that runs submitted callables in order.
@@ -61,10 +72,12 @@ class BackgroundWorker:
         max_queue=DEFAULT_MAX_QUEUE,
         poll_interval=DEFAULT_POLL_INTERVAL_S,
         logger=None,
+        idle_poll_interval=DEFAULT_IDLE_POLL_INTERVAL_S,
     ):
         self.name = name
         self.max_queue = max_queue
         self.poll_interval = poll_interval
+        self.idle_poll_interval = idle_poll_interval
         self._logger = logger if logger is not None else print
 
         self._lock = create_lock()
@@ -190,6 +203,13 @@ class BackgroundWorker:
         return ran
 
     def _run(self):
+        empty_polls = 0
         while self._running:
-            if self.run_pending() == 0:
+            if self.run_pending() > 0:
+                empty_polls = 0
+                continue
+            empty_polls += 1
+            if empty_polls > IDLE_POLLS_BEFORE_BACKOFF:
+                _sleep(self.idle_poll_interval)
+            else:
                 _sleep(self.poll_interval)

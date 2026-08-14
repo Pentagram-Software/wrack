@@ -143,6 +143,82 @@ class TestDispatchRecording:
         assert diagnostics.snapshot()["dispatch"]["move"][4] == 1
 
 
+class TestReaderTiming:
+    """Separates 'idle, waiting for input' from 'starved: data was already
+    waiting'. Both look like time inside read(); only the staleness of the
+    event that read returned tells them apart."""
+
+    def test_a_read_returning_a_fresh_event_is_idle_time(self, diagnostics):
+        diagnostics.record_reader_timing(read_ms=500.0, lag_ms=2.0)
+
+        data = diagnostics.snapshot()
+        assert data["read_fresh"] == [1, 500.0, 500.0]
+        assert data["read_stale"][0] == 0
+
+    def test_a_read_returning_a_stale_event_is_starvation(self, diagnostics):
+        diagnostics.record_reader_timing(read_ms=500.0, lag_ms=400.0)
+
+        data = diagnostics.snapshot()
+        assert data["read_stale"] == [1, 500.0, 500.0]
+        assert data["read_fresh"][0] == 0
+
+    def test_unknown_lag_counts_as_idle_rather_than_starved(self, diagnostics):
+        diagnostics.record_reader_timing(read_ms=10.0, lag_ms=None)
+
+        assert diagnostics.snapshot()["read_fresh"][0] == 1
+
+    def test_processing_and_gap_are_tracked_separately(self, diagnostics):
+        diagnostics.record_reader_timing(read_ms=1.0, proc_ms=4.0, gap_ms=0.5)
+
+        data = diagnostics.snapshot()
+        assert data["proc"] == [1, 4.0, 4.0]
+        assert data["gap"] == [1, 0.5, 0.5]
+
+    def test_maxima_are_kept(self, diagnostics):
+        diagnostics.record_reader_timing(read_ms=5.0, lag_ms=0.0)
+        diagnostics.record_reader_timing(read_ms=90.0, lag_ms=0.0)
+        diagnostics.record_reader_timing(read_ms=20.0, lag_ms=0.0)
+
+        assert diagnostics.snapshot()["read_fresh"] == [3, 115.0, 90.0]
+
+    def test_timings_reset_with_the_window(self, diagnostics):
+        diagnostics.record_reader_timing(read_ms=5.0, proc_ms=1.0, lag_ms=0.0)
+        diagnostics.snapshot(reset=True)
+
+        data = diagnostics.snapshot()
+        assert data["read_fresh"][0] == 0
+        assert data["proc"][0] == 0
+
+    def test_report_flags_the_starved_bucket(self, diagnostics, lines):
+        diagnostics.record_reader_timing(read_ms=400.0, proc_ms=1.0, lag_ms=300.0)
+        diagnostics.report_once()
+
+        starved = [line for line in lines if "read->stale" in line]
+        assert len(starved) == 1
+        assert "STARVED" in starved[0]
+
+    def test_report_omits_the_breakdown_without_samples(self, diagnostics, lines):
+        diagnostics.report_once()
+
+        assert not any("reader:" in line for line in lines)
+
+
+class TestDropStalls:
+
+    def test_stall_lengths_are_recorded(self, diagnostics):
+        diagnostics.record_drop_stall(120.0)
+        diagnostics.record_drop_stall(880.0)
+
+        assert diagnostics.snapshot()["drop_stall"] == [2, 1000.0, 880.0]
+
+    def test_report_shows_stalls(self, diagnostics, lines):
+        diagnostics.record_drop_stall(500.0)
+        diagnostics.record_reader_timing(read_ms=1.0, lag_ms=0.0)
+        diagnostics.report_once()
+
+        assert any("SYN_DROPPED stalls: n=1" in line for line in lines)
+
+
 class TestCoalescing:
 
     def test_counts_events_folded_per_stick(self, diagnostics):

@@ -155,6 +155,20 @@ class InputDiagnostics:
         self._window_coalesced = {}
         # raw axis value -> count of times it was discarded as a sentinel
         self._window_axis_rejected = {}
+        # Where the read loop's wall clock goes.  "read" is time inside
+        # in_file.read(), split by whether the event it returned was already
+        # stale: a long read that yields a *stale* event means the data was
+        # sitting in the kernel buffer while we were unable to collect it,
+        # which is the direct measurement of reader starvation.  A long read
+        # yielding a *fresh* event is just an idle wait for input.
+        # [count, total_ms, max_ms] per bucket.
+        self._window_read_fresh = [0, 0.0, 0.0]
+        self._window_read_stale = [0, 0.0, 0.0]
+        self._window_proc = [0, 0.0, 0.0]
+        self._window_gap = [0, 0.0, 0.0]
+        # How long the reader had been out of the loop when the kernel told
+        # us it had discarded events.
+        self._window_drop_stall = [0, 0.0, 0.0]
 
     # ------------------------------------------------------------------
     # Recording API - called from the controller read loop
@@ -166,6 +180,9 @@ class InputDiagnostics:
         *tv_sec*/*tv_usec* are the kernel timestamp fields straight from the
         unpacked event; when supplied they are used to compute how stale the
         event was by the time it reached us.
+
+        Returns the computed lag in milliseconds, or None when it could not
+        be determined, so the caller can classify the read that produced it.
         """
         lag_ms = None
         if tv_sec is not None and tv_usec is not None:
@@ -196,6 +213,43 @@ class InputDiagnostics:
                     self._window_lag_max_ms = lag_ms
                 if lag_ms >= self.stale_event_ms:
                     self._window_stale_events += 1
+
+        return lag_ms
+
+    @staticmethod
+    def _accumulate(stats, value_ms):
+        stats[0] += 1
+        stats[1] += value_ms
+        if value_ms > stats[2]:
+            stats[2] = value_ms
+
+    def record_reader_timing(self, read_ms=None, proc_ms=None, gap_ms=None,
+                             lag_ms=None):
+        """Record where one pass of the read loop spent its wall clock.
+
+        *read_ms* is time inside the blocking read, *proc_ms* the per-event
+        work that followed it, and *gap_ms* the interval between finishing
+        the previous event and starting this read.  *lag_ms* classifies the
+        read: see the bucket comment in :meth:`_reset_window`.
+        """
+        with self._lock:
+            if read_ms is not None:
+                stale = lag_ms is not None and lag_ms >= self.stale_event_ms
+                bucket = self._window_read_stale if stale else self._window_read_fresh
+                self._accumulate(bucket, read_ms)
+            if proc_ms is not None:
+                self._accumulate(self._window_proc, proc_ms)
+            if gap_ms is not None:
+                self._accumulate(self._window_gap, gap_ms)
+
+    def record_drop_stall(self, stall_ms):
+        """Record how long the reader was away when a drop was detected.
+
+        Distinguishes one long stall from many short ones, which point at
+        very different causes.
+        """
+        with self._lock:
+            self._accumulate(self._window_drop_stall, stall_ms)
 
     def record_dispatch(self, event_name, duration_ms, failed=False):
         """Record how long one callback dispatch took, in milliseconds."""
@@ -286,12 +340,72 @@ class InputDiagnostics:
                 "coalesced": self._window_coalesced.copy(),
                 "axis_rejected": self._window_axis_rejected.copy(),
                 "loop_exit": self._loop_exit,
+                "read_fresh": list(self._window_read_fresh),
+                "read_stale": list(self._window_read_stale),
+                "proc": list(self._window_proc),
+                "gap": list(self._window_gap),
+                "drop_stall": list(self._window_drop_stall),
             }
 
             if reset:
                 self._reset_window(started_at=now)
 
         return data
+
+    def _format_reader_lines(self, data):
+        """Render the read-loop time breakdown.
+
+        Read it as follows: if ``read->stale`` dominates, the reader was
+        unable to collect data that was already waiting -- it was descheduled
+        or blocked re-entering the interpreter, *not* busy with our own work.
+        If ``proc`` or ``gap`` dominates, the read loop itself is the cost.
+        """
+        lines = []
+        fresh = data.get("read_fresh") or [0, 0.0, 0.0]
+        stale = data.get("read_stale") or [0, 0.0, 0.0]
+        proc = data.get("proc") or [0, 0.0, 0.0]
+        gap = data.get("gap") or [0, 0.0, 0.0]
+        stall = data.get("drop_stall") or [0, 0.0, 0.0]
+
+        if not (fresh[0] or stale[0] or proc[0]):
+            return lines
+
+        elapsed = data.get("elapsed_s")
+        accounted_ms = fresh[1] + stale[1] + proc[1] + gap[1]
+        if elapsed:
+            window_ms = elapsed * 1000.0
+            lines.append(
+                "reader: read %.1f%% (stale %.1f%%) proc %.1f%% gap %.1f%%"
+                " unaccounted %.1f%%"
+                % (
+                    100.0 * (fresh[1] + stale[1]) / window_ms,
+                    100.0 * stale[1] / window_ms,
+                    100.0 * proc[1] / window_ms,
+                    100.0 * gap[1] / window_ms,
+                    100.0 * max(0.0, window_ms - accounted_ms) / window_ms,
+                )
+            )
+
+        for label, stats, note in (
+            ("read->stale", stale, "  <-- STARVED: data was waiting"),
+            ("read->fresh", fresh, ""),
+            ("proc", proc, ""),
+            ("gap", gap, ""),
+        ):
+            if not stats[0]:
+                continue
+            lines.append(
+                "  %-11s n=%-5d avg %.1fms max %.1fms%s"
+                % (label, stats[0], stats[1] / stats[0], stats[2], note)
+            )
+
+        if stall[0]:
+            lines.append(
+                "SYN_DROPPED stalls: n=%d avg %.1fms max %.1fms"
+                % (stall[0], stall[1] / stall[0], stall[2])
+            )
+
+        return lines
 
     def format_report(self, data):
         """Render a :meth:`snapshot` dict as printable lines."""
@@ -337,6 +451,8 @@ class InputDiagnostics:
                     data["stale_events"],
                 )
             )
+
+        lines.extend(self._format_reader_lines(data))
 
         dispatch = data["dispatch"]
         if dispatch:

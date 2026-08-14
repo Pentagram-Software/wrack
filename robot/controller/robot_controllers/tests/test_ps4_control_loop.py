@@ -46,6 +46,47 @@ class _FakeDeviceFile:
         self.closed = True
 
 
+class _RecordingDiagnostics:
+    """Captures the reader-timing calls without the real accumulation."""
+
+    def __init__(self, recorded, lag_ms=None):
+        self.recorded = recorded
+        self.stalls = []
+        self._lag_ms = lag_ms
+        self._tick = 0.0
+
+    def now(self):
+        self._tick += 0.001
+        return self._tick
+
+    def record_event(self, ev_type, code, tv_sec=None, tv_usec=None):
+        return self._lag_ms
+
+    def record_reader_timing(self, read_ms=None, proc_ms=None, gap_ms=None,
+                             lag_ms=None):
+        self.recorded.append({
+            "read_ms": read_ms,
+            "proc_ms": proc_ms,
+            "gap_ms": gap_ms,
+            "lag_ms": lag_ms,
+        })
+
+    def record_drop_stall(self, stall_ms):
+        self.stalls.append(stall_ms)
+
+    def record_coalesced(self, event_name):
+        pass
+
+    def record_dispatch(self, event_name, duration_ms, failed=False):
+        pass
+
+    def record_axis_rejected(self, value):
+        pass
+
+    def record_loop_exit(self, *args, **kwargs):
+        pass
+
+
 @pytest.fixture
 def controller():
     return PS4Controller()
@@ -219,6 +260,85 @@ class TestControlTick:
 
         controller._control_tick()
         assert len(seen) == 2
+
+
+class TestReaderInstrumentation:
+
+    def test_read_and_processing_are_timed_per_event(
+        self, monkeypatch, controller, no_control_thread
+    ):
+        recorded = []
+        controller.set_diagnostics(_RecordingDiagnostics(recorded))
+
+        _read_events(
+            monkeypatch,
+            controller,
+            [_event(EV_ABS, LEFT_STICK_X, 200), _event(EV_ABS, LEFT_STICK_X, 210)],
+        )
+
+        assert len(recorded) == 2
+        assert all(entry["read_ms"] is not None for entry in recorded)
+        assert all(entry["proc_ms"] is not None for entry in recorded)
+
+    def test_the_first_event_has_no_preceding_gap(
+        self, monkeypatch, controller, no_control_thread
+    ):
+        recorded = []
+        controller.set_diagnostics(_RecordingDiagnostics(recorded))
+
+        _read_events(
+            monkeypatch,
+            controller,
+            [_event(EV_ABS, LEFT_STICK_X, 200), _event(EV_ABS, LEFT_STICK_X, 210)],
+        )
+
+        assert recorded[0]["gap_ms"] is None
+        assert recorded[1]["gap_ms"] is not None
+
+    def test_event_lag_is_passed_through_to_classify_the_read(
+        self, monkeypatch, controller, no_control_thread
+    ):
+        recorded = []
+        diagnostics = _RecordingDiagnostics(recorded, lag_ms=350.0)
+        controller.set_diagnostics(diagnostics)
+
+        _read_events(monkeypatch, controller, [_event(EV_ABS, LEFT_STICK_X, 200)])
+
+        assert recorded[0]["lag_ms"] == 350.0
+
+    def test_syn_dropped_records_a_stall(
+        self, monkeypatch, controller, no_control_thread
+    ):
+        recorded = []
+        diagnostics = _RecordingDiagnostics(recorded)
+        controller.set_diagnostics(diagnostics)
+
+        _read_events(
+            monkeypatch,
+            controller,
+            [_event(EV_ABS, LEFT_STICK_X, 200), _event(0, 3, 0)],
+        )
+
+        assert len(diagnostics.stalls) == 1
+
+    def test_an_ordinary_syn_does_not_record_a_stall(
+        self, monkeypatch, controller, no_control_thread
+    ):
+        recorded = []
+        diagnostics = _RecordingDiagnostics(recorded)
+        controller.set_diagnostics(diagnostics)
+
+        # EV_SYN code 0 is SYN_REPORT, which ends every normal event batch.
+        _read_events(monkeypatch, controller, [_event(0, 0, 0)])
+
+        assert diagnostics.stalls == []
+
+    def test_reading_works_with_no_diagnostics_attached(
+        self, monkeypatch, controller, no_control_thread
+    ):
+        _read_events(monkeypatch, controller, [_event(EV_ABS, LEFT_STICK_X, 200)])
+
+        assert controller.l_left != 0
 
 
 class TestControlRate:

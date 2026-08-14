@@ -28,6 +28,12 @@ MIN_JOYSTICK_MOVE = 100  # The minimum value of joystick move to be considered a
 # on the next tick.  30Hz is a 33ms worst-case delay, below the threshold where
 # steering feels laggy and far below the EV3 motors' own response time.
 DEFAULT_CONTROL_LOOP_HZ = 30
+
+# Poll interval used while no stick has moved.  A stick that starts moving is
+# picked up within this long instead of 1/DEFAULT_CONTROL_LOOP_HZ, which is
+# imperceptible, and in exchange an idle robot stops waking this thread 30
+# times a second to find nothing to do.
+DEFAULT_IDLE_POLL_INTERVAL_S = 0.1
 # Throttle right-stick debug lines; stick events arrive very frequently.
 RIGHT_STICK_DEBUG_INTERVAL_S = 0.25
 
@@ -51,6 +57,10 @@ AXIS_SENTINEL_VALUES = (4294967295, 4294967294)
 EV_SYN = 0;
 EV_KEY = 1;
 EV_ABS = 3;
+
+# EV_SYN code 3: the kernel telling us its per-fd buffer overflowed and
+# events were discarded before we could read them.
+SYN_DROPPED = 3;
 
 #ev_code (for ev_type == EV_KEY)
 X_BUTTON = 304;
@@ -229,6 +239,7 @@ class PS4Controller(EventHandler, threading.Thread):
         self._axis_range = None
         self._diagnostics = None
         self._control_interval = 1.0 / DEFAULT_CONTROL_LOOP_HZ
+        self._idle_interval = DEFAULT_IDLE_POLL_INTERVAL_S
         self._control_thread = None
         self._control_running = False
         # Set by the reader thread when a stick's cached value changes,
@@ -241,6 +252,22 @@ class PS4Controller(EventHandler, threading.Thread):
         self._last_right_stick_debug_xy = None
     def __str__(self):
         return "PlayStation controller (PS4/PS5) for EV3"; 
+
+    def _diag_now(self):
+        """Wall clock from the diagnostics' clock, or None when not attached.
+
+        Uses the diagnostics' own clock so timings line up with the lag
+        figures it computes, and so tests can inject a fake one.
+        """
+        if self._diagnostics is None:
+            return None
+        return self._diagnostics.now()
+
+    @staticmethod
+    def _elapsed_ms(start, end):
+        if start is None or end is None:
+            return None
+        return (end - start) * 1000.0
 
     def set_control_rate(self, hz):
         """Set how often cached stick positions are applied to the motors.
@@ -287,7 +314,14 @@ class PS4Controller(EventHandler, threading.Thread):
     def _control_loop(self):
         while self._control_running and not self.stopped:
             try:
-                self._control_tick()
+                dispatched = self._control_tick()
+                if not dispatched:
+                    # Idle: back off rather than waking 30x/second to find
+                    # nothing.  Every wake-up is a GIL handoff contended with
+                    # the reader thread, and MicroPython holds the GIL across
+                    # C calls, so needless wake-ups cost the reader directly.
+                    _sleep(self._idle_interval)
+                    continue
             except Exception as e:
                 # A callback exception must not kill the control loop and
                 # leave the sticks permanently dead for the session, which is
@@ -467,7 +501,13 @@ class PS4Controller(EventHandler, threading.Thread):
             # long int, long int, unsigned short, unsigned short, unsigned int
             FORMAT = 'llHHI'    
             EVENT_SIZE = struct.calcsize(FORMAT)
+            # Timestamps around the blocking read, so the report can separate
+            # "idle, waiting for input" from "starved: data was already
+            # waiting and we could not collect it".
+            read_started_at = self._diag_now()
             event = in_file.read(EVENT_SIZE)
+            read_ended_at = self._diag_now()
+            prev_proc_ended_at = None
             i = 0;
             
             if __debug__:
@@ -475,8 +515,18 @@ class PS4Controller(EventHandler, threading.Thread):
             while event and not self.stopped:
                 (tv_sec, tv_usec, ev_type, code, value) = struct.unpack(FORMAT, event)
 
+                event_lag_ms = None
                 if self._diagnostics is not None:
-                    self._diagnostics.record_event(ev_type, code, tv_sec, tv_usec)
+                    event_lag_ms = self._diagnostics.record_event(
+                        ev_type, code, tv_sec, tv_usec
+                    )
+                    if ev_type == EV_SYN and code == SYN_DROPPED:
+                        # How long we had been out of the loop when the kernel
+                        # gave up on us: one long stall and many short ones
+                        # have very different causes.
+                        self._diagnostics.record_drop_stall(
+                            self._elapsed_ms(prev_proc_ended_at, read_ended_at) or 0.0
+                        )
                     last_event_desc = "type={} code={} value={}".format(
                         ev_type, code, value
                     )
@@ -590,8 +640,20 @@ class PS4Controller(EventHandler, threading.Thread):
                     # R3 (right stick click) — BTN_THUMBR (318)
                     # TODO: Handle R3 (318) if needed
 
+                if self._diagnostics is not None:
+                    proc_ended_at = self._diag_now()
+                    self._diagnostics.record_reader_timing(
+                        read_ms=self._elapsed_ms(read_started_at, read_ended_at),
+                        proc_ms=self._elapsed_ms(read_ended_at, proc_ended_at),
+                        gap_ms=self._elapsed_ms(prev_proc_ended_at, read_started_at),
+                        lag_ms=event_lag_ms,
+                    )
+                    prev_proc_ended_at = proc_ended_at
+
                 # Finally, read another event
+                read_started_at = self._diag_now()
                 event = in_file.read(EVENT_SIZE)
+                read_ended_at = self._diag_now()
                 
 
             in_file.close()
