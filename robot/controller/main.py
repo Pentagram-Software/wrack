@@ -486,7 +486,10 @@ def start_auto_terrain_scanning(value):
     """Start automatic terrain scanning"""
     global terrain_scanner
     if terrain_scanner and TerrainScanner:
-        terrain_scanner.start_automatic_scanning()
+        # Queued rather than called directly: start_automatic_scanning()
+        # ends with a 200ms speaker.beep(), which would run on the reader
+        # thread and cost input.
+        _run_async(terrain_scanner.start_automatic_scanning)
     else:
         print("TerrainScanner not available")
         _run_async(ev3.speaker.beep, 300, 500)
@@ -495,7 +498,8 @@ def stop_auto_terrain_scanning(value):
     """Stop automatic terrain scanning"""
     global terrain_scanner
     if terrain_scanner and TerrainScanner:
-        terrain_scanner.stop_automatic_scanning()
+        # Beeps on completion, same as start_automatic_scanning().
+        _run_async(terrain_scanner.stop_automatic_scanning)
     else:
         print("TerrainScanner not available")
 
