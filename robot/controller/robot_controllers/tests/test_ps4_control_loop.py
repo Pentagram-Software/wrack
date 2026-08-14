@@ -269,6 +269,36 @@ class TestControlLoopLifecycle:
         assert controller._control_running is False
         assert controller.stopped is False
 
+    def test_stop_joins_the_control_thread(self, controller):
+        """Signalling alone would let an in-flight tick issue a motor command
+        after the motors have been stopped."""
+        joined = []
+        thread = type("T", (), {
+            "is_alive": lambda self: True,
+            "join": lambda self, timeout=None: joined.append(timeout),
+        })()
+        controller._control_thread = thread
+        controller._control_running = True
+
+        controller.stop_control_loop(timeout=1.5)
+
+        assert joined == [1.5]
+        assert controller._control_thread is None
+
+    def test_stop_is_safe_when_no_thread_was_started(self, controller):
+        controller.stop_control_loop()
+
+        assert controller._control_running is False
+
+    def test_stop_survives_a_thread_without_join(self, controller):
+        """Pybricks MicroPython's Thread has neither is_alive nor join."""
+        controller._control_thread = type("MicroPythonThread", (), {})()
+        controller._control_running = True
+
+        controller.stop_control_loop()
+
+        assert controller._control_thread is None
+
     def test_no_dispatch_after_the_control_loop_is_stopped(self, controller):
         seen = []
         controller.on("left_joystick", lambda ctrl: seen.append(ctrl))

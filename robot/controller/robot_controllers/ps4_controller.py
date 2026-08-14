@@ -9,6 +9,7 @@ except ImportError:
     _time = None
 # import traceback  # Commented out due to EV3 compatibility issues
 from error_reporting import report_controller_error, report_exception
+from threading_compat import join_thread, thread_is_alive
 
 MIN_JOYSTICK_MOVE = 100  # The minimum value of joystick move to be considered as a move (for -1000 to 1000 range)
 
@@ -308,18 +309,23 @@ class PS4Controller(EventHandler, threading.Thread):
         self._control_thread = threading.Thread(target=self._control_loop)
         self._control_thread.start()
 
-    def stop_control_loop(self):
+    def stop_control_loop(self, timeout=2.0):
         """Stop applying joystick input without stopping the reader.
 
         Called first thing during shutdown so the control loop cannot issue a
-        fresh motor command after the motors have already been stopped.
+        fresh motor command after the motors have already been stopped.  The
+        in-flight tick is waited for rather than merely signalled, so that
+        guarantee holds even if a tick is mid-dispatch.
 
         Tracked separately from ``stopped`` so the control thread also cannot
         outlive a read loop that ended on its own (EOF or an exception) while
         leaving ``stopped`` untouched for the shutdown logic in ``main()``.
         """
         self._control_running = False
+        thread = self._control_thread
         self._control_thread = None
+        if thread_is_alive(thread):
+            join_thread(thread, timeout=timeout)
 
     # Retained for internal callers; ``stop_control_loop`` is the public name.
     _stop_control_loop = stop_control_loop
