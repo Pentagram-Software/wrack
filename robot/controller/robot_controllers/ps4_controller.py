@@ -11,6 +11,22 @@ except ImportError:
 from error_reporting import report_controller_error, report_exception
 
 MIN_JOYSTICK_MOVE = 100  # The minimum value of joystick move to be considered as a move (for -1000 to 1000 range)
+
+# Rate at which cached stick positions are applied to the motors.
+#
+# Stick events arrive far faster than the EV3 can act on them: applying every
+# one measured ~10ms of motor work per event, capping the read loop at roughly
+# 96 events/second, well under the burst rate of a stick in motion.  The loop
+# then fell behind, the kernel's fixed evdev ring buffer overflowed, and input
+# was discarded outright (measured: 58 SYN_DROPPED in one session, with event
+# lag reaching 1.9s).
+#
+# Coalescing decouples the two: the read loop only ever updates cached axis
+# values, and this loop applies the most recent ones at a fixed rate.  No stick
+# position is lost, because the newest value always wins and is always applied
+# on the next tick.  30Hz is a 33ms worst-case delay, below the threshold where
+# steering feels laggy and far below the EV3 motors' own response time.
+DEFAULT_CONTROL_LOOP_HZ = 30
 # Throttle right-stick debug lines; stick events arrive very frequently.
 RIGHT_STICK_DEBUG_INTERVAL_S = 0.25
 
@@ -181,6 +197,10 @@ class PS4Controller(EventHandler, threading.Thread):
 
     _controller_type = "ps4"
 
+    # Optional InputDiagnostics instance; see set_diagnostics().
+    _diagnostics = None;
+    _control_running = False;
+
     # A flag for stopping the main loop of handling PlayStation controller events
     stopped = False;
     connected = False;  # Track connection status
@@ -206,12 +226,136 @@ class PS4Controller(EventHandler, threading.Thread):
         self.last_joystick_event_time = 0
         self.connected = False
         self._axis_range = None
+        self._diagnostics = None
+        self._control_interval = 1.0 / DEFAULT_CONTROL_LOOP_HZ
+        self._control_thread = None
+        self._control_running = False
+        # Set by the reader thread when a stick's cached value changes,
+        # cleared by the control loop when it applies them.
+        self._left_dirty = False
+        self._right_dirty = False
         self._debug_input = False
         self._last_right_stick_debug_t = 0
         self._right_stick_debug_count = 0
         self._last_right_stick_debug_xy = None
     def __str__(self):
         return "PlayStation controller (PS4/PS5) for EV3"; 
+
+    def set_control_rate(self, hz):
+        """Set how often cached stick positions are applied to the motors.
+
+        Lower this if the control loop cannot keep up on a loaded EV3;
+        raising it past the point where a tick's motor work exceeds the tick
+        interval just reintroduces a backlog on the control thread.
+        """
+        if hz <= 0:
+            raise ValueError("control rate must be positive")
+        self._control_interval = 1.0 / hz
+
+    def _mark_stick_dirty(self, event_name):
+        """Note that a stick's cached value changed, for the control loop.
+
+        Deliberately does not dispatch: doing the motor work here is what
+        starved the read loop (see DEFAULT_CONTROL_LOOP_HZ).
+        """
+        if event_name == "left_joystick":
+            self._left_dirty = True
+        else:
+            self._right_dirty = True
+        if self._diagnostics is not None:
+            self._diagnostics.record_coalesced(event_name)
+
+    def _control_tick(self):
+        """Apply any changed stick positions once.  Returns events dispatched.
+
+        The dirty flag is cleared *before* dispatching so a stick moved while
+        this tick is running is picked up by the next one rather than being
+        cleared unseen.
+        """
+        dispatched = 0
+        if self._left_dirty:
+            self._left_dirty = False
+            self._dispatch("left_joystick")
+            dispatched += 1
+        if self._right_dirty:
+            self._right_dirty = False
+            self._dispatch("right_joystick")
+            dispatched += 1
+        return dispatched
+
+    def _control_loop(self):
+        while self._control_running and not self.stopped:
+            try:
+                self._control_tick()
+            except Exception as e:
+                # A callback exception must not kill the control loop and
+                # leave the sticks permanently dead for the session, which is
+                # what happens when one escapes the read loop.
+                report_exception(
+                    "PS4Controller._control_loop()",
+                    "applying joystick state",
+                    e,
+                    "Coalesced control loop",
+                )
+            _sleep(self._control_interval)
+
+    def _start_control_loop(self):
+        if self._control_thread is not None:
+            return
+        self._control_running = True
+        # Pybricks MicroPython's Thread() accepts only ``target`` - passing
+        # ``daemon``/``name`` raises TypeError (PEN-188).
+        self._control_thread = threading.Thread(target=self._control_loop)
+        self._control_thread.start()
+
+    def stop_control_loop(self):
+        """Stop applying joystick input without stopping the reader.
+
+        Called first thing during shutdown so the control loop cannot issue a
+        fresh motor command after the motors have already been stopped.
+
+        Tracked separately from ``stopped`` so the control thread also cannot
+        outlive a read loop that ended on its own (EOF or an exception) while
+        leaving ``stopped`` untouched for the shutdown logic in ``main()``.
+        """
+        self._control_running = False
+        self._control_thread = None
+
+    # Retained for internal callers; ``stop_control_loop`` is the public name.
+    _stop_control_loop = stop_control_loop
+
+    def set_diagnostics(self, diagnostics):
+        """Attach an InputDiagnostics instance to instrument the read loop.
+
+        Purely observational: the read loop behaves identically whether or
+        not one is attached.  Pass ``None`` to detach.
+        """
+        self._diagnostics = diagnostics
+
+    def _dispatch(self, event_name):
+        """Fire *event_name*, timing the dispatch when diagnostics are on.
+
+        Exceptions propagate exactly as ``trigger()`` raises them; the
+        diagnostics only observe.
+        """
+        diagnostics = self._diagnostics
+        if diagnostics is None:
+            self.trigger(event_name)
+            return
+
+        start = diagnostics.now()
+        failed = False
+        try:
+            self.trigger(event_name)
+        except Exception:
+            failed = True
+            raise
+        finally:
+            end = diagnostics.now()
+            if start is not None and end is not None:
+                diagnostics.record_dispatch(
+                    event_name, (end - start) * 1000.0, failed=failed
+                )
 
     def set_debug_input(self, enabled):
         """Enable or disable concise controller input diagnostics."""
@@ -265,6 +409,9 @@ class PS4Controller(EventHandler, threading.Thread):
         # depending on a hardcoded event number.
         # If name-based detection fails, fall back to probing the most common paths.
         infile_path = "/dev/input/event4"
+        # Bound before the try block so the loop-exit diagnostics below can
+        # reference it even when the failure happens during device discovery.
+        last_event_desc = None
         
         try:
             print("Searching for PlayStation controller (PS4/PS5)...")
@@ -305,6 +452,11 @@ class PS4Controller(EventHandler, threading.Thread):
             print("PlayStation controller connected successfully!")
             self.connected = True  # Mark as connected
 
+            # Motor work happens here, not in the read loop below, so that a
+            # slow motor call can never stall reading and cause the kernel to
+            # drop input.
+            self._start_control_loop()
+
             # Read from the file
             # long int, long int, unsigned short, unsigned short, unsigned int
             FORMAT = 'llHHI'    
@@ -316,6 +468,12 @@ class PS4Controller(EventHandler, threading.Thread):
                 print("Starting the PlayStation controller loop...")            
             while event and not self.stopped:
                 (tv_sec, tv_usec, ev_type, code, value) = struct.unpack(FORMAT, event)
+
+                if self._diagnostics is not None:
+                    self._diagnostics.record_event(ev_type, code, tv_sec, tv_usec)
+                    last_event_desc = "type={} code={} value={}".format(
+                        ev_type, code, value
+                    )
 
 
                 #  Handle right joystick
@@ -340,7 +498,7 @@ class PS4Controller(EventHandler, threading.Thread):
                                 axis_name, value, self.r_left, self.r_forward, axis_bits
                             )
                         )
-                    self.trigger("right_joystick")
+                    self._mark_stick_dirty("right_joystick")
 
                 # Handle left joystick (PS4 8-bit and PS5/DualSense 16-bit axes)
                 if ev_type == EV_ABS and (code == LEFT_STICK_X or code == LEFT_STICK_Y):
@@ -358,7 +516,7 @@ class PS4Controller(EventHandler, threading.Thread):
                             if abs(self.l_left) < MIN_JOYSTICK_MOVE:
                                 self.l_left = 0
 
-                    self.trigger("left_joystick")
+                    self._mark_stick_dirty("left_joystick")
 
 
 
@@ -367,19 +525,19 @@ class PS4Controller(EventHandler, threading.Thread):
                 if ev_type == 3 and code >15:
                     # Handle left/right arrows (horizontal axis)
                     if(code == 16 and value == 1):
-                        self.trigger("left_arrow_pressed");
+                        self._dispatch("left_arrow_pressed");
                     if(code == 16 and value == 0):
-                        self.trigger("lr_arrow_released");
+                        self._dispatch("lr_arrow_released");
                     if(code == 16 and value == 4294967295):
-                        self.trigger("right_arrow_pressed");
+                        self._dispatch("right_arrow_pressed");
                     
                     # Handle up/down arrows (vertical axis)
                     if(code == 17 and value == 1):
-                        self.trigger("up_arrow_pressed");
+                        self._dispatch("up_arrow_pressed");
                     if(code == 17 and value == 0):
-                        self.trigger("ud_arrow_released");
+                        self._dispatch("ud_arrow_released");
                     if(code == 17 and value == 4294967295):
-                        self.trigger("down_arrow_pressed");
+                        self._dispatch("down_arrow_pressed");
 
                 # Handle controller buttons
                 # Note: PS4 DualShock 4 and PS5 DualSense use the same evdev key codes
@@ -388,34 +546,34 @@ class PS4Controller(EventHandler, threading.Thread):
                     # Cross (X) button — BTN_SOUTH (304)
                     if code == X_BUTTON and value == 1:
                         self._debug("button code=304 event=cross_button")
-                        self.trigger("cross_button");
+                        self._dispatch("cross_button");
                     # Circle button — BTN_EAST (305)
                     if code == CIRCLE_BUTTON and value == 1:
-                        self.trigger("circle_button");
+                        self._dispatch("circle_button");
                     # Triangle button — BTN_NORTH (307)
                     if code == TRIANGLE_BUTTON and value == 1:
-                        self.trigger("triangle_button");
+                        self._dispatch("triangle_button");
                     # Square button — BTN_WEST (308)
                     if code == SQUARE_BUTTON and value == 1:
-                        self.trigger("square_button");
+                        self._dispatch("square_button");
 
                     # L1 button — BTN_TL (310)
                     if code == 310 and value == 1:
-                        self.trigger("l1_button");
+                        self._dispatch("l1_button");
                     # L2 button — BTN_TL2 (312)
                     if code == 312 and value == 1:
-                        self.trigger("l2_button");
+                        self._dispatch("l2_button");
                     # R1 button — BTN_TR (311)
                     if code == 311 and value == 1:
-                        self.trigger("r1_button");
+                        self._dispatch("r1_button");
                     # R2 button — BTN_TR2 (313)
                     if code == 313 and value == 1:
-                        self.trigger("r2_button");
+                        self._dispatch("r2_button");
 
                     # Options button — BTN_START (315)
                     # PS4: Options | PS5: Options
                     if code == 315 and value == 1:
-                        self.trigger("options_button");
+                        self._dispatch("options_button");
                     # Share/Create button — BTN_SELECT (314)
                     # PS4: Share | PS5: Create
                     # TODO: Handle Share/Create button (314) if needed
@@ -431,9 +589,20 @@ class PS4Controller(EventHandler, threading.Thread):
                 
 
             in_file.close()
+            if self._diagnostics is not None:
+                self._diagnostics.record_loop_exit(
+                    "stopped by request" if self.stopped else "device reported EOF",
+                    last_event=last_event_desc,
+                )
         except OSError as e:
             # Handle both FileNotFoundError and PermissionError under OSError
             error_msg = str(e)
+            if self._diagnostics is not None:
+                self._diagnostics.record_loop_exit(
+                    "OSError from controller device",
+                    exception=e,
+                    last_event=last_event_desc,
+                )
             report_controller_error("PS4Controller", "device access", e, infile_path)
             if "No such file" in error_msg or "No PlayStation controller found" in error_msg:
                 print("ERROR: PlayStation controller not found!")
@@ -450,9 +619,19 @@ class PS4Controller(EventHandler, threading.Thread):
                 print("Check device connection and permissions")
             self.connected = False
         except Exception as e:
+            if self._diagnostics is not None:
+                self._diagnostics.record_loop_exit(
+                    "unhandled exception in read loop",
+                    exception=e,
+                    last_event=last_event_desc,
+                )
             report_exception("PS4Controller.run()", "event processing loop", e, "Main controller event loop")
             print("Check Bluetooth connection and try again")
             self.connected = False
+        finally:
+            # Never leave the control thread spinning against a read loop
+            # that has already ended.
+            self._stop_control_loop()
 
     def handle_event(self, event):
         # Override this method to handle PlayStation controller events
@@ -460,26 +639,36 @@ class PS4Controller(EventHandler, threading.Thread):
  
     def stop(self):
         self.stopped = True;
+        self.stop_control_loop()
     
     def is_connected(self):
         """Check if the PlayStation controller is connected and working"""
         return self.connected
 
     def _is_axis_sentinel(self, value):
-        """Ignore release sentinel events; 255 is only a sentinel on 8-bit PS4 axes."""
-        if value in AXIS_SENTINEL_VALUES:
-            return True
-        if self._get_axis_range() == AXIS_RANGE_8BIT and value == 255:
-            return True
-        return False
+        """Ignore evdev release sentinels (-1/-2 read as unsigned).
+
+        255 is deliberately *not* treated as a sentinel: on a PS4's 8-bit
+        axes it is the legitimate maximum, so discarding it made a fully
+        deflected stick indistinguishable from no input at all and left the
+        robot acting on the last sub-maximum reading.
+        """
+        return value in AXIS_SENTINEL_VALUES
 
     def _detect_axis_range(self, value):
-        """Auto-detect 8-bit (PS4) vs 16-bit (PS5/DualSense) stick axis range."""
-        if self._axis_range is not None or self._is_axis_sentinel(value):
+        """Auto-detect 8-bit (PS4) vs 16-bit (PS5/DualSense) stick axis range.
+
+        An 8-bit guess is provisional and upgraded as soon as a value beyond
+        the 8-bit maximum arrives, because a DualSense's 16-bit axes spend
+        plenty of time reporting small values that are indistinguishable
+        from 8-bit ones.  A PS4 can never exceed its 8-bit maximum, so the
+        upgrade is one-way and cannot mis-detect in the other direction.
+        """
+        if self._is_axis_sentinel(value):
             return
-        if value > 1000:
+        if value > AXIS_RANGE_8BIT[1]:
             self._axis_range = AXIS_RANGE_16BIT
-        else:
+        elif self._axis_range is None:
             self._axis_range = AXIS_RANGE_8BIT
 
     def _get_axis_range(self):
@@ -492,6 +681,8 @@ class PS4Controller(EventHandler, threading.Thread):
         Returns None for sentinel/release values that should be ignored.
         """
         if self._is_axis_sentinel(value):
+            if self._diagnostics is not None:
+                self._diagnostics.record_axis_rejected(value)
             return None
 
         self._detect_axis_range(value)
