@@ -23,6 +23,9 @@ class Turret(DriveSystem):
         self.min_angle = -90
         self.center_position = 0  # Center/home position
         self.max_speed = 360  # Maximum rotation speed in degrees/second
+        self._debug_motor = False
+        self._last_debug_action = None
+        self._last_debug_speed = None
         
         # Get turret motor from device manager
         if device_manager.is_device_available("turret_motor"):
@@ -32,6 +35,25 @@ class Turret(DriveSystem):
             self.home_turret()
         else:
             print("Turret motor not available")
+
+    def set_debug_motor(self, enabled):
+        """Enable or disable motor-command diagnostics for the right-stick path."""
+        self._debug_motor = bool(enabled)
+        self._last_debug_action = None
+        self._last_debug_speed = None
+        if self._debug_motor:
+            print("Turret motor command debug enabled")
+
+    def _debug_motor_cmd(self, action, detail, change_key=None):
+        """Log motor commands only when the action/key changes (avoids flood)."""
+        if not self._debug_motor:
+            return
+        key = change_key if change_key is not None else detail
+        if action == self._last_debug_action and key == self._last_debug_speed:
+            return
+        self._last_debug_action = action
+        self._last_debug_speed = key
+        print("Turret motor: {} {}".format(action, detail))
     
     def home_turret(self):
         """Reset turret to center position and set this as angle 0"""
@@ -77,12 +99,22 @@ class Turret(DriveSystem):
         y_axis: -100 to 100 (up/down joystick movement, currently unused)
         """
         if not self.turret_motor:
+            self._debug_motor_cmd(
+                "SKIP",
+                "no motor ref (x={:.0f} y={:.0f})".format(x_axis, y_axis),
+                change_key="no_motor",
+            )
             return
         
         # The controller keeps raw normalized input; this is the single
         # deadzone in the right-stick-to-turret path.
         if abs(x_axis) < TURRET_SPEED_DEADZONE:
             # Stop turret when joystick is centered or near center
+            self._debug_motor_cmd(
+                "STOP",
+                "deadzone x={:.0f} (threshold={})".format(x_axis, TURRET_SPEED_DEADZONE),
+                change_key="deadzone",
+            )
             try:
                 self.turret_motor.stop(Stop.HOLD)
             except Exception as e:
@@ -98,6 +130,11 @@ class Turret(DriveSystem):
         
         try:
             # Use run() for continuous rotation at specified speed
+            self._debug_motor_cmd(
+                "RUN",
+                "speed={} deg/s (stick x={:.0f})".format(speed, x_axis),
+                change_key=speed,
+            )
             self.turret_motor.run(speed)
         except Exception as e:
             report_device_error("turret_motor", "speed_control_run", e, "run({})".format(speed))

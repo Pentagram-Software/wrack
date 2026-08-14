@@ -3,10 +3,16 @@ from event_handler import EventHandler
 import threading
 import struct
 from time import sleep as _sleep
+try:
+    from time import time as _time
+except ImportError:
+    _time = None
 # import traceback  # Commented out due to EV3 compatibility issues
 from error_reporting import report_controller_error, report_exception
 
 MIN_JOYSTICK_MOVE = 100  # The minimum value of joystick move to be considered as a move (for -1000 to 1000 range)
+# Throttle right-stick debug lines; stick events arrive very frequently.
+RIGHT_STICK_DEBUG_INTERVAL_S = 0.25
 
 # How long to poll for a controller connection after starting the reader
 # thread, and how often.  The Bluetooth device-open handshake takes a
@@ -201,18 +207,55 @@ class PS4Controller(EventHandler, threading.Thread):
         self.connected = False
         self._axis_range = None
         self._debug_input = False
+        self._last_right_stick_debug_t = 0
+        self._right_stick_debug_count = 0
+        self._last_right_stick_debug_xy = None
     def __str__(self):
         return "PlayStation controller (PS4/PS5) for EV3"; 
 
     def set_debug_input(self, enabled):
         """Enable or disable concise controller input diagnostics."""
         self._debug_input = bool(enabled)
+        self._last_right_stick_debug_t = 0
+        self._right_stick_debug_count = 0
+        self._last_right_stick_debug_xy = None
         if self._debug_input:
             print("PlayStation controller input debug enabled")
 
     def _debug(self, message):
         if self._debug_input:
             print("PS4 input: {}".format(message))
+
+    def _should_debug_right_stick(self, scaled_x, scaled_y):
+        """Rate-limit right-stick debug; always log first event and large moves."""
+        if not self._debug_input:
+            return False
+        self._right_stick_debug_count += 1
+        xy = (int(scaled_x), int(scaled_y))
+        now = _time() if _time is not None else None
+        if self._last_right_stick_debug_xy is None:
+            self._last_right_stick_debug_xy = xy
+            if now is not None:
+                self._last_right_stick_debug_t = now
+            return True
+        dx = abs(xy[0] - self._last_right_stick_debug_xy[0])
+        dy = abs(xy[1] - self._last_right_stick_debug_xy[1])
+        if dx >= 10 or dy >= 10:
+            self._last_right_stick_debug_xy = xy
+            if now is not None:
+                self._last_right_stick_debug_t = now
+            return True
+        if now is not None:
+            if (now - self._last_right_stick_debug_t) >= RIGHT_STICK_DEBUG_INTERVAL_S:
+                self._last_right_stick_debug_t = now
+                self._last_right_stick_debug_xy = xy
+                return True
+            return False
+        # No time module: fall back to every 8th event
+        if (self._right_stick_debug_count % 8) == 0:
+            self._last_right_stick_debug_xy = xy
+            return True
+        return False
     
     # This is the main loop of handling PlayStation controller events. It is run in a separate thread.
     def run(self):
@@ -289,9 +332,14 @@ class PS4Controller(EventHandler, threading.Thread):
                     # The turret owns its deadzone.  Filtering here as well made
                     # small, deliberate right-stick movements indistinguishable
                     # from a centered stick.
-                    self._debug("right stick x={:.0f} y={:.0f}".format(
-                        self.r_left, self.r_forward
-                    ))
+                    if self._should_debug_right_stick(self.r_left, self.r_forward):
+                        axis_bits = "16bit" if self._get_axis_range() == AXIS_RANGE_16BIT else "8bit"
+                        axis_name = "RX" if code == RIGHT_STICK_X else "RY"
+                        self._debug(
+                            "right stick raw {}={} scaled x={:.0f} y={:.0f} ({})".format(
+                                axis_name, value, self.r_left, self.r_forward, axis_bits
+                            )
+                        )
                     self.trigger("right_joystick")
 
                 # Handle left joystick (PS4 8-bit and PS5/DualSense 16-bit axes)

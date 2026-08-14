@@ -43,7 +43,9 @@ from pybricks.ev3devices import (Motor, TouchSensor, ColorSensor,
 import sys
 from time import sleep
 
-PS4_INPUT_DEBUG = False
+# Temporary diagnosis aid for right-stick → turret issues.
+# Set back to False once the fault is confirmed (console floods if left on).
+PS4_INPUT_DEBUG = True
 
 # Import TerrainScanner with error handling
 TerrainScanner = None
@@ -646,13 +648,17 @@ def watch(value):
     """Handle right joystick movement for turret control"""
     if not turret:
         if PS4_INPUT_DEBUG:
-            print("PS4 input: right stick received, but turret is unavailable")
+            print("PS4→turret: handler got stick x={:.0f} y={:.0f}, but turret object is None".format(
+                value.r_left, value.r_forward
+            ))
         return
 
     # Keep the raw normalized stick value intact. Turret.speed_control()
     # applies the only deadzone used by this control path.
-    if PS4_INPUT_DEBUG:
-        print("PS4 input: right stick x={:.0f} y={:.0f}".format(
+    # Stick arrival is logged in PS4Controller; motor run/stop in Turret.
+    # Only warn here when the cached motor reference is missing.
+    if PS4_INPUT_DEBUG and not turret.turret_motor:
+        print("PS4→turret: handler stick x={:.0f} y={:.0f} but motor_ref=False".format(
             value.r_left, value.r_forward
         ))
     turret.speed_control(value.r_left, value.r_forward)
@@ -675,6 +681,10 @@ def main():
     # Initialize both PS4 and Network Remote controllers
     controller = PS4Controller()
     controller.set_debug_input(PS4_INPUT_DEBUG)
+    if turret:
+        turret.set_debug_motor(PS4_INPUT_DEBUG)
+    if PS4_INPUT_DEBUG:
+        print("Turret motor debug enabled (right-stick path)")
     remote_controller = RemoteController()
     _runtime_controller = controller
     _runtime_remote_controller = remote_controller

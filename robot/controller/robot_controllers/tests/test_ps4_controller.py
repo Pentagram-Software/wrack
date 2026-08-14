@@ -428,6 +428,30 @@ class TestPS4Controller:
         """Controller input diagnostics are opt-in."""
         self.controller.set_debug_input(True)
         assert self.controller._debug_input is True
+
+    def test_should_debug_right_stick_logs_first_and_large_move(self):
+        """Right-stick debug fires on first sample and meaningful deltas."""
+        self.controller.set_debug_input(True)
+        assert self.controller._should_debug_right_stick(0, 0) is True
+        assert self.controller._should_debug_right_stick(2, 0) is False
+        assert self.controller._should_debug_right_stick(15, 0) is True
+
+    def test_right_stick_debug_includes_raw_axis(self):
+        """Enabled input debug prints raw axis code and scaled values."""
+        event = struct.pack("llHHI", 0, 0, 3, 3, 200)
+        mock_event_file = MagicMock()
+        mock_event_file.read.side_effect = [event, b""]
+        self.controller.set_debug_input(True)
+
+        with patch("robot_controllers.ps4_controller.find_controller_device",
+                   return_value="/dev/input/event99"), \
+             patch("builtins.open", return_value=mock_event_file), \
+             patch("builtins.print") as mock_print:
+            self.controller.run()
+
+        printed = " ".join(str(c) for c in mock_print.call_args_list)
+        assert "right stick raw RX=" in printed
+        assert "scaled x=" in printed
     
     def test_joystick_value_updates(self):
         """Test that joystick values can be updated"""

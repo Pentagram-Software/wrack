@@ -123,6 +123,26 @@ class TestTurret:
         """Test setting maximum speed"""
         self.turret.set_max_speed(180)
         assert self.turret.max_speed == 180
+
+    def test_set_debug_motor_enables_flag(self):
+        """Motor command diagnostics are opt-in."""
+        assert self.turret._debug_motor is False
+        self.turret.set_debug_motor(True)
+        assert self.turret._debug_motor is True
+        self.turret.set_debug_motor(False)
+        assert self.turret._debug_motor is False
+
+    def test_speed_control_debug_logs_run_then_stop(self, capsys):
+        """With debug on, RUN and STOP transitions are printed once each."""
+        self.turret.set_debug_motor(True)
+        self.turret.speed_control(80, 0)
+        self.turret.speed_control(80, 0)  # same speed — should not re-log
+        self.turret.speed_control(0, 0)
+        self.turret.speed_control(5, 0)  # still deadzone — should not re-log STOP
+        out = capsys.readouterr().out
+        assert out.count("Turret motor: RUN") == 1
+        assert out.count("Turret motor: STOP") == 1
+        assert "speed=288" in out
     
     def test_home_turret(self):
         """Test turret homing"""
