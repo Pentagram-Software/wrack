@@ -143,6 +143,20 @@ class TestTurret:
         assert out.count("Turret motor: RUN") == 1
         assert out.count("Turret motor: STOP") == 1
         assert "speed=288" in out
+
+    def test_speed_control_debug_logs_fail_when_run_raises(self, capsys):
+        """RUN is not logged when the motor call fails; FAIL is."""
+        self.turret.set_debug_motor(True)
+
+        def boom(speed):
+            raise RuntimeError("motor fault")
+
+        self.mock_motor.run = boom
+        self.turret.speed_control(80, 0)
+        out = capsys.readouterr().out
+        assert "Turret motor: RUN" not in out
+        assert out.count("Turret motor: FAIL") == 1
+        assert "run(288)" in out
     
     def test_home_turret(self):
         """Test turret homing"""

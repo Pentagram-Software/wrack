@@ -110,14 +110,19 @@ class Turret(DriveSystem):
         # deadzone in the right-stick-to-turret path.
         if abs(x_axis) < TURRET_SPEED_DEADZONE:
             # Stop turret when joystick is centered or near center
-            self._debug_motor_cmd(
-                "STOP",
-                "deadzone x={:.0f} (threshold={})".format(x_axis, TURRET_SPEED_DEADZONE),
-                change_key="deadzone",
-            )
             try:
                 self.turret_motor.stop(Stop.HOLD)
+                self._debug_motor_cmd(
+                    "STOP",
+                    "deadzone x={:.0f} (threshold={})".format(x_axis, TURRET_SPEED_DEADZONE),
+                    change_key="deadzone",
+                )
             except Exception as e:
+                self._debug_motor_cmd(
+                    "FAIL",
+                    "stop(Stop.HOLD): {}".format(e),
+                    change_key="fail_stop",
+                )
                 report_device_error("turret_motor", "speed_control_stop", e, "stop(Stop.HOLD)")
             return
         
@@ -130,13 +135,18 @@ class Turret(DriveSystem):
         
         try:
             # Use run() for continuous rotation at specified speed
+            self.turret_motor.run(speed)
             self._debug_motor_cmd(
                 "RUN",
                 "speed={} deg/s (stick x={:.0f})".format(speed, x_axis),
                 change_key=speed,
             )
-            self.turret_motor.run(speed)
         except Exception as e:
+            self._debug_motor_cmd(
+                "FAIL",
+                "run({}): {}".format(speed, e),
+                change_key="fail_run",
+            )
             report_device_error("turret_motor", "speed_control_run", e, "run({})".format(speed))
     
     def scale_joystick_to_angle(self, joystick_value):
