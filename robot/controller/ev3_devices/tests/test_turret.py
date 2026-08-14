@@ -157,6 +157,15 @@ class TestTurret:
         assert "Turret motor: RUN" not in out
         assert out.count("Turret motor: FAIL") == 1
         assert "run(288)" in out
+
+    def test_speed_control_debug_buckets_nearby_run_speeds(self, capsys):
+        """Nearby speeds in the same bucket only log RUN once."""
+        self.turret.set_debug_motor(True)
+        # 75% -> 270, 80% -> 288; both round to bucket 270 with size 45
+        self.turret.speed_control(75, 0)
+        self.turret.speed_control(80, 0)
+        out = capsys.readouterr().out
+        assert out.count("Turret motor: RUN") == 1
     
     def test_home_turret(self):
         """Test turret homing"""

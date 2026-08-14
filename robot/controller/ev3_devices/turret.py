@@ -7,6 +7,8 @@ from .drive_system import DriveSystem
 from error_reporting import report_device_error, report_exception
 
 TURRET_SPEED_DEADZONE = 15
+# Coarse bucket for RUN debug keys so smooth stick sweeps stay readable.
+TURRET_DEBUG_SPEED_BUCKET = 45
 
 
 class Turret(DriveSystem):
@@ -54,6 +56,17 @@ class Turret(DriveSystem):
         self._last_debug_action = action
         self._last_debug_speed = key
         print("Turret motor: {} {}".format(action, detail))
+
+    def _bucket_debug_speed(self, speed):
+        """Round speed to TURRET_DEBUG_SPEED_BUCKET for change detection."""
+        if speed == 0:
+            return 0
+        bucket = int(round(abs(speed) / float(TURRET_DEBUG_SPEED_BUCKET))) * TURRET_DEBUG_SPEED_BUCKET
+        if bucket == 0:
+            bucket = TURRET_DEBUG_SPEED_BUCKET
+        if speed < 0:
+            return -bucket
+        return bucket
     
     def home_turret(self):
         """Reset turret to center position and set this as angle 0"""
@@ -139,7 +152,7 @@ class Turret(DriveSystem):
             self._debug_motor_cmd(
                 "RUN",
                 "speed={} deg/s (stick x={:.0f})".format(speed, x_axis),
-                change_key=speed,
+                change_key=self._bucket_debug_speed(speed),
             )
         except Exception as e:
             self._debug_motor_cmd(
