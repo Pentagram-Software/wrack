@@ -93,6 +93,13 @@ class _Controller:
         return MagicMock()
 
 
+class _InputDiagnostics:
+    def __init__(self, report_interval=None):
+        self.report_interval = report_interval
+        self.start = MagicMock()
+        self.stop = MagicMock()
+
+
 class _Collector:
     def __init__(self, source):
         self.source = source
@@ -175,6 +182,7 @@ def _load_health_only_main(monkeypatch):
             MIN_JOYSTICK_MOVE=10,
             PS4Controller=_Controller,
             RemoteController=_Controller,
+            InputDiagnostics=_InputDiagnostics,
             wait_for_connection=lambda controller: (False, 0),
         ),
     )

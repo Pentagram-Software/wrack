@@ -7,6 +7,13 @@ Provides PS4 controller and network remote controller functionality.
 
 from .ps4_controller import PS4Controller, MIN_JOYSTICK_MOVE, wait_for_connection
 from .remote_controller import RemoteController
+from .input_diagnostics import InputDiagnostics
 
 __version__ = "1.0.0"
-__all__ = ["PS4Controller", "RemoteController", "MIN_JOYSTICK_MOVE", "wait_for_connection"]
+__all__ = [
+    "PS4Controller",
+    "RemoteController",
+    "MIN_JOYSTICK_MOVE",
+    "wait_for_connection",
+    "InputDiagnostics",
+]

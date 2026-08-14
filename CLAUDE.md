@@ -127,6 +127,54 @@ Cloud Functions ──native GCP metrics──► GCP Cloud Monitoring ──pul
 - Motor ports: Drive L = Port A, Drive R = Port D, Turret = Port C; sensors: Ultrasonic = S2, Gyro = S3.
 - Run tests (desktop Python): `cd robot/controller && python -m pytest tests/`
 
+### Controller input diagnostics (`robot_controllers/input_diagnostics.py`)
+
+Instrumentation for diagnosing unresponsive PS4/PS5 input. Purely observational — the
+control path behaves identically whether or not it is attached. Enable by setting
+`PS4_INPUT_DIAGNOSTICS = True` in `main.py`, deploy with `make deploy-robot`, and run
+`main.py` over SSH so the periodic report is visible. Turn it back off afterwards: the
+report writes to stdout, which on the EV3 is a blocking sink.
+
+A report is printed every `PS4_INPUT_DIAGNOSTICS_INTERVAL_S` (default 10s), and once
+more on shutdown via the Options button. Read it as follows:
+
+| Line | Meaning when it looks wrong |
+|------|-----------------------------|
+| `SYN_DROPPED: n` | Non-zero means the kernel's per-fd evdev ring buffer overflowed and **discarded input the robot never saw**. This is the direct measurement of "a button press did nothing". |
+| `event lag: avg/max` | Computed from each event's kernel `CLOCK_REALTIME` timestamp vs. the wall clock at processing time, so it includes queueing delay. A large `max` with a small `avg` means something intermittently stalls the read loop. |
+| `stale(>=100ms)` | How many events were already stale when acted on — i.e. the robot reacting to old input. |
+| `dispatch <event>` | Per-callback timing, worst `max` first. Any callback with a `max` in the hundreds of ms is a read-loop stall long enough to cause the `SYN_DROPPED` above. `ERRORS=n` counts callbacks that raised. |
+| `axis values discarded as sentinel` | Raw axis values thrown away by `_is_axis_sentinel`. Only the evdev release sentinels (`4294967295`/`4294967294`) should appear here. |
+| `(from N events, Mx)` | Appended to a `dispatch` line: how many raw stick events were coalesced into that many control-loop dispatches. This ratio is what keeps the read loop ahead of the input rate; if it sits at `1.0x` while events are dropping, coalescing is not engaging. |
+| `READ LOOP IS DEAD` | `PS4Controller.run()` has terminated, so the gamepad is inert until restart while the network remote keeps working. Includes the exception and the last event processed. |
+
+Because a callback exception propagates out of `EventHandler.trigger()` and kills the
+reader thread for the rest of the session, `wait_for_workers()` will keep blocking on a
+thread that no longer exists — the `READ LOOP IS DEAD` line is the only signal.
+
+### Controller input path: why it is split across three threads
+
+A diagnostics session measured ~10 ms of motor work per stick event, which caps a read
+loop that does that work inline at roughly 96 events/second — below the burst rate of a
+stick in motion. The loop fell behind, the kernel's fixed-size evdev ring buffer
+overflowed, and input was discarded (58 `SYN_DROPPED` in one session; event lag peaking
+at 1.9 s). Anything that blocks the read loop has the same effect: a single
+`ev3.speaker.say()` measured 5–7 seconds, during which every press was lost.
+
+The path is therefore split so that nothing slow runs on the thread that reads events:
+
+| Thread | Responsibility |
+|--------|----------------|
+| Reader (`PS4Controller.run()`) | Parses evdev events and updates cached axis values. Never touches a motor. Buttons still dispatch inline, since they are discrete and rare. |
+| Control loop (`PS4Controller._control_loop`) | Applies the latest cached stick positions to the motors at `DEFAULT_CONTROL_LOOP_HZ` (30 Hz). Started when the device opens, stopped when the read loop ends. Tune with `set_control_rate()` if a loaded EV3 cannot keep up. |
+| Action worker (`background_worker.BackgroundWorker`) | Runs speech and sound submitted via `main.py`'s `_run_async()`. Bounded queue; a full queue drops the newest action rather than letting stale announcements pile up. |
+
+Coalescing does not lose stick positions: the newest cached value always wins and is
+always applied on the next tick, so a release back to centre is guaranteed to be
+delivered. **When adding a controller callback, anything that can block for more than a
+few milliseconds must go through `_run_async()`** — a callback registered directly runs
+on the reader thread and will cause dropped input.
+
 ### MicroPython compatibility (mandatory check — always run for this repo)
 
 Every change that touches `robot/controller/` or its dependencies (anything imported into that
