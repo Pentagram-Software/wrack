@@ -21,6 +21,7 @@ Raspberry Pi ──UDP video──► iOS App                              │
 | `edge/vision/` | Image analysis model on Raspberry Pi | Python |
 | `cloud/functions/` | GCP Cloud Functions (controlRobot + telemetryIngestion) | Node.js |
 | `cloud/bigquery/` | BigQuery schemas and migrations | SQL |
+| `cloud/cat-recognizer/` | GCP IAM / bucket setup for CatRecognizer ML pipeline | Bash / Python |
 | `clients/ios/` | iPhone app — robot control + video stream | Swift |
 | `clients/web/` | Web controller — robot state, video, map | TypeScript |
 | `samples/python-video-receiver/` | macOS Python app for testing video stream | Python |

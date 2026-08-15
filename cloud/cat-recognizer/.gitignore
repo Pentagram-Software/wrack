@@ -1,0 +1,11 @@
+# Service account JSON keys — NEVER commit these
+keys/
+*-key.json
+service-account-key.json
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
