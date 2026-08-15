@@ -55,6 +55,12 @@ robot/controller/telemetry_config.py
 # robot/controller/scripts/build_mpy_cross.py) — rebuilt/cached by CI, not committed
 .mpy-cross-cache/
 
+# Vision model artifacts — export locally with edge/vision/*/export_model.py
+# and copy the .onnx to the Pi; never commit weights or ONNX graphs
+*.onnx
+*.pt
+exported_models/
+
 # Claude Code
 .claude/settings.json
 .claude/settings.local.json
