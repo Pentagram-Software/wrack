@@ -54,6 +54,17 @@ run() {
 info()  { echo "  ▸ $*"; }
 ok()    { echo "  ✓ $*"; }
 
+# `describe` returns non-zero (404) when the resource doesn't exist yet —
+# that's the expected/common case on a first run, not an error, so callers
+# must not let `set -e` treat it as one.
+bucket_exists() {
+  gcloud storage buckets describe "gs://$1" --project="${PROJECT_ID}" >/dev/null 2>&1
+}
+
+service_account_exists() {
+  gcloud iam service-accounts describe "$1" --project="${PROJECT_ID}" >/dev/null 2>&1
+}
+
 print_banner() {
   echo ""
   echo "=================================================="
@@ -83,6 +94,10 @@ check_prerequisites() {
 create_buckets() {
   info "Creating buckets..."
   for bucket in "${BUCKET_RAW}" "${BUCKET_PROCESSED}" "${BUCKET_MODELS}"; do
+    if [[ "${DRY_RUN}" != "true" ]] && bucket_exists "${bucket}"; then
+      info "gs://${bucket} already exists — skipping create"
+      continue
+    fi
     run gcloud storage buckets create "gs://${bucket}" \
       --project="${PROJECT_ID}" \
       --uniform-bucket-level-access \
@@ -126,16 +141,24 @@ create_folder_structure() {
 # ── 5.3: two least-privilege service accounts, bucket-scoped IAM only ──────────
 create_service_accounts() {
   info "Creating service accounts..."
-  run gcloud iam service-accounts create "${SA_DATA_NAME}" \
-    --project="${PROJECT_ID}" \
-    --display-name="CatRecognizer Data Collector" \
-    --description="Writes raw per-cat photos to ${BUCKET_RAW}; read-only on ${BUCKET_PROCESSED}"
+  if [[ "${DRY_RUN}" != "true" ]] && service_account_exists "${SA_DATA_EMAIL}"; then
+    info "${SA_DATA_EMAIL} already exists — skipping create"
+  else
+    run gcloud iam service-accounts create "${SA_DATA_NAME}" \
+      --project="${PROJECT_ID}" \
+      --display-name="CatRecognizer Data Collector" \
+      --description="Writes raw per-cat photos to ${BUCKET_RAW}; read-only on ${BUCKET_PROCESSED}"
+  fi
 
-  run gcloud iam service-accounts create "${SA_TRAINER_NAME}" \
-    --project="${PROJECT_ID}" \
-    --display-name="CatRecognizer Trainer/Export" \
-    --description="Reads raw photos, writes processed splits and exported ONNX models. No Artifact Registry roles — no containerized training to authorize."
-  ok "service accounts created"
+  if [[ "${DRY_RUN}" != "true" ]] && service_account_exists "${SA_TRAINER_EMAIL}"; then
+    info "${SA_TRAINER_EMAIL} already exists — skipping create"
+  else
+    run gcloud iam service-accounts create "${SA_TRAINER_NAME}" \
+      --project="${PROJECT_ID}" \
+      --display-name="CatRecognizer Trainer/Export" \
+      --description="Reads raw photos, writes processed splits and exported ONNX models. No Artifact Registry roles — no containerized training to authorize."
+  fi
+  ok "service accounts created (or already existed)"
 
   info "Granting bucket-scoped IAM roles (no project-level roles)..."
   run gcloud storage buckets add-iam-policy-binding "gs://${BUCKET_RAW}" \
@@ -171,4 +194,9 @@ main() {
   print_next_steps
 }
 
-main
+# Guard so tests/test_setup_infra.sh can `source` this file (to call
+# bucket_exists/create_buckets/etc. directly against a mocked `gcloud`)
+# without running the full flow as a side effect of sourcing.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main
+fi
