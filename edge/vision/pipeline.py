@@ -25,6 +25,7 @@ camera sessions).
 from __future__ import annotations
 
 import time
+import traceback
 from typing import Callable, Optional
 
 import numpy as np
@@ -114,11 +115,21 @@ class VisionPipeline:
         """Pull one frame from ``frame_source`` and process it. Returns the
         built (and, if ``send_event`` is set, sent) event dict if this frame
         closed an event, else ``None`` — including when ``frame_source``
-        has no frame ready."""
+        has no frame ready or this frame's inference raised.
+
+        A bad frame, empty crop, or ONNX Runtime failure inside
+        :meth:`process_frame` is caught, logged, and skipped here rather
+        than propagating — one bad frame must not take down
+        :meth:`run_forever`/the soak harness. Call :meth:`process_frame`
+        directly (as the unit tests do) to see the exception itself."""
         frame = self.frame_source()
         if frame is None:
             return None
-        return self.process_frame(frame)
+        try:
+            return self.process_frame(frame)
+        except Exception:  # noqa: BLE001 — deliberately broad, see docstring
+            traceback.print_exc()
+            return None
 
     def run_forever(self, *, fps: Optional[float] = None, max_iterations: Optional[int] = None) -> None:
         """Call :meth:`run_once` in a loop at ``fps`` (task 1.4's

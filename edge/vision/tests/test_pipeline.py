@@ -211,6 +211,59 @@ class TestPhase2WithIdentification:
         assert sent[1]["payload"]["final_identity"] == "unknown"
 
 
+class _RaisingDetector:
+    """Raises on every call — simulates a bad frame / empty crop / ORT
+    failure inside detection or (if wired) identification."""
+
+    def __init__(self):
+        self.call_count = 0
+
+    def infer(self, frame):
+        self.call_count += 1
+        raise RuntimeError("simulated inference failure")
+
+
+class TestRunOnceErrorHandling:
+    def test_run_once_swallows_process_frame_exception_and_returns_none(self):
+        pipeline = VisionPipeline(
+            _RaisingDetector(),
+            _frame_source([np.zeros((10, 10, 3), dtype=np.uint8)]),
+            device_id="d",
+            model_version="v",
+            pipeline_version="v",
+        )
+        assert pipeline.run_once() is None
+
+    def test_process_frame_still_raises_directly(self):
+        """Direct process_frame calls (as unit tests use) must still see the
+        real exception — only run_once's soak-loop boundary swallows it."""
+        pipeline = VisionPipeline(
+            _RaisingDetector(),
+            lambda: None,
+            device_id="d",
+            model_version="v",
+            pipeline_version="v",
+        )
+        with pytest.raises(RuntimeError):
+            pipeline.process_frame(np.zeros((10, 10, 3), dtype=np.uint8))
+
+    def test_run_forever_survives_every_frame_raising(self, monkeypatch):
+        """A soak run must not die on the first bad frame."""
+        monkeypatch.setattr("pipeline.time.sleep", lambda s: None)
+        detector = _RaisingDetector()
+        pipeline = VisionPipeline(
+            detector,
+            _frame_source([np.zeros((10, 10, 3), dtype=np.uint8)] * 5),
+            device_id="d",
+            model_version="v",
+            pipeline_version="v",
+        )
+
+        pipeline.run_forever(fps=3.0, max_iterations=5)
+
+        assert detector.call_count == 5
+
+
 class TestConstructorValidation:
     def test_rejects_embedding_backbone_without_identifier(self):
         with pytest.raises(ValueError):
