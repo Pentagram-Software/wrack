@@ -21,9 +21,14 @@ COCO_CAT_CLASS_ID = 15
 class Detection:
     """One raw detector output, before any cat-specific filtering.
 
-    ``bbox`` is ``(x_min, y_min, x_max, y_max)``, normalized to [0, 1] against
-    the input frame's width/height — matches the ``bbox_norm`` convention
-    already used by ``vision_detection`` events (PEN-169).
+    ``bbox`` is ``(x_min, y_min, x_max, y_max)`` in whatever units the
+    decode function that produced it uses — for
+    ``detection.detector.decode_yolov8_output``/``decode_yolov5_output``
+    that is **model-input pixel space**, not normalized. Normalization to
+    [0, 1] (matching the ``bbox_norm`` convention already used by
+    ``vision_detection`` events, PEN-169) happens in
+    ``detection.detector.CatDetector.infer``'s ``DetectionResult.crop_bbox``,
+    the only bbox contract public consumers should rely on.
     """
 
     class_id: int

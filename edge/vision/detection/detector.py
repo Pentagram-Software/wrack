@@ -79,8 +79,10 @@ def decode_yolov8_output(
 ) -> List[Detection]:
     """Decode a YOLOv8-style ONNX export: single tensor `[1, 84, N]`
     (4 box coords in xywh, center-based, + 80 COCO class scores, no
-    objectness), boxes already normalized to [0, 1] against the model's
-    input size."""
+    objectness). Box coords are in **model-input pixel space** (e.g.
+    `[0, imgsz]`), matching what a default Ultralytics `format=onnx` export
+    actually emits — *not* normalized to [0, 1]. ``CatDetector.infer``
+    normalizes against ``input_size`` after this returns."""
     raw = outputs[0]
     if raw.ndim == 3:
         raw = raw[0]
@@ -113,9 +115,11 @@ def decode_yolov5_output(
 ) -> List[Detection]:
     """Decode a YOLOv5-style ONNX export: single tensor `[1, N, 85]`
     (4 box coords in xywh, center-based, + 1 objectness + 80 COCO class
-    scores), boxes already normalized to [0, 1] against the model's input
-    size. Final confidence is objectness * class score, per the standard
-    YOLOv5 head."""
+    scores). Box coords are in **model-input pixel space** (e.g.
+    `[0, imgsz]`), matching the classic YOLOv5 head — *not* normalized to
+    [0, 1]. ``CatDetector.infer`` normalizes against ``input_size`` after
+    this returns. Final confidence is objectness * class score, per the
+    standard YOLOv5 head."""
     raw = outputs[0]
     if raw.ndim == 3:
         raw = raw[0]
@@ -195,8 +199,9 @@ class CatDetector:
         return ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
 
     def infer(self, frame: np.ndarray) -> DetectionResult:
-        """Run detection on one BGR/RGB ``frame`` (H, W, 3) and return the
-        single highest-confidence cat detection, or an absent result."""
+        """Run detection on one BGR ``frame`` (H, W, 3, as produced by
+        OpenCV's ``VideoCapture``) and return the single highest-confidence
+        cat detection, or an absent result."""
         preprocessed = self._preprocess(frame)
         outputs = self._session.run(None, {self._input_name: preprocessed})
         detections = self.decode_fn(outputs, self.confidence_threshold)
@@ -204,13 +209,38 @@ class CatDetector:
         if not cats:
             return DetectionResult(present=False, confidence=0.0, crop_bbox=None)
         best = max(cats, key=lambda d: d.confidence)
-        return DetectionResult(present=True, confidence=best.confidence, crop_bbox=best.bbox)
+        return DetectionResult(
+            present=True,
+            confidence=best.confidence,
+            crop_bbox=self._normalize_bbox(best.bbox),
+        )
+
+    def _normalize_bbox(
+        self, bbox: Tuple[float, float, float, float]
+    ) -> Tuple[float, float, float, float]:
+        """Convert a decoder-output bbox from model-input pixel space
+        (``[0, input_size]``) to normalized ``[0, 1]`` fractions of the
+        frame, clamping to the valid range. Since ``_preprocess`` resizes
+        each axis independently to ``input_size`` (no letterbox padding),
+        dividing by ``input_size`` maps a model-pixel coordinate directly
+        back onto the original frame's fractional coordinate on that axis,
+        with no separate pad/gain bookkeeping needed."""
+        width, height = self.input_size
+        x_min, y_min, x_max, y_max = bbox
+        return (
+            min(max(x_min / width, 0.0), 1.0),
+            min(max(y_min / height, 0.0), 1.0),
+            min(max(x_max / width, 0.0), 1.0),
+            min(max(y_max / height, 0.0), 1.0),
+        )
 
     def _preprocess(self, frame: np.ndarray) -> np.ndarray:
-        """Resize to ``input_size``, scale to [0, 1], convert HWC -> NCHW."""
+        """Convert BGR (OpenCV) -> RGB (what COCO-pretrained YOLO expects),
+        resize to ``input_size``, scale to [0, 1], convert HWC -> NCHW."""
         import cv2
 
-        resized = cv2.resize(frame, self.input_size)
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        resized = cv2.resize(rgb, self.input_size)
         normalized = resized.astype(np.float32) / 255.0
         chw = normalized.transpose(2, 0, 1)
         return np.expand_dims(chw, axis=0)

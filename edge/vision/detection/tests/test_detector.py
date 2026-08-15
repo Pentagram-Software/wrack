@@ -186,6 +186,44 @@ class TestCatDetector:
         assert fed.shape == (1, 3, 320, 320)
         assert fed.dtype == np.float32
 
+    def test_preprocess_converts_bgr_frame_to_rgb(self):
+        """OpenCV frames are BGR; the ONNX model expects RGB. A frame that
+        is pure blue in BGR (channel 0) must appear as pure blue in the R
+        channel (index 0) of the fed NCHW tensor after conversion."""
+        rows = np.stack([_yolov8_row(class_id=0, confidence=0.1)])  # below threshold
+        outputs = [rows.transpose(1, 0)[np.newaxis, ...]]
+        detector, session = self._make_detector(outputs, input_size=(4, 4))
+        bgr_blue_frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        bgr_blue_frame[:, :, 0] = 255  # pure blue in BGR
+
+        detector.infer(bgr_blue_frame)
+
+        fed = session.last_feed["images"]  # NCHW: [1, 3, H, W]
+        assert fed[0, 0].mean() == pytest.approx(0.0)  # R channel: no red
+        assert fed[0, 2].mean() == pytest.approx(1.0)  # B channel: full blue
+
+    def test_crop_bbox_normalized_from_pixel_scale_decoder_output(self):
+        """Regression test for the pixel-vs-normalized bbox bug: a real
+        Ultralytics ONNX export emits box coords in model-input pixel space
+        (e.g. cx=320 on a 640 input), not pre-normalized to [0, 1].
+        CatDetector.infer must normalize by input_size before returning
+        DetectionResult.crop_bbox."""
+        rows = np.stack([_yolov8_row(COCO_CAT_CLASS_ID, 0.9, cx=320, cy=320, w=64, h=128)])
+        outputs = [rows.transpose(1, 0)[np.newaxis, ...]]
+        detector, _ = self._make_detector(outputs, input_size=(640, 640))
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        result = detector.infer(frame)
+
+        assert result.present is True
+        x_min, y_min, x_max, y_max = result.crop_bbox
+        assert 0.0 <= x_min <= x_max <= 1.0
+        assert 0.0 <= y_min <= y_max <= 1.0
+        assert x_min == pytest.approx((320 - 32) / 640)
+        assert x_max == pytest.approx((320 + 32) / 640)
+        assert y_min == pytest.approx((320 - 64) / 640)
+        assert y_max == pytest.approx((320 + 64) / 640)
+
     def test_yolov5_decode_fn_can_be_injected(self):
         rows = np.stack([_yolov5_row(COCO_CAT_CLASS_ID, confidence=0.85, objectness=0.85)])
         outputs = [rows[np.newaxis, ...]]
