@@ -60,7 +60,7 @@ VALID_STREAM_PROTOCOLS = ["udp", "tcp", "http"]
 #: PEN-169 creature-category taxonomy for ``vision_detection`` detections.
 VALID_CREATURE_CATEGORIES = ["person", "animal", "unknown_living", "not_living"]
 
-#: PEN-193 known-cat identities for ``cat_detection`` events, plus the
+#: PEN-248 known-cat identities for ``cat_detection`` events, plus the
 #: below-threshold/no-identification-yet fallback.
 VALID_CAT_IDENTITIES = ["ryfka", "chaja", "lea", "unknown"]
 
@@ -400,7 +400,7 @@ def _validate_vision_detection_payload(payload: Any) -> List[str]:
 
 
 def _validate_cat_detection_payload(payload: Any) -> List[str]:
-    """Validate a ``cat_detection`` payload (PEN-193 spec, mirrors
+    """Validate a ``cat_detection`` payload (PEN-248 spec, mirrors
     ``shared/telemetry-types/schemas/cat_detection.json``).
 
     ``identification_confidence`` is nullable (not merely optional): Phase 1

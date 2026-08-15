@@ -1,4 +1,4 @@
-# edge/vision/ runtime dependencies (PEN-193)
+# edge/vision/ runtime dependencies (add-cat-detection-identification)
 #
 # Detection (detection/detector.py) and identification (identification/embeddings.py)
 # both run ONNX models via ONNX Runtime CPU. opencv-python is already an edge/video-streamer/

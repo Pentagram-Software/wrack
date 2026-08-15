@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cat enrollment tool (PEN-193, task 6.3): reference photos -> an averaged
+"""Cat enrollment tool (PEN-262, task 6.3): reference photos -> an averaged
 prototype embedding per cat.
 
 Library functions (:func:`enroll_cat`, :func:`save_prototypes`,

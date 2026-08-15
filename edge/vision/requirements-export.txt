@@ -1,4 +1,4 @@
-# Model-export-time dependencies (PEN-193) — install on your DEV MACHINE, not the Pi.
+# Model-export-time dependencies (add-cat-detection-identification) — install on your DEV MACHINE, not the Pi.
 #
 # Used by detection/export_model.py and identification/export_model.py to produce the .onnx
 # files edge/vision/requirements.txt's runtime stack (onnxruntime) actually loads on the Pi.

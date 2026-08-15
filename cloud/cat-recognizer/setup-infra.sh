@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-infra.sh — Provision Phase 2 GCS storage + IAM for CatRecognizer (PEN-193)
+# setup-infra.sh — Provision Phase 2 GCS storage + IAM for CatRecognizer (PEN-255–257)
 #
 # Implements tasks 5.1-5.3 of openspec/changes/add-cat-detection-identification/tasks.md:
 # three GCS buckets (raw-data w/ 90-day lifecycle, processed-data, models) and two
@@ -68,7 +68,7 @@ service_account_exists() {
 print_banner() {
   echo ""
   echo "=================================================="
-  echo "  CatRecognizer — Phase 2 Infra Setup (PEN-193)"
+  echo "  CatRecognizer — Phase 2 Infra Setup (PEN-255–257)"
   echo "=================================================="
   echo "  Project:          ${PROJECT_ID}"
   echo "  Buckets:          ${BUCKET_RAW}"

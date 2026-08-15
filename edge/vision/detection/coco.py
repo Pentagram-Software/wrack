@@ -1,4 +1,4 @@
-"""COCO class filtering for cat detection (PEN-193, task 1.1).
+"""COCO class filtering for cat detection (PEN-238, task 1.1).
 
 Both candidate detectors in ``MODEL_SELECTION.md`` are pretrained on the
 standard 80-class COCO taxonomy, where class id 15 is ``cat`` — this module

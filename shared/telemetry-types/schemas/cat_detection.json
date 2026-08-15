@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://wrack.io/schemas/telemetry/payload/cat_detection",
   "title": "CatDetectionPayload",
-  "description": "Payload for cat_detection events, emitted once per confirmed cat presence event when it ends (PEN-193 change: add-cat-detection-identification). Phase 1 always sets predicted_identity/final_identity to \"unknown\" and identification_confidence to null, since no identification model runs yet.",
+  "description": "Payload for cat_detection events, emitted once per confirmed cat presence event when it ends (PEN-248, change: add-cat-detection-identification). Phase 1 always sets predicted_identity/final_identity to \"unknown\" and identification_confidence to null, since no identification model runs yet.",
   "type": "object",
   "required": [
     "event_start_time",

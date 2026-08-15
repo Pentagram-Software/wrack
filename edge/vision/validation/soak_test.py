@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pi 5 soak test harness (PEN-193, tasks 4.1-4.3 and 8.1-8.3).
+"""Pi 5 soak test harness (PEN-252–254/PEN-270–272, tasks 4.1-4.3 and 8.1-8.3).
 
 Runs the full :class:`pipeline.VisionPipeline` against a live camera or a
 recorded video file for an extended period, logging FPS/CPU/memory/thermal

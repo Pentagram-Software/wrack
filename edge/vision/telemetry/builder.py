@@ -134,7 +134,7 @@ def build_cat_detection_event(
     session_id: Optional[str] = None,
     source: str = "rpi",
 ) -> Dict[str, Any]:
-    """Build and validate a ``cat_detection`` event envelope (PEN-193).
+    """Build and validate a ``cat_detection`` event envelope (PEN-248/PEN-249).
 
     Emitted once per confirmed cat event, at close (see
     :mod:`edge.vision.events.lifecycle`). Phase 1 callers omit

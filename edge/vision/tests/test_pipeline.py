@@ -1,4 +1,4 @@
-"""Unit tests for pipeline.py (PEN-193, tasks 1.4, 6.7, 7.1).
+"""Unit tests for pipeline.py (PEN-241/PEN-266/PEN-268, tasks 1.4, 6.7, 7.1).
 
 Uses duck-typed fakes for the detector/embedding backbone (no real ONNX
 model or onnxruntime needed) and a real CatEventLifecycle/CatIdentifier so

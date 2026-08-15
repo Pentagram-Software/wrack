@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""First-pass identity confidence threshold sanity check (PEN-193, task 6.8).
+"""First-pass identity confidence threshold sanity check (PEN-267, task 6.8).
 
 **Explicitly provisional** — see `design.md`'s open question "how to
 validate/tune the identity confidence threshold given the small,

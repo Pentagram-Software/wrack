@@ -1,4 +1,4 @@
-"""Unit tests for identification/embeddings.py (PEN-193, task 6.1)."""
+"""Unit tests for identification/embeddings.py (PEN-260, task 6.1)."""
 
 import numpy as np
 import pytest

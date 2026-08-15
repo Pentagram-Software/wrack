@@ -1,4 +1,4 @@
-# CatRecognizer — Phase 2 GCP infrastructure (PEN-193, task 5.5)
+# CatRecognizer — Phase 2 GCP infrastructure (PEN-259, task 5.5)
 
 Storage infrastructure for identification's enrollment photos, processed splits, and exported
 ONNX model artifacts. Scoped to Phase 2 only — Phase 1's off-the-shelf pretrained detector needs

@@ -1,4 +1,4 @@
-"""Unit tests for detection/detector.py (PEN-193, tasks 1.4-1.5).
+"""Unit tests for detection/detector.py (PEN-241/PEN-242, tasks 1.4-1.5).
 
 No real ONNX model or onnxruntime install is needed: decode functions are
 tested against synthetic model-output arrays, and CatDetector is tested with

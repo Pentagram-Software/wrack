@@ -1,5 +1,5 @@
 """Unit tests for events/lifecycle.py, one per cat-event-lifecycle spec
-scenario (PEN-193, tasks 2.1-2.4)."""
+scenario (PEN-243–246, tasks 2.1-2.4)."""
 
 import pytest
 

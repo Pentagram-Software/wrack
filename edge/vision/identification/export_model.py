@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Export the identification embedding backbone to ONNX (PEN-193, supports
-task 6.1/6.2).
+"""Export the identification embedding backbone to ONNX (PEN-260/PEN-261,
+supports task 6.1/6.2).
 
 **Run this on a dev machine (laptop), NOT the Pi** — same reasoning as
 ``../detection/export_model.py``. Needs `torch` + `torchvision`, not part of

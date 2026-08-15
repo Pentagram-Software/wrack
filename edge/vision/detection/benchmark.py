@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pi 5 hardware benchmark for candidate cat detectors (PEN-193, task 1.2).
+"""Pi 5 hardware benchmark for candidate cat detectors (PEN-239, task 1.2).
 
 **Run this on the Raspberry Pi 5 itself** — this session had no network path
 to the Pi (`raspberrypi.local` doesn't resolve from the dev machine), so this

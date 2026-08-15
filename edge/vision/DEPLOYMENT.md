@@ -1,4 +1,4 @@
-# Deploying `edge/vision/` to the Raspberry Pi (PEN-193)
+# Deploying `edge/vision/` to the Raspberry Pi (add-cat-detection-identification)
 
 Step-by-step prerequisites for getting the cat detection/identification pipeline actually
 running, from "nothing exists yet" to a live Pi. Every script referenced here was written but

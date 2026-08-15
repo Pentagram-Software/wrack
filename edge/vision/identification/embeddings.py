@@ -1,4 +1,4 @@
-"""ONNX embedding backbone wrapper for cat identification (PEN-193, task 6.1).
+"""ONNX embedding backbone wrapper for cat identification (PEN-260, task 6.1).
 
 Wraps an ONNX Runtime session for the backbone picked in
 ``MODEL_SELECTION.md``, turning one detected cat crop into a single

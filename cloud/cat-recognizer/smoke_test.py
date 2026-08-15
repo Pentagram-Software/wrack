@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke test for CatRecognizer Phase 2 GCS infra (PEN-193, task 5.4).
+"""Smoke test for CatRecognizer Phase 2 GCS infra (PEN-258, task 5.4).
 
 Verifies each service account's expected read/write access per bucket,
 per `setup-infra.sh`'s IAM matrix. Run this **after** `setup-infra.sh` and

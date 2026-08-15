@@ -204,7 +204,7 @@ export type CatIdentity = 'ryfka' | 'chaja' | 'lea' | 'unknown';
 
 /**
  * Payload for `cat_detection` events — emitted once per confirmed cat
- * presence event, at close (PEN-193). Phase 1 always sets
+ * presence event, at close (PEN-247/PEN-248). Phase 1 always sets
  * `predicted_identity`/`final_identity` to `'unknown'` and
  * `identification_confidence` to `null`, since no identification model
  * runs yet.

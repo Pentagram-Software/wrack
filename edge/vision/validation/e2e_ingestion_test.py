@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end cat_detection ingestion test (PEN-193, tasks 3.5 and 7.2).
+"""End-to-end cat_detection ingestion test (PEN-251/PEN-269, tasks 3.5 and 7.2).
 
 Builds one ``cat_detection`` event, sends it through the **real**
 ``RpiTelemetrySender`` -> unified ingress -> BigQuery path (not a direct

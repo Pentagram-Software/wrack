@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Pi 5 hardware benchmark for the identification embedding backbone
-(PEN-193, task 6.2) — mirrors ``detection/benchmark.py``'s structure for
+(PEN-261, task 6.2) — mirrors ``detection/benchmark.py``'s structure for
 task 1.2, applied to :class:`EmbeddingBackbone` instead of
 :class:`CatDetector`.
 

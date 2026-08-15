@@ -1,5 +1,5 @@
-"""Distance-based cat identification against enrolled prototypes (PEN-193,
-tasks 6.5-6.6).
+"""Distance-based cat identification against enrolled prototypes
+(PEN-264/PEN-265, tasks 6.5-6.6).
 
 Implements the ``cat-identification`` spec's "Known-Cat Identity Prediction"
 and "Identity Confidence Threshold and Unknown Fallback" requirements:

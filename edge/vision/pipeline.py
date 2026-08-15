@@ -1,4 +1,4 @@
-"""Vision pipeline orchestration (PEN-193, tasks 1.4, 6.7, 7.1).
+"""Vision pipeline orchestration (PEN-241/PEN-266/PEN-268, tasks 1.4, 6.7, 7.1).
 
 Wires together, per sampled frame:
 

@@ -1,4 +1,4 @@
-"""Unit tests for identification/enroll.py (PEN-193, task 6.3)."""
+"""Unit tests for identification/enroll.py (PEN-262, task 6.3)."""
 
 import numpy as np
 import pytest

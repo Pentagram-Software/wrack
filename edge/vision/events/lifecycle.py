@@ -1,4 +1,4 @@
-"""Cat event lifecycle state machine (PEN-193, tasks 2.1-2.4).
+"""Cat event lifecycle state machine (PEN-243–246, tasks 2.1-2.4).
 
 Implements the ``cat-event-lifecycle`` spec:
 

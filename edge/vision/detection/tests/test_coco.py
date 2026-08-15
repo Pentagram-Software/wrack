@@ -1,4 +1,4 @@
-"""Unit tests for detection/coco.py (COCO cat-class filtering, PEN-193)."""
+"""Unit tests for detection/coco.py (COCO cat-class filtering, PEN-238)."""
 
 from detection.coco import COCO_CAT_CLASS_ID, Detection, filter_to_cat
 

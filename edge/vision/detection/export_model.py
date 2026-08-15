@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export a candidate detector to ONNX (PEN-193, supports task 1.1/1.2).
+"""Export a candidate detector to ONNX (PEN-238/PEN-239, supports task 1.1/1.2).
 
 **Run this on a dev machine (laptop), NOT the Pi.** Exporting needs
 `ultralytics` (+ its `torch` dependency) — heavy ML tooling that has no

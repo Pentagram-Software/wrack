@@ -1,4 +1,4 @@
-"""ONNX cat detector wrapper (PEN-193, tasks 1.4-1.5).
+"""ONNX cat detector wrapper (PEN-241/PEN-242, tasks 1.4-1.5).
 
 Wraps an ONNX Runtime session for one of the candidates in
 ``MODEL_SELECTION.md``, decoding raw model output into ``Detection`` objects

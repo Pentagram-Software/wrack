@@ -1,4 +1,4 @@
-"""Unit tests for the cat_detection event builder + schema (PEN-193)."""
+"""Unit tests for the cat_detection event builder + schema (PEN-248/PEN-249)."""
 
 import uuid
 
