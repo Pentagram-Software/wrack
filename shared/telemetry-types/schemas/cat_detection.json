@@ -20,7 +20,7 @@
     "event_start_time": {
       "type": "string",
       "format": "date-time",
-      "description": "ISO 8601 UTC timestamp of the frame that completed 3-consecutive-frame confirmation"
+      "description": "ISO 8601 UTC timestamp of the first of the N consecutive frames that confirmed this event (matches CatEventLifecycle's _pending_start_time, not the frame that completed confirmation)"
     },
     "event_end_time": {
       "type": ["string", "null"],
@@ -41,7 +41,7 @@
       "type": "number",
       "minimum": 0,
       "maximum": 1,
-      "description": "Detector confidence for the frame that confirmed this event"
+      "description": "Detector confidence from the most recently observed present frame before the event ended (not necessarily the confirming frame)"
     },
     "identification_confidence": {
       "type": ["number", "null"],

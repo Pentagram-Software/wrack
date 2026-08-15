@@ -210,7 +210,7 @@ export type CatIdentity = 'ryfka' | 'chaja' | 'lea' | 'unknown';
  * runs yet.
  */
 export interface CatDetectionPayload {
-  /** ISO 8601 UTC timestamp of the frame that completed 3-consecutive-frame confirmation. */
+  /** ISO 8601 UTC timestamp of the first of the N consecutive frames that confirmed this event (not the frame that completed confirmation). */
   event_start_time: string;
   /** ISO 8601 UTC timestamp when cat presence was last observed. Always populated in practice — emission only happens at close. */
   event_end_time: string | null;
@@ -218,6 +218,7 @@ export interface CatDetectionPayload {
   predicted_identity: CatIdentity;
   /** predicted_identity if identification confidence is at or above the configured threshold, else 'unknown'. */
   final_identity: CatIdentity;
+  /** Detector confidence from the most recently observed present frame before the event ended (not necessarily the confirming frame). */
   detection_confidence: number;
   /** Null in Phase 1, where no identification model runs. */
   identification_confidence: number | null;

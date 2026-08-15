@@ -146,11 +146,15 @@ def build_cat_detection_event(
     Parameters
     ----------
     event_start_time, event_end_time:
-        ISO 8601 UTC timestamps bounding the confirmed event. ``event_end_time``
-        may be ``None`` if this is ever called before the event closes, though
-        V1 only calls it at close.
+        ISO 8601 UTC timestamps bounding the confirmed event. ``event_start_time``
+        is the first of the N consecutive frames that confirmed the event, not
+        the frame that completed confirmation. ``event_end_time`` may be
+        ``None`` if this is ever called before the event closes, though V1
+        only calls it at close.
     detection_confidence:
-        Detector confidence for the frame that confirmed this event, in [0, 1].
+        Detector confidence from the most recently observed present frame
+        before the event ended (not necessarily the confirming frame), in
+        [0, 1].
     device_id, model_version, pipeline_version:
         See ``cat_detection.json`` — required, non-empty strings.
     predicted_identity, final_identity:
