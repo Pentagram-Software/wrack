@@ -55,7 +55,7 @@ _WATCH_TURRET_MISSING_LOGGED = False
 # and whether the reader thread is still alive.  Purely observational — see
 # robot_controllers/input_diagnostics.py.  Leave on only while diagnosing
 # responsiveness, since the periodic report writes to stdout.
-PS4_INPUT_DIAGNOSTICS = True
+PS4_INPUT_DIAGNOSTICS = False
 PS4_INPUT_DIAGNOSTICS_INTERVAL_S = 10.0
 
 # Import TerrainScanner with error handling
