@@ -28,9 +28,19 @@ from pathlib import Path
 
 #: Maps each MODEL_SELECTION.md candidate to its Ultralytics weights name and
 #: the decode_fn (detector.py) that matches its ONNX export's output shape.
+#:
+#: Candidate B intentionally decodes with "yolov8", not "yolov5": the
+#: `ultralytics` package's `yolov5n.pt` is YOLOv5u (an anchor-free,
+#: v8-head variant), not the classic YOLOv5 `[1, N, 85]` head with a
+#: separate objectness score. Its ONNX export is the same `[1, 84, N]`
+#: shape as YOLOv8n, so decode_yolov8_output is the correct decoder —
+#: pairing it with decode_yolov5_output mis-parses every row (wrong
+#: objectness/class layout). Confirmed against this project's own
+#: benchmark run (--decoder yolov8 against yolov5n_*.onnx worked; see
+#: MODEL_SELECTION.md).
 CANDIDATES = {
     "yolov8n": {"weights": "yolov8n.pt", "decoder": "yolov8"},
-    "yolov5n": {"weights": "yolov5n.pt", "decoder": "yolov5"},
+    "yolov5n": {"weights": "yolov5n.pt", "decoder": "yolov8"},
 }
 
 

@@ -51,7 +51,10 @@ scp exported_models/*.onnx pi@raspberrypi.local:~/cat-recognizer/models/
 ssh pi@raspberrypi.local
 cd ~/cat-recognizer  # wherever edge/vision/ is deployed (make deploy-edge)
 python3 detection/benchmark.py --model models/yolov8n_640.onnx --decoder yolov8 --iterations 200
-python3 detection/benchmark.py --model models/yolov5n_640.onnx --decoder yolov5 --iterations 200
+# yolov5n.onnx is decoded with --decoder yolov8 too — the ultralytics package's yolov5n.pt is
+# YOLOv5u (anchor-free v8-style head), not the classic YOLOv5 [1, N, 85] head; see
+# detection/MODEL_SELECTION.md's "Candidate B" note.
+python3 detection/benchmark.py --model models/yolov5n_640.onnx --decoder yolov8 --iterations 200
 # Run edge/video-streamer/ concurrently in another terminal first, then repeat with
 # --concurrent-streamer to note that in the report — see benchmark.py's own docstring.
 ```

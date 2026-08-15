@@ -21,9 +21,15 @@ benchmark produces real FPS/CPU/thermal numbers for candidate ONNX models)".
   at some accuracy cost.
 - Export: `yolo export model=yolov5n.pt format=onnx imgsz=640` (same Ultralytics CLI, same
   ONNX Runtime CPU execution path).
-- Output format: `[1, N, 85]` (4 box coords + 1 objectness + 80 class scores) — the classic
-  YOLOv5 head, different from YOLOv8's anchor-free head. `detector.py` accepts a `decode_fn`
-  so this shape can be benchmarked without changing the detector wrapper's public interface.
+- **Output format: `[1, 84, N]`, decoded with `decode_yolov8_output` — not the classic YOLOv5
+  `[1, N, 85]` head.** The `ultralytics` package's `yolov5n.pt` weights are YOLOv5u: an
+  anchor-free, v8-style head with no separate objectness score, confirmed against a real
+  export from this project's `export_model.py` and its benchmark run (`--decoder yolov8`
+  against `yolov5n_*.onnx` produced sane detections; `--decoder yolov5` mis-parses every row).
+  `export_model.py`'s `CANDIDATES` maps `yolov5n` to `decoder: "yolov8"` accordingly.
+  `decode_yolov5_output` (the classic `[1, N, 85]` head) remains available in `detector.py`
+  for a genuine classic-YOLOv5 export (e.g. from the standalone `ultralytics/yolov5` repo),
+  which this candidate does not use.
 
 ## Why these two
 
