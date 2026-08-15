@@ -27,7 +27,9 @@ Usage:
 """
 
 from pybricks.hubs import EV3Brick
-from robot_controllers import MIN_JOYSTICK_MOVE, PS4Controller, wait_for_connection
+from robot_controllers import (InputDiagnostics, MIN_JOYSTICK_MOVE,
+                               PS4Controller, wait_for_connection)
+from background_worker import BackgroundWorker
 from threading_compat import wait_for_workers
 from pixy_camera import Pixy2Camera
 from ev3_devices import DeviceManager
@@ -47,6 +49,14 @@ from time import sleep
 # Flip to True for a diagnostic EV3 deploy, then set back to False.
 PS4_INPUT_DEBUG = False
 _WATCH_TURRET_MISSING_LOGGED = False
+
+# Controller input-path instrumentation: prints a periodic summary of evdev
+# event lag, kernel SYN_DROPPED overflows, per-callback dispatch durations,
+# and whether the reader thread is still alive.  Purely observational — see
+# robot_controllers/input_diagnostics.py.  Leave on only while diagnosing
+# responsiveness, since the periodic report writes to stdout.
+PS4_INPUT_DIAGNOSTICS = False
+PS4_INPUT_DIAGNOSTICS_INTERVAL_S = 10.0
 
 # Import TerrainScanner with error handling
 TerrainScanner = None
@@ -265,6 +275,23 @@ robot_is_stopped = False
 # Worker thread handles assigned in main() so shutdown callbacks can stop all services
 _runtime_controller = None
 _runtime_remote_controller = None
+_input_diagnostics = None
+
+# Runs slow actions (speech, sound) off the controller reader thread.  A
+# single ev3.speaker.say() was measured at 5-7 seconds on-device; running it
+# inline blocked event reading for that whole time and the kernel discarded
+# every button press made meanwhile.
+_action_worker = BackgroundWorker(name="ps4-actions")
+
+
+def _run_async(action, *args):
+    """Queue *action* on the background worker.
+
+    Runs inline only when the worker is not up; a full queue drops rather
+    than falling back, so a burst of presses cannot put speech back on the
+    reader thread.  See BackgroundWorker.submit_or_run().
+    """
+    _action_worker.submit_or_run(action, *args)
 
 # Initialize devices with graceful error handling
 drive_L_motor = device_manager.try_init_device(Motor, Port.A, "drive_L_motor")
@@ -453,22 +480,26 @@ def lighton(value):
 def sayit(value):
     if PS4_INPUT_DEBUG:
         print("PS4 input: Cross button received; speaking greeting")
-    ev3.speaker.say("Hello, I am wrack. I love you Elvira")
+    _run_async(ev3.speaker.say, "Hello, I am wrack. I love you Elvira")
 
 def start_auto_terrain_scanning(value):
     """Start automatic terrain scanning"""
     global terrain_scanner
     if terrain_scanner and TerrainScanner:
-        terrain_scanner.start_automatic_scanning()
+        # Queued rather than called directly: start_automatic_scanning()
+        # ends with a 200ms speaker.beep(), which would run on the reader
+        # thread and cost input.
+        _run_async(terrain_scanner.start_automatic_scanning)
     else:
         print("TerrainScanner not available")
-        ev3.speaker.beep(frequency=300, duration=500)
+        _run_async(ev3.speaker.beep, 300, 500)
 
 def stop_auto_terrain_scanning(value):
     """Stop automatic terrain scanning"""
     global terrain_scanner
     if terrain_scanner and TerrainScanner:
-        terrain_scanner.stop_automatic_scanning()
+        # Beeps on completion, same as start_automatic_scanning().
+        _run_async(terrain_scanner.stop_automatic_scanning)
     else:
         print("TerrainScanner not available")
 
@@ -478,11 +509,14 @@ def perform_single_terrain_scan(value):
     if terrain_scanner and TerrainScanner:
         # Run scan in separate thread to avoid blocking
         import threading
-        scan_thread = threading.Thread(target=lambda: terrain_scanner.perform_scan("full_360"), daemon=True)
+        # Pybricks MicroPython's Thread() accepts only target/args - passing
+        # daemon raises TypeError, which propagates out of trigger() and kills
+        # the reader thread for the session (PEN-188).
+        scan_thread = threading.Thread(target=lambda: terrain_scanner.perform_scan("full_360"))
         scan_thread.start()
     else:
         print("TerrainScanner not available")
-        ev3.speaker.beep(frequency=300, duration=500)
+        _run_async(ev3.speaker.beep, 300, 500)
 
 def perform_quick_terrain_scan(value):
     """Perform a quick 8-point terrain scan"""
@@ -490,11 +524,12 @@ def perform_quick_terrain_scan(value):
     if terrain_scanner and TerrainScanner:
         # Run scan in separate thread to avoid blocking
         import threading
-        scan_thread = threading.Thread(target=lambda: terrain_scanner.perform_scan("quick_8_point"), daemon=True)
+        # See perform_single_terrain_scan: no daemon kwarg on MicroPython.
+        scan_thread = threading.Thread(target=lambda: terrain_scanner.perform_scan("quick_8_point"))
         scan_thread.start()
     else:
         print("TerrainScanner not available")
-        ev3.speaker.beep(frequency=300, duration=500)
+        _run_async(ev3.speaker.beep, 300, 500)
 
 def get_terrain_scan_status(value):
     """Announce terrain scanner status"""
@@ -502,11 +537,11 @@ def get_terrain_scan_status(value):
     if terrain_scanner and TerrainScanner:
         status = terrain_scanner.get_scan_status()
         if status["scan_in_progress"]:
-            ev3.speaker.say("Scan in progress")
+            _run_async(ev3.speaker.say, "Scan in progress")
         elif status["auto_scan_enabled"]:
-            ev3.speaker.say("Auto scanning enabled")
+            _run_async(ev3.speaker.say, "Auto scanning enabled")
         else:
-            ev3.speaker.say("Scanner ready")
+            _run_async(ev3.speaker.say, "Scanner ready")
         
         print("Terrain Scanner Status:")
         print("- Scan in progress: {}".format(status["scan_in_progress"]))
@@ -514,7 +549,7 @@ def get_terrain_scan_status(value):
         print("- Total scans: {}".format(status["total_scans"]))
         print("- Pending scans: {}".format(status["pending_scans"]))
     else:
-        ev3.speaker.say("Scanner not available")
+        _run_async(ev3.speaker.say, "Scanner not available")
 
 def cancel_terrain_scan(value):
     """Cancel current terrain scan"""
@@ -527,7 +562,18 @@ def cancel_terrain_scan(value):
 def quit(value):
     global terrain_scanner, wake_word_detector
     global _runtime_controller, _runtime_remote_controller
-    global _status_collector, _heartbeat_sender
+    global _status_collector, _heartbeat_sender, _input_diagnostics
+
+    # Stop acting on joystick input first, so the control loop cannot issue a
+    # fresh motor command after the motors are stopped further down.
+    if _runtime_controller is not None:
+        _runtime_controller.stop_control_loop()
+
+    # Print the final input-diagnostics report before anything else shuts
+    # down, so the session summary survives even if a later step hangs.
+    if _input_diagnostics:
+        print("Stopping PS4 input diagnostics...")
+        _input_diagnostics.stop()
 
     # Stop telemetry collection and flush any remaining buffered events
     if _status_collector:
@@ -574,6 +620,10 @@ def quit(value):
         _runtime_controller.stop()
     elif value is not None and hasattr(value, "stop"):
         value.stop()
+
+    # Last: queued speech is abandoned rather than drained, so shutting this
+    # down cannot delay stopping the motors above.
+    _action_worker.stop()
 
 
 def driftLeft(value):
@@ -683,6 +733,22 @@ def main():
     controller.set_debug_input(PS4_INPUT_DEBUG)
     if turret:
         turret.set_debug_motor(PS4_INPUT_DEBUG)
+
+    # Must be running before any controller handler fires, so a Cross press
+    # never runs speech on the reader thread.
+    _action_worker.start()
+    print("Background action worker started")
+
+    global _input_diagnostics
+    if PS4_INPUT_DIAGNOSTICS:
+        _input_diagnostics = InputDiagnostics(
+            report_interval=PS4_INPUT_DIAGNOSTICS_INTERVAL_S,
+        )
+        controller.set_diagnostics(_input_diagnostics)
+        _input_diagnostics.start()
+        print("PS4 input diagnostics enabled (report every {}s)".format(
+            PS4_INPUT_DIAGNOSTICS_INTERVAL_S))
+
     remote_controller = RemoteController()
     _runtime_controller = controller
     _runtime_remote_controller = remote_controller
@@ -909,8 +975,7 @@ def main():
             # Start scan in background thread
             import threading
             scan_thread = threading.Thread(
-                target=lambda: terrain_scanner.perform_scan("full_360"), 
-                daemon=True
+                target=lambda: terrain_scanner.perform_scan("full_360")
             )
             scan_thread.start()
             
@@ -930,8 +995,7 @@ def main():
             # Start scan in background thread
             import threading
             scan_thread = threading.Thread(
-                target=lambda: terrain_scanner.perform_scan("quick_8_point"), 
-                daemon=True
+                target=lambda: terrain_scanner.perform_scan("quick_8_point")
             )
             scan_thread.start()
             
@@ -1033,7 +1097,7 @@ def main():
                     sleep(duration)
                     turret.stop()
                     print("Turret auto-stopped after {} seconds".format(duration))
-                threading.Thread(target=stop_turret, daemon=True).start()
+                threading.Thread(target=stop_turret).start()
             else:
                 print("Network command: Turret rotating left at {} degrees/second (continuous, joystick: {})".format(speed_degrees, joystick_value))
                 turret.speed_control(joystick_value, 0)
@@ -1059,7 +1123,7 @@ def main():
                     sleep(duration)
                     turret.stop()
                     print("Turret auto-stopped after {} seconds".format(duration))
-                threading.Thread(target=stop_turret, daemon=True).start()
+                threading.Thread(target=stop_turret).start()
             else:
                 print("Network command: Turret rotating right at {} degrees/second (continuous, joystick: {})".format(speed_degrees, joystick_value))
                 turret.speed_control(joystick_value, 0)

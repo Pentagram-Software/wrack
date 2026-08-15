@@ -26,6 +26,7 @@ import json
 import os
 import threading
 from time import time, sleep
+from threading_compat import join_thread, thread_is_alive
 from pybricks.parameters import Port
 from pybricks.ev3devices import UltrasonicSensor, GyroSensor
 
@@ -470,7 +471,7 @@ class TerrainScanner:
         self.auto_scan_enabled = True
         
         # Start automatic scanning thread
-        self.auto_scan_thread = threading.Thread(target=self._auto_scan_loop, daemon=True)
+        self.auto_scan_thread = threading.Thread(target=self._auto_scan_loop)
         self.auto_scan_thread.start()
         
         print("Automatic terrain scanning started (interval: {}s)".format(self.auto_scan_interval))
@@ -690,8 +691,8 @@ class TerrainScanner:
         self.cancel_current_scan()
         
         # Wait for threads to finish
-        if self.auto_scan_thread and self.auto_scan_thread.is_alive():
-            self.auto_scan_thread.join(timeout=2.0)
+        if thread_is_alive(self.auto_scan_thread):
+            join_thread(self.auto_scan_thread, timeout=2.0)
         
         # Final storage save
         self._save_scan_index()

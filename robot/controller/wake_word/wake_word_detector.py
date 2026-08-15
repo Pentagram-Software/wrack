@@ -48,6 +48,20 @@ DEFAULT_MODEL_PATH = _default_model_path()
 DEFAULT_ENGINE_PATH = "precise-engine"
 
 
+def _set_daemon(thread):
+    """Mark *thread* as a daemon without using the constructor kwarg.
+
+    Pybricks MicroPython's ``Thread()`` rejects ``daemon`` with ``TypeError``
+    (PEN-188), and may not expose the attribute either, so this is best
+    effort. CPython still gets the daemon behaviour that keeps the detector
+    from blocking interpreter exit.
+    """
+    try:
+        thread.daemon = True
+    except (AttributeError, RuntimeError):
+        pass
+
+
 class WakeWordDetector(EventHandler, threading.Thread):
     """
     Wake word detector that listens for the "Hey Wrack" phrase.
@@ -83,7 +97,8 @@ class WakeWordDetector(EventHandler, threading.Thread):
             speaker (object, optional): EV3 speaker object for audio feedback.
         """
         EventHandler.__init__(self)
-        threading.Thread.__init__(self, daemon=True)
+        threading.Thread.__init__(self)
+        _set_daemon(self)
         
         self.model_path = model_path or DEFAULT_MODEL_PATH
         self.engine_path = engine_path or DEFAULT_ENGINE_PATH
@@ -290,7 +305,8 @@ class MockWakeWordDetector(EventHandler, threading.Thread):
                  trigger_level=3, speaker=None):
         """Initialize mock detector with same interface as real detector."""
         EventHandler.__init__(self)
-        threading.Thread.__init__(self, daemon=True)
+        threading.Thread.__init__(self)
+        _set_daemon(self)
         
         self.model_path = model_path or DEFAULT_MODEL_PATH
         self.engine_path = engine_path or DEFAULT_ENGINE_PATH

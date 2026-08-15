@@ -417,8 +417,12 @@ class TestPS4Controller:
         )
         with patch("robot_controllers.ps4_controller.find_controller_device",
                    return_value="/dev/input/event99"), \
-             patch("builtins.open", return_value=mock_event_file):
+             patch("builtins.open", return_value=mock_event_file), \
+             patch.object(PS4Controller, "_start_control_loop"):
             self.controller.run()
+        # Stick callbacks are driven by the coalescing control loop, not the
+        # read loop; drive one tick by hand.
+        self.controller._control_tick()
 
         assert len(received_x_values) == 1
         assert abs(received_x_values[0]) > 10
@@ -627,7 +631,12 @@ class TestPS4ControllerAxisScaling:
         assert self.controller._scale_axis(0, (1000, -1000)) == 1000
         assert self.controller._scale_axis(254, (1000, -1000)) == pytest.approx(-992.16, abs=1)
         assert abs(self.controller._scale_axis(127, (1000, -1000))) < 50
-        assert self.controller._scale_axis(255, (1000, -1000)) is None
+
+    def test_8bit_full_deflection_is_not_discarded(self):
+        """255 is a PS4 axis maximum, not a release sentinel."""
+        self.controller._scale_axis(127, (1000, -1000))  # latch 8-bit
+
+        assert self.controller._scale_axis(255, (1000, -1000)) == -1000
 
     def test_16bit_axis_scaling(self):
         center = self.controller._scale_axis(32768, (-1000, 1000))
@@ -641,8 +650,27 @@ class TestPS4ControllerAxisScaling:
         assert backward == -1000
 
     def test_sentinel_values_are_ignored(self):
-        assert self.controller._scale_axis(255, (-1000, 1000)) is None
         assert self.controller._scale_axis(4294967295, (-1000, 1000)) is None
+        assert self.controller._scale_axis(4294967294, (-1000, 1000)) is None
+
+    def test_sentinel_does_not_latch_an_axis_range(self):
+        self.controller._scale_axis(4294967295, (-1000, 1000))
+
+        assert self.controller._axis_range is None
+
+    def test_provisional_8bit_range_upgrades_to_16bit(self):
+        """A DualSense reporting small values first must not stay on 8-bit."""
+        self.controller._scale_axis(200, (-1000, 1000))
+        assert self.controller._axis_range == (0, 255)
+
+        self.controller._scale_axis(40000, (-1000, 1000))
+        assert self.controller._axis_range == (0, 65535)
+
+    def test_16bit_range_is_not_downgraded_by_small_values(self):
+        self.controller._scale_axis(40000, (-1000, 1000))
+        self.controller._scale_axis(100, (-1000, 1000))
+
+        assert self.controller._axis_range == (0, 65535)
 
 class TestPS4ControllerTelemetry:
     """Telemetry tests for PS4Controller (PEN-165)."""

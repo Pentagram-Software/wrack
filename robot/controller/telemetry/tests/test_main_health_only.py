@@ -2,6 +2,7 @@
 
 import importlib.util
 import sys
+import threading as _real_threading
 import types
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -93,6 +94,13 @@ class _Controller:
         return MagicMock()
 
 
+class _InputDiagnostics:
+    def __init__(self, report_interval=None):
+        self.report_interval = report_interval
+        self.start = MagicMock()
+        self.stop = MagicMock()
+
+
 class _Collector:
     def __init__(self, source):
         self.source = source
@@ -175,6 +183,7 @@ def _load_health_only_main(monkeypatch):
             MIN_JOYSTICK_MOVE=10,
             PS4Controller=_Controller,
             RemoteController=_Controller,
+            InputDiagnostics=_InputDiagnostics,
             wait_for_connection=lambda controller: (False, 0),
         ),
     )
@@ -184,7 +193,19 @@ def _load_health_only_main(monkeypatch):
         "wake_word",
         _module("wake_word", WakeWordDetector=types.SimpleNamespace(is_available=lambda: False)),
     )
-    monkeypatch.setitem(sys.modules, "threading_compat", _module("threading_compat", wait_for_workers=MagicMock()))
+    # background_worker (imported by main.py) needs these three as well; a
+    # stub with only wait_for_workers fails to import it.
+    monkeypatch.setitem(
+        sys.modules,
+        "threading_compat",
+        _module(
+            "threading_compat",
+            wait_for_workers=MagicMock(),
+            create_lock=_real_threading.Lock,
+            join_thread=MagicMock(return_value=False),
+            thread_is_alive=MagicMock(return_value=False),
+        ),
+    )
     monkeypatch.setitem(sys.modules, "pixy_camera", _module("pixy_camera", Pixy2Camera=object()))
     monkeypatch.setitem(
         sys.modules,
@@ -244,7 +265,12 @@ def test_health_only_main_disables_analytics_paths_and_starts_heartbeat(monkeypa
     module._runtime_controller.set_telemetry_collector.assert_not_called()
     module._runtime_remote_controller.set_telemetry_collector.assert_not_called()
     status_collector.assert_not_called()
-    flush_thread.assert_not_called()
+    # The action worker starts a thread unconditionally through this same
+    # patched threading.Thread, so check the target rather than the count.
+    assert not any(
+        getattr(call.kwargs.get("target"), "__name__", "") == "_telemetry_send_loop"
+        for call in flush_thread.call_args_list
+    )
     module._heartbeat_sender.start.assert_called_once_with()
 
     # PEN-234: the heartbeat is wired with a battery_info_provider that reads

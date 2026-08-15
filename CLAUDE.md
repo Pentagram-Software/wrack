@@ -127,6 +127,57 @@ Cloud Functions ──native GCP metrics──► GCP Cloud Monitoring ──pul
 - Motor ports: Drive L = Port A, Drive R = Port D, Turret = Port C; sensors: Ultrasonic = S2, Gyro = S3.
 - Run tests (desktop Python): `cd robot/controller && python -m pytest tests/`
 
+### Controller input diagnostics (`robot_controllers/input_diagnostics.py`)
+
+Instrumentation for diagnosing unresponsive PS4/PS5 input. Purely observational — the
+control path behaves identically whether or not it is attached. Enable by setting
+`PS4_INPUT_DIAGNOSTICS = True` in `main.py`, deploy with `make deploy-robot`, and run
+`main.py` over SSH so the periodic report is visible. Turn it back off afterwards: the
+report writes to stdout, which on the EV3 is a blocking sink.
+
+A report is printed every `PS4_INPUT_DIAGNOSTICS_INTERVAL_S` (default 10s), and once
+more on shutdown via the Options button. Read it as follows:
+
+| Line | Meaning when it looks wrong |
+|------|-----------------------------|
+| `SYN_DROPPED: n` | Non-zero means the kernel's per-fd evdev ring buffer overflowed and **discarded input the robot never saw**. This is the direct measurement of "a button press did nothing". |
+| `event lag: avg/max` | Computed from each event's kernel `CLOCK_REALTIME` timestamp vs. the wall clock at processing time, so it includes queueing delay. A large `max` with a small `avg` means something intermittently stalls the read loop. |
+| `stale(>=100ms)` | How many events were already stale when acted on — i.e. the robot reacting to old input. |
+| `dispatch <event>` | Per-callback timing, worst `max` first. Any callback with a `max` in the hundreds of ms is a read-loop stall long enough to cause the `SYN_DROPPED` above. `ERRORS=n` counts callbacks that raised. |
+| `axis values discarded as sentinel` | Raw axis values thrown away by `_is_axis_sentinel`. Only the evdev release sentinels (`4294967295`/`4294967294`) should appear here. |
+| `(from N events, Mx)` | Appended to a `dispatch` line: how many raw stick events were coalesced into that many control-loop dispatches. A ratio near `1.0x` means there is nothing to coalesce — the sticks are not producing events faster than the control loop consumes them, so dispatch throughput is *not* the bottleneck and lag must be explained by the `reader:` line below. |
+| `reader: read/proc/gap` | Where the read loop's wall clock went. `proc` is our own per-event work, `gap` is loop overhead, `read` is time inside the blocking read. These should sum to roughly 100%; a large `unaccounted` means the clock is unreliable. |
+| `read->stale` | **The starvation measurement.** Time spent inside a read that then returned an event which was *already* stale — i.e. the data was sitting in the kernel buffer and we could not collect it. A long `read->fresh` is just an idle wait for input and is harmless; a long `read->stale` means the reader thread is being descheduled or blocked re-entering the interpreter, and the cause is outside the read loop (another thread holding the GIL across a C call, most likely). |
+| `SYN_DROPPED stalls` | How long the reader had been out of the loop each time the kernel reported a drop. Distinguishes one long stall from many short ones, which have very different causes. |
+| `READ LOOP IS DEAD` | `PS4Controller.run()` has terminated, so the gamepad is inert until restart while the network remote keeps working. Includes the exception and the last event processed. |
+
+Because a callback exception propagates out of `EventHandler.trigger()` and kills the
+reader thread for the rest of the session, `wait_for_workers()` will keep blocking on a
+thread that no longer exists — the `READ LOOP IS DEAD` line is the only signal.
+
+### Controller input path: why it is split across three threads
+
+A diagnostics session measured ~10 ms of motor work per stick event, which caps a read
+loop that does that work inline at roughly 96 events/second — below the burst rate of a
+stick in motion. The loop fell behind, the kernel's fixed-size evdev ring buffer
+overflowed, and input was discarded (58 `SYN_DROPPED` in one session; event lag peaking
+at 1.9 s). Anything that blocks the read loop has the same effect: a single
+`ev3.speaker.say()` measured 5–7 seconds, during which every press was lost.
+
+The path is therefore split so that nothing slow runs on the thread that reads events:
+
+| Thread | Responsibility |
+|--------|----------------|
+| Reader (`PS4Controller.run()`) | Parses evdev events and updates cached axis values. Never touches a motor. Buttons still dispatch inline, since they are discrete and rare. |
+| Control loop (`PS4Controller._control_loop`) | Applies the latest cached stick positions to the motors at `DEFAULT_CONTROL_LOOP_HZ` (30 Hz). Started when the device opens, stopped when the read loop ends. Tune with `set_control_rate()` if a loaded EV3 cannot keep up. |
+| Action worker (`background_worker.BackgroundWorker`) | Runs speech and sound submitted via `main.py`'s `_run_async()`. Bounded queue; a full queue drops the newest action rather than letting stale announcements pile up. |
+
+Coalescing does not lose stick positions: the newest cached value always wins and is
+always applied on the next tick, so a release back to centre is guaranteed to be
+delivered. **When adding a controller callback, anything that can block for more than a
+few milliseconds must go through `_run_async()`** — a callback registered directly runs
+on the reader thread and will cause dropped input.
+
 ### MicroPython compatibility (mandatory check — always run for this repo)
 
 Every change that touches `robot/controller/` or its dependencies (anything imported into that
@@ -170,8 +221,13 @@ that only surface when the code actually runs. Keep doing the manual review for 
   whole module before any `try/except` guard can run. Annotations are only supported on simple
   names. Use a plain assignment.
 - **`threading.Thread()`**: only accepts `target`/`args` — passing `daemon` or `name` raises
-  `TypeError`. `Thread.join()` may not accept `timeout` — wrap in `try/except TypeError` with a
-  fallback (see `status_collector.py`).
+ `TypeError`. Enforced by `robot/controller/tests/test_thread_kwargs_compat.py`, which walks
+ every shipped file; neither pytest (the kwargs are valid on CPython) nor `make check-mpy`
+ (syntax-only) can catch a reintroduction. When CPython genuinely needs the daemon behaviour,
+ set it as an attribute after construction inside a `try/except AttributeError` (see
+ `_set_daemon` in `wake_word_detector.py`). `Thread.is_alive()` and `Thread.join()` may be
+ missing entirely, and `join()` may not accept `timeout` — use `thread_is_alive()` and
+ `join_thread()` from `threading_compat` rather than calling them directly.
 - **Minimal HTTP libraries** (`urequests`): don't assume parity with `requests` — e.g. `post()` may
   not accept `timeout`. Try the full call first, catch `TypeError`, and retry with a reduced kwarg
   set (see `telemetry/sender.py::_http_post`).

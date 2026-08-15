@@ -11,7 +11,7 @@ allowing the system to gracefully handle device failures.
 import threading
 import time
 from error_reporting import report_device_error, report_exception
-from threading_compat import create_lock
+from threading_compat import create_lock, join_thread, thread_is_alive
 
 
 class PortMonitor:
@@ -96,8 +96,8 @@ class PortMonitor:
         """Stop the background monitoring thread."""
         self._running = False
         
-        if self._monitor_thread and self._monitor_thread.is_alive():
-            self._monitor_thread.join(timeout=2.0)
+        if thread_is_alive(self._monitor_thread):
+            join_thread(self._monitor_thread, timeout=2.0)
         
         if __debug__:
             print("PortMonitor: Stopped monitoring thread")
@@ -524,7 +524,7 @@ class PortMonitor:
         Returns:
             bool: True if monitoring thread is active
         """
-        return self._running and self._monitor_thread and self._monitor_thread.is_alive()
+        return bool(self._running and thread_is_alive(self._monitor_thread))
 
 
 class SafeDeviceProxy:
