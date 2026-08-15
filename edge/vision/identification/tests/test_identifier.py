@@ -76,3 +76,17 @@ class TestCatIdentifier:
         embedding = np.array([-1.0, 0.0], dtype=np.float32)  # matches lea exactly (similarity 1.0)
         result = identifier.identify(embedding)
         assert 0.0 <= result.identification_confidence <= 1.0
+
+    def test_confidence_threshold_defaults_without_env_var(self):
+        identifier = CatIdentifier(self._prototypes())
+        assert identifier.confidence_threshold == 0.6
+
+    def test_confidence_threshold_reads_env_var(self, monkeypatch):
+        monkeypatch.setenv("CAT_IDENTITY_CONFIDENCE_THRESHOLD", "0.75")
+        identifier = CatIdentifier(self._prototypes())
+        assert identifier.confidence_threshold == pytest.approx(0.75)
+
+    def test_explicit_confidence_threshold_wins_over_env_var(self, monkeypatch):
+        monkeypatch.setenv("CAT_IDENTITY_CONFIDENCE_THRESHOLD", "0.75")
+        identifier = CatIdentifier(self._prototypes(), confidence_threshold=0.2)
+        assert identifier.confidence_threshold == pytest.approx(0.2)

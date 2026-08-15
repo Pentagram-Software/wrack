@@ -22,6 +22,7 @@ enrollment (6.3/6.4) has produced ``prototypes.json``::
 
     python3 soak_test.py --detector-model yolov8n.onnx --decoder yolov8 \\
         --embedding-model mobilenet_v3_small_embed.onnx --prototypes prototypes.json \\
+        --identity-threshold 0.65 \\
         --video-source 0 --device-id rpi-camera-01 \\
         --model-version yolov8n-1.0.0+mobilenetv3-1.0.0 --pipeline-version edge-vision-0.1.0
 
@@ -131,6 +132,16 @@ def main() -> None:
     )
     parser.add_argument("--embedding-model", help="Phase 2 only — enables identification")
     parser.add_argument("--prototypes", help="Phase 2 only — prototypes.json from enroll.py")
+    parser.add_argument(
+        "--identity-threshold",
+        type=float,
+        default=None,
+        help=(
+            "Phase 2 only — identity confidence threshold; falls back to "
+            "CAT_IDENTITY_CONFIDENCE_THRESHOLD env var, then 0.6 "
+            "(see evaluate_threshold.py for picking a value)"
+        ),
+    )
     parser.add_argument("--video-source", required=True, help="Camera index (e.g. 0) or video file path")
     parser.add_argument("--device-id", required=True)
     parser.add_argument("--model-version", required=True)
@@ -159,7 +170,7 @@ def main() -> None:
     identifier = None
     if args.embedding_model:
         embedding_backbone = EmbeddingBackbone(args.embedding_model)
-        identifier = CatIdentifier(load_prototypes(args.prototypes))
+        identifier = CatIdentifier(load_prototypes(args.prototypes), confidence_threshold=args.identity_threshold)
 
     send_event = None
     if args.send:
