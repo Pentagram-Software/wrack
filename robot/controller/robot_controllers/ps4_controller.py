@@ -33,6 +33,20 @@ DEFAULT_CONTROL_LOOP_HZ = 30
 # picked up within this long instead of 1/DEFAULT_CONTROL_LOOP_HZ, which is
 # imperceptible, and in exchange an idle robot stops waking this thread 30
 # times a second to find nothing to do.
+#
+# TODO(PR #110 review, 2026-08-15): this contradicts the 33ms worst-case
+# delay DEFAULT_CONTROL_LOOP_HZ documents above -- there is currently no
+# wakeup when _mark_stick_dirty() sets a flag while the loop is in this
+# sleep, so the real worst case is up to DEFAULT_IDLE_POLL_INTERVAL_S
+# (100ms), 3x the documented budget. Narrow in practice (only the
+# transition from stillness into movement, not a sustained backlog like
+# the SYN_DROPPED issue this PR fixes), but real, and likely to recur as
+# small stick corrections with pauses between them during normal driving.
+# Planned fix: only back off after N consecutive idle ticks at the full
+# 30Hz rate (e.g. ~15 ticks / 500ms of true stillness), so the 33ms
+# guarantee holds for anything that resumes soon after stopping and the
+# GIL-relief benefit only applies once the robot has been still for a
+# while. See PR #110 comments 3789908575 / 3789908579.
 DEFAULT_IDLE_POLL_INTERVAL_S = 0.1
 # Throttle right-stick debug lines; stick events arrive very frequently.
 RIGHT_STICK_DEBUG_INTERVAL_S = 0.25
