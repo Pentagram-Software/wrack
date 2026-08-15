@@ -286,3 +286,35 @@ class TestExtractCrop:
         crop = pipeline._extract_crop(frame, (0.25, 0.5, 0.75, 1.0))
         # x: 0.25*200=50 to 0.75*200=150 -> width 100; y: 0.5*100=50 to 100 -> height 50
         assert crop.shape == (50, 100, 3)
+
+    def test_crop_converts_bgr_frame_to_rgb(self):
+        """Live frames arrive BGR (OpenCV); enroll.py embeds RGB crops, so
+        the live crop fed to EmbeddingBackbone.embed must match."""
+        detector = _ScriptedDetector([])
+        pipeline = VisionPipeline(
+            detector,
+            lambda: None,
+            device_id="d",
+            model_version="v",
+            pipeline_version="v",
+        )
+        bgr_blue_frame = np.zeros((10, 10, 3), dtype=np.uint8)
+        bgr_blue_frame[:, :, 0] = 255  # pure blue in BGR
+
+        crop = pipeline._extract_crop(bgr_blue_frame, (0.0, 0.0, 1.0, 1.0))
+
+        assert crop[:, :, 0].mean() == 0  # R channel: no red
+        assert crop[:, :, 2].mean() == 255  # B channel: full blue
+
+    def test_empty_crop_is_returned_as_is(self):
+        detector = _ScriptedDetector([])
+        pipeline = VisionPipeline(
+            detector,
+            lambda: None,
+            device_id="d",
+            model_version="v",
+            pipeline_version="v",
+        )
+        frame = np.zeros((100, 200, 3), dtype=np.uint8)
+        crop = pipeline._extract_crop(frame, (0.5, 0.5, 0.5, 0.5))
+        assert crop.size == 0

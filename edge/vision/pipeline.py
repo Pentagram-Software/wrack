@@ -163,11 +163,21 @@ class VisionPipeline:
         return event
 
     def _extract_crop(self, frame: np.ndarray, bbox) -> np.ndarray:
+        """Slice out the detected region and convert BGR (OpenCV, what
+        ``frame_source`` yields) -> RGB, matching the convention
+        ``identification/enroll.py`` already uses for enrollment photos —
+        without this, live crops and enrolled prototypes would be embedded
+        in different color spaces, degrading cosine similarity."""
         height, width = frame.shape[:2]
         x_min, y_min, x_max, y_max = bbox
         x1, y1 = max(0, int(x_min * width)), max(0, int(y_min * height))
         x2, y2 = min(width, int(x_max * width)), min(height, int(y_max * height))
-        return frame[y1:y2, x1:x2]
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            return crop
+        import cv2
+
+        return cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
 
     def _build_event(self, transition: EventTransition) -> dict:
         if self._last_identification is not None:
