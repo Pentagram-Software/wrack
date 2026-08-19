@@ -1,55 +1,52 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import { XMarkIcon, PlayIcon, PauseIcon, CameraIcon } from '@heroicons/react/24/solid';
+import { useVideoStream } from '@/lib/useVideoStream';
 
 interface CameraViewProps {
   onClose: () => void;
   isExpanded: boolean;
+  /**
+   * HLS stream URL served by a bridge/proxy on the same host.
+   * When undefined the component renders a static placeholder.
+   */
+  streamUrl?: string;
 }
 
-export default function CameraView({ onClose, isExpanded }: CameraViewProps) {
+export default function CameraView({ onClose, isExpanded: _isExpanded, streamUrl }: CameraViewProps) {
   const [isStreaming, setIsStreaming] = useState(false);
-  const [streamUrl, setStreamUrl] = useState<string>('');
-  const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  useEffect(() => {
-    if (isStreaming && videoRef.current) {
-      setConnectionStatus('connecting');
-      
-      setTimeout(() => {
-        setConnectionStatus('connected');
-        if (videoRef.current) {
-          videoRef.current.src = '/api/placeholder/640/480';
-        }
-      }, 2000);
-    } else {
-      setConnectionStatus('disconnected');
-    }
-  }, [isStreaming]);
+  const activeUrl = isStreaming ? (streamUrl ?? null) : null;
+  const { status: connectionStatus, error: streamError } = useVideoStream({
+    url: activeUrl,
+    videoRef,
+  });
 
   const toggleStream = () => {
-    setIsStreaming(!isStreaming);
+    setIsStreaming((prev) => !prev);
   };
 
   const getStatusColor = () => {
     switch (connectionStatus) {
-      case 'connected': return 'text-green-400';
-      case 'connecting': return 'text-yellow-400';
-      case 'disconnected': return 'text-red-400';
-      default: return 'text-gray-400';
+      case 'ready': return 'text-green-400';
+      case 'loading': return 'text-yellow-400';
+      case 'error':
+      case 'idle': return 'text-red-400';
     }
   };
 
   const getStatusDot = () => {
     switch (connectionStatus) {
-      case 'connected': return 'bg-green-500';
-      case 'connecting': return 'bg-yellow-500 animate-pulse';
-      case 'disconnected': return 'bg-red-500';
-      default: return 'bg-gray-500';
+      case 'ready': return 'bg-green-500';
+      case 'loading': return 'bg-yellow-500 animate-pulse';
+      case 'error':
+      case 'idle': return 'bg-red-500';
     }
   };
+
+  const statusLabel = connectionStatus === 'idle' ? 'disconnected' : connectionStatus;
 
   return (
     <div className="h-full flex flex-col bg-gray-800">
@@ -60,11 +57,11 @@ export default function CameraView({ onClose, isExpanded }: CameraViewProps) {
             <CameraIcon className="w-5 h-5 text-blue-400" />
             <h3 className="text-lg font-semibold text-white">Camera Feed</h3>
           </div>
-          
+
           <div className="flex items-center space-x-2">
             <div className={`w-2 h-2 rounded-full ${getStatusDot()}`} />
             <span className={`text-sm capitalize ${getStatusColor()}`}>
-              {connectionStatus}
+              {statusLabel}
             </span>
           </div>
         </div>
@@ -73,8 +70,8 @@ export default function CameraView({ onClose, isExpanded }: CameraViewProps) {
           <button
             onClick={toggleStream}
             className={`px-3 py-1 rounded text-sm font-medium flex items-center space-x-1 transition-colors ${
-              isStreaming 
-                ? 'bg-red-600 hover:bg-red-700 text-white' 
+              isStreaming
+                ? 'bg-red-600 hover:bg-red-700 text-white'
                 : 'bg-green-600 hover:bg-green-700 text-white'
             }`}
           >
@@ -93,6 +90,7 @@ export default function CameraView({ onClose, isExpanded }: CameraViewProps) {
 
           <button
             onClick={onClose}
+            aria-label="Close camera"
             className="p-1 rounded hover:bg-gray-600 text-gray-400 hover:text-white transition-colors"
           >
             <XMarkIcon className="w-5 h-5" />
@@ -102,52 +100,78 @@ export default function CameraView({ onClose, isExpanded }: CameraViewProps) {
 
       {/* Camera Content */}
       <div className="flex-1 relative bg-black">
-        {!isStreaming ? (
-          <div className="h-full flex flex-col items-center justify-center text-gray-400">
+        {/* The video element is always mounted so useVideoStream can attach HLS */}
+        <video
+          ref={videoRef}
+          className={`w-full h-full object-contain ${connectionStatus === 'ready' ? 'block' : 'hidden'}`}
+          muted
+          playsInline
+          aria-label="Camera feed"
+        />
+
+        {!isStreaming && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
             <CameraIcon className="w-16 h-16 mb-4 text-gray-600" />
             <h4 className="text-lg font-medium mb-2">Camera Feed Disabled</h4>
             <p className="text-sm text-center max-w-md">
-              Click "Start" to begin streaming from the EV3 camera. 
+              Click &ldquo;Start&rdquo; to begin streaming from the EV3 camera.
               Make sure the camera is connected to the device.
             </p>
           </div>
-        ) : connectionStatus === 'connecting' ? (
-          <div className="h-full flex flex-col items-center justify-center text-gray-400">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-400 mb-4"></div>
-            <h4 className="text-lg font-medium mb-2">Connecting to Camera</h4>
-            <p className="text-sm">Establishing connection with EV3 device...</p>
-          </div>
-        ) : (
-          <div className="h-full relative">
-            {/* Placeholder for actual video stream */}
-            <div className="h-full bg-gradient-to-br from-gray-800 to-gray-900 flex items-center justify-center">
-              <div className="text-center text-gray-400">
-                <div className="w-32 h-24 bg-gray-700 rounded mb-4 mx-auto flex items-center justify-center">
-                  <CameraIcon className="w-8 h-8" />
-                </div>
-                <p className="text-sm">Camera feed will appear here</p>
-                <p className="text-xs text-gray-500 mt-1">
-                  Future: HLS video stream from EV3
-                </p>
-              </div>
-            </div>
+        )}
 
-            {/* Video overlay controls */}
-            <div className="absolute bottom-4 left-4 right-4">
-              <div className="bg-black bg-opacity-50 rounded p-2 flex justify-between items-center">
-                <div className="flex items-center space-x-2 text-white text-sm">
-                  <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
-                  <span>LIVE</span>
-                </div>
-                
-                <div className="flex space-x-2">
-                  <button className="px-2 py-1 bg-white bg-opacity-20 rounded text-white text-xs hover:bg-opacity-30 transition-colors">
-                    Snapshot
-                  </button>
-                  <button className="px-2 py-1 bg-white bg-opacity-20 rounded text-white text-xs hover:bg-opacity-30 transition-colors">
-                    Fullscreen
-                  </button>
-                </div>
+        {isStreaming && connectionStatus === 'loading' && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-400 mb-4" />
+            <h4 className="text-lg font-medium mb-2">Connecting to Camera</h4>
+            <p className="text-sm">Establishing connection with EV3 device&hellip;</p>
+          </div>
+        )}
+
+        {isStreaming && connectionStatus === 'error' && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400">
+            <CameraIcon className="w-16 h-16 mb-4 text-red-600" />
+            <h4 className="text-lg font-medium mb-2 text-red-400">Stream Error</h4>
+            <p className="text-sm text-center max-w-md">
+              {streamError ?? 'Unable to connect to the camera stream.'}
+            </p>
+          </div>
+        )}
+
+        {connectionStatus === 'ready' && (
+          /* Video overlay controls shown only when stream is live */
+          <div className="absolute bottom-4 left-4 right-4 pointer-events-none">
+            <div className="bg-black bg-opacity-50 rounded p-2 flex justify-between items-center pointer-events-auto">
+              <div className="flex items-center space-x-2 text-white text-sm">
+                <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                <span>LIVE</span>
+              </div>
+
+              <div className="flex space-x-2">
+                <button
+                  onClick={() => {
+                    const video = videoRef.current;
+                    if (video) {
+                      const canvas = document.createElement('canvas');
+                      canvas.width = video.videoWidth;
+                      canvas.height = video.videoHeight;
+                      canvas.getContext('2d')?.drawImage(video, 0, 0);
+                      const link = document.createElement('a');
+                      link.download = `snapshot-${Date.now()}.png`;
+                      link.href = canvas.toDataURL('image/png');
+                      link.click();
+                    }
+                  }}
+                  className="px-2 py-1 bg-white bg-opacity-20 rounded text-white text-xs hover:bg-opacity-30 transition-colors"
+                >
+                  Snapshot
+                </button>
+                <button
+                  onClick={() => videoRef.current?.requestFullscreen()}
+                  className="px-2 py-1 bg-white bg-opacity-20 rounded text-white text-xs hover:bg-opacity-30 transition-colors"
+                >
+                  Fullscreen
+                </button>
               </div>
             </div>
           </div>
@@ -163,7 +187,7 @@ export default function CameraView({ onClose, isExpanded }: CameraViewProps) {
             <span>Quality: HD</span>
           </div>
           <div>
-            {connectionStatus === 'connected' && <span>Latency: ~200ms</span>}
+            {connectionStatus === 'ready' && <span>Latency: ~200ms</span>}
           </div>
         </div>
       </div>
