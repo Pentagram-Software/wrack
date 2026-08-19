@@ -37,11 +37,22 @@ to work in this project, including packaging, encoding, and serving.
 - **LL-HLS**: 2–4 seconds end-to-end (LAN), tunable via segment/part size.
 - **WebRTC** (future): < 500 ms end-to-end.
 
-## 7. Testing Checklist (HLS)
-- Validate playlist updates frequently (no stale playlists).
-- Confirm segments are written and served continuously.
-- Test iOS playback in Safari or AVPlayer app.
-- Measure end-to-end latency on LAN and WAN.
+## 7. Testing and Operations
+
+Full integration test checklist and operational runbook are maintained as separate documents:
+
+- **[HLS Integration Test Checklist](./HLS_INTEGRATION_CHECKLIST.md)** — Phase-by-phase
+  test plan covering pipeline components, playlist/segment integrity, iOS and browser
+  client playback, LAN/WAN latency validation, error cases, and security checks.
+- **[HLS Runbook](./HLS_RUNBOOK.md)** — Step-by-step operating procedures for starting,
+  stopping, monitoring, and troubleshooting the LL-HLS pipeline.
+
+### Summary of key acceptance criteria
+- Playlist `EXT-X-MEDIA-SEQUENCE` advances on every poll (no stale playlists).
+- Segments appear continuously in the HLS output directory.
+- iOS Safari / AVPlayer starts playback within 5 s with no errors.
+- Browser (hls.js) starts playback within 5 s with no fatal errors.
+- End-to-end latency ≤ 4 s on LAN, ≤ 8 s on WAN.
 
 ## 8. Open Items
 - Finalize segment and part durations after initial measurements.
