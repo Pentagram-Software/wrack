@@ -154,8 +154,9 @@ class VisionPipeline:
 
         if detection.present and self.identifier is not None and detection.crop_bbox is not None:
             crop = self._extract_crop(frame, detection.crop_bbox)
-            embedding = self.embedding_backbone.embed(crop)  # type: ignore[union-attr]
-            self._last_identification = self.identifier.identify(embedding)
+            if crop.size > 0:
+                embedding = self.embedding_backbone.embed(crop)  # type: ignore[union-attr]
+                self._last_identification = self.identifier.identify(embedding)
 
         transition = self.lifecycle.observe(
             detected=detection.present, confidence=detection.confidence, now=now

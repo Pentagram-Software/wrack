@@ -127,6 +127,17 @@ class TestPhase1NoIdentification:
         assert detector.call_count == 0
 
 
+class _RejectEmptyCropBackbone:
+    """Raises if embed() is called with an empty crop — guards the regression
+    that process_frame must skip identification for degenerate boxes."""
+
+    def embed(self, crop):
+        if crop.size == 0:
+            raise RuntimeError("embed must not be called on an empty crop")
+        vector = np.array([1.0, 0.0], dtype=np.float32)
+        return vector
+
+
 class TestPhase2WithIdentification:
     def test_closed_event_carries_real_identity(self):
         detector = _ScriptedDetector([PRESENT(), PRESENT(), PRESENT(), ABSENT, ABSENT])
@@ -209,6 +220,44 @@ class TestPhase2WithIdentification:
         # Event 2 had no crop_bbox on any frame -> identification never ran -> unknown.
         assert sent[1]["payload"]["predicted_identity"] == "unknown"
         assert sent[1]["payload"]["final_identity"] == "unknown"
+
+    def test_empty_crop_skips_identification_but_still_observes_lifecycle(self):
+        """A present frame with a degenerate bbox must not call embed(), but
+        lifecycle.observe() must still run so confirmation/cooldown advance."""
+        degenerate_present = DetectionResult(
+            present=True, confidence=0.9, crop_bbox=(0.5, 0.5, 0.5, 0.5)
+        )
+        detector = _ScriptedDetector(
+            [degenerate_present, degenerate_present, degenerate_present, ABSENT, ABSENT]
+        )
+        clock = _ScriptedClock([0.0, 0.33, 0.66, 1.0, 11.0])
+        lifecycle = CatEventLifecycle(
+            LifecycleConfig(confirmation_frames=3, absence_cooldown_seconds=10.0, detection_fps=3.0)
+        )
+        identifier = CatIdentifier(
+            {"ryfka": np.array([1.0, 0.0], dtype=np.float32)},
+            confidence_threshold=0.5,
+        )
+        frame = np.zeros((100, 200, 3), dtype=np.uint8)
+        sent = []
+        pipeline = VisionPipeline(
+            detector,
+            _frame_source([frame] * 5),
+            lifecycle=lifecycle,
+            embedding_backbone=_RejectEmptyCropBackbone(),
+            identifier=identifier,
+            device_id="rpi-camera-01",
+            model_version="v1",
+            pipeline_version="v1",
+            send_event=sent.append,
+            clock=clock,
+        )
+
+        results = [pipeline.run_once() for _ in range(5)]
+
+        assert results[4] is not None  # event closed after cooldown
+        assert len(sent) == 1
+        assert sent[0]["payload"]["final_identity"] == "unknown"
 
 
 class _RaisingDetector:

@@ -8,9 +8,11 @@ single highest-confidence result — implementing the cat-detection spec's
 score, and a crop when present).
 
 The decode step (``decode_fn``) is pluggable because task 1.3 (pick the
-detector) is still open — ``MODEL_SELECTION.md``'s two candidates use
-different output tensor shapes (YOLOv8n's anchor-free `[1, 84, N]` vs
-YOLOv5n's `[1, N, 85]` head), and swapping the eventual pick shouldn't
+detector) is still open — both Ultralytics candidates in
+``MODEL_SELECTION.md`` (YOLOv8n and YOLOv5u via ``yolov5n.pt``) emit the
+v8-style anchor-free ``[1, 84, N]`` tensor decoded by
+``decode_yolov8_output``; ``decode_yolov5_output`` remains for a genuine
+classic YOLOv5 ``[1, N, 85]`` export. Swapping the eventual pick shouldn't
 require changing this wrapper's public interface. ``onnxruntime`` is only
 imported inside the default session factory (not at module import time) so
 this module — and its decode/filter logic — stays testable on a machine
