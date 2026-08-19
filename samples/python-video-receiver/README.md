@@ -169,20 +169,53 @@ The client implements UDP Video Streaming Protocol v1.1:
 - **Quality Overlay**: Frame count displayed on video
 - **Keyboard Controls**: Press 'q' to quit
 
+## WAN Validation
+
+Use `wan_validator.py` to measure latency, frame loss, and jitter on a live
+stream and get a pass/fail result against configurable thresholds:
+
+```bash
+# Basic 30-second validation
+python3 wan_validator.py --server-ip <PI_PUBLIC_IP>
+
+# Save JSON report
+python3 wan_validator.py --server-ip <PI_PUBLIC_IP> --json-report /tmp/report.json
+
+# Simulated WAN conditions (root required, Linux only)
+sudo python3 wan_validator.py --server-ip <PI_LAN_IP> --wan-preset typical_wan --interface eth0
+
+# Custom thresholds
+python3 wan_validator.py --server-ip <PI_PUBLIC_IP> \
+    --max-p95-ms 150 --max-loss-pct 2 --min-fps 25
+```
+
+Available WAN presets: `ideal_lan`, `good_wan`, `typical_wan`, `poor_wan`,
+`mobile_4g`, `mobile_3g`.
+
+See [`docs/wan-validation-runbook.md`](../../docs/wan-validation-runbook.md) for the full
+runbook including setup steps, thresholds, and troubleshooting.
+
 ## File Structure
 
 ```
-udp-video-receiver/
-├── main.py                           # Main UDP client application
-├── simple_display.py                 # Enhanced video display module
-├── video_display.py                  # Advanced threading display module
-├── enhanced_client.py                # Feature-rich client implementation
-├── display_example.py                # Display module usage examples
-├── upnp_helper.py                    # UPnP port forwarding helper
-├── UDP_Frame_Format_Documentation.md # Protocol specification
-├── README_Display.md                 # Display module documentation
-├── requirements.txt                  # Python dependencies
-└── README.md                         # This file
+samples/python-video-receiver/
+├── main.py                 # Main UDP receiver with latency stats
+├── wan_validator.py        # WAN validation CLI tool (M2-5)
+├── latency_metrics.py      # Latency measurement primitives
+├── network_sim.py          # tc netem WAN simulation wrapper
+├── simple_display.py       # Enhanced video display module
+├── video_display.py        # Advanced threading display module
+├── enhanced_client.py      # Feature-rich client implementation
+├── display_example.py      # Display module usage examples
+├── upnp_helper.py          # UPnP port forwarding helper
+├── requirements.txt        # Python dependencies
+├── tests/
+│   ├── conftest.py         # Pytest path/module setup
+│   ├── test_main.py        # Receiver unit tests
+│   ├── test_latency_metrics.py  # Latency metrics unit tests
+│   ├── test_network_sim.py      # Network simulator unit tests
+│   └── test_wan_validator.py    # WAN validator unit tests
+└── README.md               # This file
 ```
 
 ## Advanced Usage
