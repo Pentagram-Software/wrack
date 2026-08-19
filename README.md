@@ -32,6 +32,15 @@ Raspberry Pi ──UDP video──► iOS App                              │
 - [Requirements](docs/requirements/system-requirements.md)
 - [ADR](docs/adr/)
 
+### Vision Intelligence / Camera Streaming
+
+- [WebRTC Architecture](docs/architecture/WebRTC.md) — WebRTC pipeline, signaling, ICE, DTLS/SRTP
+- [HLS Architecture](docs/architecture/HLS.md) — LL-HLS pipeline, Nginx, latency targets
+- [WebRTC Integration Test Checklist & Runbook](docs/testing/webrtc-integration-checklist.md) — M3 integration tests
+- [ARC42 System Architecture](docs/architecture/ARC42.md) — Full system context and runtime views
+- [PRD](docs/requirements/PRD.md) — Product requirements for camera streaming
+- [Project Plan](docs/requirements/PROJECT_PLAN.md) — M0–M5 milestones
+
 ## Development
 
 ```bash
