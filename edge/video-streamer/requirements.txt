@@ -21,8 +21,15 @@ opencv-python>=4.8.0
 # HTTP server (built-in)
 # http.server - built-in
 
+# WebRTC pipeline (PEN-56 / M3-1)
+# DTLS/SRTP/RTP stack — used by webrtc_streamer.py
+aiortc>=1.9.0
+# PyAV — video frame encoding, pulled in by aiortc but listed explicitly
+av>=11.0.0
+
 # Optional: For development and testing
 pytest>=7.4.0
+pytest-asyncio>=0.23.0
 # numpy>=1.24.0  # Usually comes with opencv-python
 # pillow>=9.0.0  # For additional image format support
 

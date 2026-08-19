@@ -2,6 +2,31 @@
 
 All notable changes to the Raspberry Pi Camera Streaming Server will be documented in this file.
 
+## [1.2.0] - 2026-05-22 (PEN-56 / M3-1 — WebRTC Pipeline)
+
+### Added
+- **`webrtc_streamer.py`** — RTP/SRTP/DTLS streaming pipeline via [aiortc](https://github.com/aiortc/aiortc):
+  - `FrameSource` ABC decouples camera hardware from the WebRTC track, enabling
+    dependency injection and hardware-free unit testing.
+  - `H264VideoStreamTrack` — aiortc `MediaStreamTrack` that paces frames at the
+    configured FPS and applies the standard 90 kHz RTP video clock.
+  - `WebRTCStreamer` — manages `RTCPeerConnection` lifecycle; embeds DTLS
+    certificate fingerprints in SDP answers (RFC 5763/5764 SRTP negotiation is
+    handled automatically by aiortc).
+  - `WebRTCConfig` — dataclass for STUN server URIs and bitrate bounds.
+  - `Picamera2FrameSource` — Pi-hardware-backed `FrameSource` (imported only when
+    Picamera2 is available; not used in unit tests).
+- **`tests/test_webrtc_streamer.py`** — 50 unit tests covering:
+  - `WebRTCConfig` defaults and customisation
+  - `H264VideoStreamTrack` PTS/time-base progression and `recv()` contract
+  - `WebRTCStreamer` peer connection lifecycle and `close_all()` behaviour
+  - SDP offer/answer integration tests verifying `a=fingerprint:` (DTLS) and
+    `a=setup:` (SRTP role) attributes in the answer SDP
+  - H.264 codec presence in negotiated SDP
+- **`pytest.ini`** — enables `asyncio_mode = auto` for pytest-asyncio.
+- **`requirements.txt`** — added `aiortc>=1.9.0`, `av>=11.0.0`,
+  `pytest-asyncio>=0.23.0`.
+
 ## [1.1.0] - 2025-01-XX
 
 ### Added
