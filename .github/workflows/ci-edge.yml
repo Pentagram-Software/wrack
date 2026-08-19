@@ -31,13 +31,24 @@ jobs:
       - uses: actions/checkout@v4
 
       # Only pytest is installed here — not edge/video-streamer/requirements.txt.
-      # picamera2/opencv-python need real Raspberry Pi hardware and libcamera,
-      # neither of which exist on a hosted runner. test_streamer.py injects fake
+      # picamera2 needs real Raspberry Pi hardware and libcamera, neither of
+      # which exist on a hosted runner. test_streamer.py injects fake
       # picamera2/cv2 modules before importing streamer.py; other tests cover
       # video_telemetry.py / config.py only. Do not "fix" this by trying to
       # install picamera2 here.
+      #
+      # edge/vision/{detection,events,identification}/ and edge/vision/tests/
+      # (PEN-238-272) *do* need numpy + opencv (cv2) for real — their fakes
+      # only replace the onnxruntime session, not preprocessing — hence the
+      # separate install below rather than adding them to the pytest-only set
+      # above. opencv-python-headless (no GUI/Qt deps) is used instead of
+      # edge/vision/requirements.txt's opencv-python since this runner never
+      # displays anything.
       - name: Install pytest
         run: pip install pytest
+
+      - name: Install edge/vision numpy + opencv test dependencies
+        run: pip install numpy opencv-python-headless
 
       - name: Run video-streamer tests
         working-directory: edge/video-streamer
@@ -45,6 +56,22 @@ jobs:
 
       - name: Run vision telemetry tests
         working-directory: edge/vision/telemetry
+        run: python -m pytest tests/ -q
+
+      - name: Run vision detection tests
+        working-directory: edge/vision/detection
+        run: python -m pytest tests/ -q
+
+      - name: Run vision event lifecycle tests
+        working-directory: edge/vision/events
+        run: python -m pytest tests/ -q
+
+      - name: Run vision identification tests
+        working-directory: edge/vision/identification
+        run: python -m pytest tests/ -q
+
+      - name: Run vision pipeline tests
+        working-directory: edge/vision
         run: python -m pytest tests/ -q
 
       - name: Run system metrics collector tests

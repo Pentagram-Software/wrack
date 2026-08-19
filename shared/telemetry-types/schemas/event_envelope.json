@@ -27,7 +27,8 @@
         "connection_status",
         "video_stream_start",
         "video_stream_stop",
-        "video_stream_health"
+        "video_stream_health",
+        "cat_detection"
       ],
       "description": "Discriminator field identifying the event kind"
     },

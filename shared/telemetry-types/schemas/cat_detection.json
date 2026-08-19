@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://wrack.io/schemas/telemetry/payload/cat_detection",
+  "title": "CatDetectionPayload",
+  "description": "Payload for cat_detection events, emitted once per confirmed cat presence event when it ends (PEN-248, change: add-cat-detection-identification). Phase 1 always sets predicted_identity/final_identity to \"unknown\" and identification_confidence to null, since no identification model runs yet.",
+  "type": "object",
+  "required": [
+    "event_start_time",
+    "event_end_time",
+    "predicted_identity",
+    "final_identity",
+    "detection_confidence",
+    "identification_confidence",
+    "device_id",
+    "model_version",
+    "pipeline_version"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "event_start_time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp of the first of the N consecutive frames that confirmed this event (matches CatEventLifecycle's _pending_start_time, not the frame that completed confirmation)"
+    },
+    "event_end_time": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp when cat presence was last observed before the absence cooldown elapsed. Null only if a future emission point ever fires before the event closes; V1 emits exactly once, at close, so this is always populated in practice."
+    },
+    "predicted_identity": {
+      "type": "string",
+      "enum": ["ryfka", "chaja", "lea", "unknown"],
+      "description": "Top predicted identity regardless of confidence threshold. Fixed to \"unknown\" in Phase 1 (no identification model wired in)."
+    },
+    "final_identity": {
+      "type": "string",
+      "enum": ["ryfka", "chaja", "lea", "unknown"],
+      "description": "predicted_identity if identification confidence is at or above the configured threshold, else \"unknown\". Fixed to \"unknown\" in Phase 1."
+    },
+    "detection_confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Detector confidence from the most recently observed present frame before the event ended (not necessarily the confirming frame)"
+    },
+    "identification_confidence": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Identification confidence for predicted_identity. Null in Phase 1, where no identification model runs."
+    },
+    "device_id": {
+      "type": "string",
+      "description": "Source device identifier (e.g. rpi-camera-01), duplicated from the envelope for payload-level querying"
+    },
+    "model_version": {
+      "type": "string",
+      "description": "Version of the detection model (and identification model once Phase 2 is wired in) used for this event"
+    },
+    "pipeline_version": {
+      "type": "string",
+      "description": "Version of the edge/vision pipeline that produced this event"
+    }
+  }
+}

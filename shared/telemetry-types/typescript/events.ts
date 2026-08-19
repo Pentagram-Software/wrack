@@ -35,7 +35,8 @@ export type EventType =
   | 'connection_status'
   | 'video_stream_start'
   | 'video_stream_stop'
-  | 'video_stream_health';
+  | 'video_stream_health'
+  | 'cat_detection';
 
 /** Common envelope shared by every telemetry event. */
 export interface TelemetryEventEnvelope {
@@ -199,6 +200,33 @@ export interface VideoStreamHealthPayload {
   interval_seconds?: number;
 }
 
+export type CatIdentity = 'ryfka' | 'chaja' | 'lea' | 'unknown';
+
+/**
+ * Payload for `cat_detection` events — emitted once per confirmed cat
+ * presence event, at close (PEN-247/PEN-248). Phase 1 always sets
+ * `predicted_identity`/`final_identity` to `'unknown'` and
+ * `identification_confidence` to `null`, since no identification model
+ * runs yet.
+ */
+export interface CatDetectionPayload {
+  /** ISO 8601 UTC timestamp of the first of the N consecutive frames that confirmed this event (not the frame that completed confirmation). */
+  event_start_time: string;
+  /** ISO 8601 UTC timestamp when cat presence was last observed. Always populated in practice — emission only happens at close. */
+  event_end_time: string | null;
+  /** Top predicted identity regardless of confidence threshold. */
+  predicted_identity: CatIdentity;
+  /** predicted_identity if identification confidence is at or above the configured threshold, else 'unknown'. */
+  final_identity: CatIdentity;
+  /** Detector confidence from the most recently observed present frame before the event ended (not necessarily the confirming frame). */
+  detection_confidence: number;
+  /** Null in Phase 1, where no identification model runs. */
+  identification_confidence: number | null;
+  device_id: string;
+  model_version: string;
+  pipeline_version: string;
+}
+
 // ---------------------------------------------------------------------------
 // Discriminated union — typed event wrappers
 // ---------------------------------------------------------------------------
@@ -248,6 +276,11 @@ export type VideoStreamHealthEvent = TelemetryEventEnvelope & {
   payload: VideoStreamHealthPayload;
 };
 
+export type CatDetectionEvent = TelemetryEventEnvelope & {
+  event_type: 'cat_detection';
+  payload: CatDetectionPayload;
+};
+
 /** Union of all typed telemetry events. */
 export type TelemetryEvent =
   | BatteryStatusEvent
@@ -258,7 +291,8 @@ export type TelemetryEvent =
   | ApiRequestEvent
   | VideoStreamStartEvent
   | VideoStreamStopEvent
-  | VideoStreamHealthEvent;
+  | VideoStreamHealthEvent
+  | CatDetectionEvent;
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -284,6 +318,7 @@ const VALID_EVENT_TYPES: readonly EventType[] = [
   'device_status', 'error', 'api_request',
   'motor_status', 'sensor_reading', 'terrain_scan', 'connection_status',
   'video_stream_start', 'video_stream_stop', 'video_stream_health',
+  'cat_detection',
 ] as const;
 
 const VALID_RECORD_TYPES: readonly RecordType[] = ['health', 'event'] as const;
@@ -580,6 +615,46 @@ export function validateVideoStreamHealthPayload(payload: unknown): ValidationRe
   return { valid: errors.length === 0, errors };
 }
 
+const VALID_CAT_IDENTITIES = ['ryfka', 'chaja', 'lea', 'unknown'] as const;
+
+/** Validates a `cat_detection` payload. */
+export function validateCatDetectionPayload(payload: unknown): ValidationResult {
+  const errors: ValidationError[] = [];
+  if (typeof payload !== 'object' || payload === null) {
+    return { valid: false, errors: [{ field: 'payload', message: 'Must be a non-null object' }] };
+  }
+  const p = payload as Record<string, unknown>;
+
+  if (typeof p.event_start_time !== 'string' || !ISO_8601_RE.test(p.event_start_time)) {
+    errors.push({ field: 'payload.event_start_time', message: 'Must be an ISO 8601 UTC string ending in Z' });
+  }
+  if (p.event_end_time !== null && (typeof p.event_end_time !== 'string' || !ISO_8601_RE.test(p.event_end_time))) {
+    errors.push({ field: 'payload.event_end_time', message: 'Must be an ISO 8601 UTC string ending in Z, or null' });
+  }
+  for (const field of ['predicted_identity', 'final_identity'] as const) {
+    if (typeof p[field] !== 'string' || !(VALID_CAT_IDENTITIES as readonly string[]).includes(p[field] as string)) {
+      errors.push({ field: `payload.${field}`, message: `Must be one of: ${VALID_CAT_IDENTITIES.join(', ')}` });
+    }
+  }
+  if (typeof p.detection_confidence !== 'number' || p.detection_confidence < 0 || p.detection_confidence > 1) {
+    errors.push({ field: 'payload.detection_confidence', message: 'Must be a number between 0 and 1' });
+  }
+  if (p.identification_confidence !== null &&
+      (typeof p.identification_confidence !== 'number' || p.identification_confidence < 0 || p.identification_confidence > 1)) {
+    errors.push({ field: 'payload.identification_confidence', message: 'Must be a number between 0 and 1, or null' });
+  }
+  if (typeof p.device_id !== 'string' || p.device_id.trim() === '') {
+    errors.push({ field: 'payload.device_id', message: 'Must be a non-empty string' });
+  }
+  for (const field of ['model_version', 'pipeline_version'] as const) {
+    if (typeof p[field] !== 'string' || (p[field] as string).trim() === '') {
+      errors.push({ field: `payload.${field}`, message: 'Must be a non-empty string' });
+    }
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
 const PAYLOAD_VALIDATORS: Partial<Record<EventType, (p: unknown) => ValidationResult>> = {
   battery_status: validateBatteryStatusPayload,
   command_received: validateCommandReceivedPayload,
@@ -590,6 +665,7 @@ const PAYLOAD_VALIDATORS: Partial<Record<EventType, (p: unknown) => ValidationRe
   video_stream_start: validateVideoStreamStartPayload,
   video_stream_stop: validateVideoStreamStopPayload,
   video_stream_health: validateVideoStreamHealthPayload,
+  cat_detection: validateCatDetectionPayload,
 };
 
 /**

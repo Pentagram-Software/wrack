@@ -39,7 +39,8 @@ export type EventType =
   | 'connection_status'
   | 'video_stream_start'
   | 'video_stream_stop'
-  | 'video_stream_health';
+  | 'video_stream_health'
+  | 'cat_detection';
 
 export interface TelemetryEventEnvelope {
   event_id: string;
@@ -203,6 +204,7 @@ export const VALID_EVENT_TYPES: readonly EventType[] = [
   'device_status', 'error', 'api_request',
   'motor_status', 'sensor_reading', 'terrain_scan', 'connection_status',
   'video_stream_start', 'video_stream_stop', 'video_stream_health',
+  'cat_detection',
 ] as const;
 
 export const VALID_RECORD_TYPES: readonly RecordType[] = ['health', 'event'] as const;

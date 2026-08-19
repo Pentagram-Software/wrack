@@ -1,6 +1,24 @@
 # Edge vision analytics — architecture and plan
 
-This document describes the planned **architecture**, **training approach**, **runtime on Raspberry Pi 5**, and **phased delivery** for image recognition (detection/classification focused on living creatures) and image analysis (structured scene understanding and optional descriptions). It complements the repo root [ARCHITECTURE.md](../../ARCHITECTURE.md) and cloud telemetry layout in [`docs/data-tracking/architecture.md`](../../docs/data-tracking/architecture.md).
+This document describes the **architecture**, **training approach**, **runtime on Raspberry Pi 5**, and **phased delivery** for image recognition (detection/classification focused on living creatures) and image analysis (structured scene understanding and optional descriptions). It complements the repo root [ARCHITECTURE.md](../../ARCHITECTURE.md) and cloud telemetry layout in [`docs/data-tracking/architecture.md`](../../docs/data-tracking/architecture.md).
+
+## Implementation status (CatRecognizer — `add-cat-detection-identification`)
+
+The general architecture/plan below predates a concrete runtime; **cat detection and identification (Phase 1 fully, Phase 2 partially) has since been implemented** on top of it — this section is the map from plan to code:
+
+| Package | What it does |
+|---------|--------------|
+| [`detection/`](detection/) | `detector.py`'s `CatDetector` wraps an ONNX YOLOv8/v5 model, decodes raw output, filters to the COCO "cat" class (`coco.py`) |
+| [`events/`](events/) | `lifecycle.py`'s `CatEventLifecycle` — the 3-frame confirmation / active-event / absence-cooldown state machine |
+| [`identification/`](identification/) | `embeddings.py` (ONNX embedding backbone), `enroll.py` (reference-photo enrollment), `identifier.py` (cosine-similarity identification with `unknown` fallback) |
+| [`telemetry/`](telemetry/) | `builder.py`/`schemas.py` — builds and validates the `cat_detection` event payload (PEN-166's standalone telemetry module, now with a real inference runtime on top) |
+| [`pipeline.py`](pipeline.py) | `VisionPipeline` wires detection → lifecycle → (optional) identification → telemetry emission per sampled frame |
+| [`validation/`](validation/) | `soak_test.py` (live/recorded-video pipeline harness), `e2e_ingestion_test.py` (BigQuery ingestion check) — hardware/cloud-dependent, not run in CI |
+| [`DEPLOYMENT.md`](DEPLOYMENT.md) | Full step-by-step: export models on a dev machine → copy to the Pi → benchmark → soak test |
+
+Known gap: `pipeline.py`'s `frame_source` is a documented seam, not yet wired to [`edge/video-streamer/`](../video-streamer/)'s live camera capture — see `pipeline.py`'s module docstring. `soak_test.py` reads via its own OpenCV `VideoCapture` in the meantime.
+
+Everything below this section is the original architecture plan; treat implemented pieces (detection, event lifecycle, ONNX inference, `cat_detection` telemetry) as **done**, and the rest (tracking IDs, captioning tiers, second-stage classifiers) as still aspirational.
 
 ## Goals
 
@@ -107,7 +125,7 @@ Training runs **off-device** (workstation or cloud GPU). The Pi runs **exported,
 
 ### 3. Training workflow (recommended layout)
 
-Conceptual repos or monorepo subfolder (to be created when implementation starts):
+CatRecognizer doesn't train from scratch (both detector candidates are COCO-pretrained, no fine-tuning for V1), so it uses per-model `export_model.py` scripts rather than the generic `training/` layout below — see `detection/export_model.py`, `identification/export_model.py`, and each directory's `MODEL_SELECTION.md`. The conceptual layout below remains the reference for a future fine-tuning pipeline:
 
 ```
 edge/vision/
@@ -173,5 +191,6 @@ If Tier B captioning is in scope:
 - [ARCHITECTURE.md](../../ARCHITECTURE.md) — system layers and telemetry flow  
 - [`docs/data-tracking/architecture.md`](../../docs/data-tracking/architecture.md) — BigQuery ingestion and `edge/vision` placeholder  
 - [`edge/video-streamer/README.md`](../video-streamer/README.md) — camera and streaming  
+- [`DEPLOYMENT.md`](DEPLOYMENT.md) — CatRecognizer's step-by-step export/deploy/benchmark/soak-test hand-off
 
-When implementation lands, extend [`shared/telemetry-types/`](../../shared/telemetry-types/) (or equivalent) with vision event types so Python (edge), Cloud Functions, and analytics share one contract.
+`shared/telemetry-types/`'s `cat_detection` schema (JSON Schema, Python, TypeScript) is the implemented instance of this section's "extend `shared/telemetry-types/` with vision event types" plan — Python (edge, via `telemetry/builder.py`), Cloud Functions, and analytics already share that one contract.

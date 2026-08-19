@@ -754,6 +754,32 @@ describe('video stream event types in constants', () => {
 });
 
 // ---------------------------------------------------------------------------
+// cat_detection event type in constants (PEN-247: this TS mirror had fallen
+// out of sync with shared/telemetry-types/schemas/event_envelope.json)
+// ---------------------------------------------------------------------------
+
+describe('cat_detection event type in constants', () => {
+  test('VALID_EVENT_TYPES includes cat_detection', () => {
+    expect(VALID_EVENT_TYPES).toContain('cat_detection');
+  });
+
+  test('cat_detection is not P0 — analytics-only, not on the health/liveness path', () => {
+    expect(P0_EVENT_TYPES).not.toContain('cat_detection');
+  });
+
+  test('validateEventEnvelope accepts a cat_detection envelope', () => {
+    const event = {
+      event_id: makeUUID(),
+      event_type: 'cat_detection',
+      source: 'rpi',
+      timestamp: makeTS(),
+      payload: {},
+    };
+    expect(validateEventEnvelope(event).valid).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // validateVideoStreamStartPayload
 // ---------------------------------------------------------------------------
 
