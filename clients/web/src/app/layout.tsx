@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Bruno_Ace, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/design-system/providers/ThemeProvider";
+import { SessionProvider } from "next-auth/react";
 
 const brunoAce = Bruno_Ace({
   variable: "--font-bruno-ace",
@@ -27,9 +28,11 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${brunoAce.variable} ${geistMono.variable} antialiased`} suppressHydrationWarning>
-        <ThemeProvider>
-          {children}
-        </ThemeProvider>
+        <SessionProvider>
+          <ThemeProvider>
+            {children}
+          </ThemeProvider>
+        </SessionProvider>
       </body>
     </html>
   );
